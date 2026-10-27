@@ -91,7 +91,7 @@ fn init_then_verify() {
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("integrity check passed"), "stdout: {stdout}");
-    assert!(stdout.contains("schema:   3"), "stdout: {stdout}");
+    assert!(stdout.contains("schema:   4"), "stdout: {stdout}");
     if cfg!(feature = "cipher") {
         assert!(stdout.contains("encryption: sqlcipher"), "stdout: {stdout}");
     } else {
@@ -121,7 +121,7 @@ fn migrate_down_is_guarded_and_respects_irreversible_migrations() {
     let mut args = vec!["migrate-down", "--to", "2", "--yes"];
     args.extend(common);
     let output = bonk_ok(&args);
-    assert!(output.contains("rolled back: 1 migration(s)"), "{output}");
+    assert!(output.contains("rolled back: 2 migration(s)"), "{output}");
     assert!(output.contains("schema:   2"), "{output}");
 
     let mut args = vec!["migrate-down", "--to", "1", "--yes"];
@@ -132,7 +132,7 @@ fn migrate_down_is_guarded_and_respects_irreversible_migrations() {
 
     let mut args = vec!["verify"];
     args.extend(common);
-    assert!(bonk_ok(&args).contains("schema:   3"));
+    assert!(bonk_ok(&args).contains("schema:   4"), "opening migrates forward again");
 }
 
 #[test]
@@ -254,13 +254,39 @@ fn full_slice_through_the_cli() {
         assert!(issued_output.contains("warning: PDF not rendered"), "{issued_output}");
     }
 
+    let mut args = vec!["credit-note", "2026-0001", "--date", "2026-12-15"];
+    args.extend(common);
+    let credit_output = bonk_ok(&args);
+    assert!(credit_output.contains("corrects:    2026-0001"), "{credit_output}");
+    assert!(credit_output.contains("gross:       121.00"), "{credit_output}");
+    let credit = field(&credit_output, "credit note:");
+
+    let mut args = vec!["issue", &credit, "--out", out];
+    args.extend(common);
+    let credit_issued = bonk_ok(&args);
+    assert!(credit_issued.contains("issued: 2026-C0001"), "{credit_issued}");
+
+    let credit_xml = std::fs::read_to_string(output_dir.join("2026-C0001.xml")).expect("credit note UBL file");
+    assert!(credit_xml.contains("<CreditNote xmlns="), "{credit_xml}");
+    assert!(
+        credit_xml.contains("<cbc:CreditNoteTypeCode>381</cbc:CreditNoteTypeCode>"),
+        "{credit_xml}"
+    );
+    assert!(
+        credit_xml.contains("<cbc:ID>2026-0001</cbc:ID>"),
+        "BG-3 names the corrected invoice: {credit_xml}"
+    );
+    assert!(credit_xml.contains("<cac:BillingReference>"), "{credit_xml}");
+    assert!(credit_xml.contains("<cac:CreditNoteLine>"), "{credit_xml}");
+    assert!(!credit_xml.contains("<cbc:DueDate>"), "{credit_xml}");
+
     let mut args = vec!["verify"];
     args.extend(common);
     let verified = bonk_ok(&args);
-    assert!(verified.contains("audit:    2 events verified"), "{verified}");
+    assert!(verified.contains("audit:    4 events verified"), "{verified}");
     assert!(verified.contains("hashes verified"), "{verified}");
     if pdf_expected {
-        assert!(verified.contains("artefacts: 2 hashes verified"), "{verified}");
+        assert!(verified.contains("artefacts: 4 hashes verified"), "{verified}");
     }
 }
 

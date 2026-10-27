@@ -113,9 +113,24 @@ done <<'SPECS'
 2026-11-02|2026-12-02|Year-end review|5|180.00|21|Close|PO-1020
 SPECS
 
-invoices=$(find "$OUT" -maxdepth 1 -name '*.xml' | wc -l | tr -d ' ')
-if [ "$invoices" -ne 20 ]; then
-    echo "error: expected 20 invoices, found $invoices" >&2
+# A credit note exercises the CreditNote binding, including BG-3.
+credit=$(
+    "$BONK_BIN" credit-note 2026-0001 \
+        --db "$DB" --keystore "$KEY" --passphrase "$PASS" \
+        --date 2026-12-15 |
+        field "credit note"
+)
+if [ -z "$credit" ]; then
+    echo "error: could not create a credit note" >&2
+    exit 1
+fi
+"$BONK_BIN" issue "$credit" \
+    --db "$DB" --keystore "$KEY" --passphrase "$PASS" \
+    --out "$OUT" >/dev/null
+
+documents=$(find "$OUT" -maxdepth 1 -name '*.xml' | wc -l | tr -d ' ')
+if [ "$documents" -ne 21 ]; then
+    echo "error: expected 21 documents, found $documents" >&2
     exit 1
 fi
 
@@ -134,4 +149,4 @@ for xml in "$OUT"/*.xml; do
     fi
 done
 
-echo "Mustang EN 16931 / Peppol BIS 3.0: $valid/$invoices invoices valid"
+echo "Mustang EN 16931 / Peppol BIS 3.0: $valid/$documents documents valid (20 invoices, 1 credit note)"

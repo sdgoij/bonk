@@ -2,13 +2,13 @@
 //! End-to-end storage test for the M1 slice: parties → draft → issue → verify.
 
 use crux::{
-    Address, CountryCode, Currency, CustomerId, DocumentId, DraftLine, InvoiceDraft, LineId, LocalDate, Money, Party,
-    Quantity, SellerId, TaxTreatment, UnitCode, VatRate,
+    Address, CountryCode, Currency, CustomerId, DocType, DocumentId, DraftLine, InvoiceDraft, LineId, LocalDate, Money,
+    Party, PrecedingInvoice, Quantity, SellerId, TaxTreatment, UnitCode, VatRate,
 };
 use store::{
     CustomerRecord, Database, IssueRequest, KdfParams, KeyStore, SellerRecord, Suppression, attach_artefact,
-    insert_customer, insert_draft, insert_seller, issue_draft, list_suppressions, load_customer, load_draft,
-    load_seller, save_suppression, verify_artefacts,
+    credit_note_for, find_issued_reference, insert_customer, insert_draft, insert_seller, issue_draft,
+    list_suppressions, load_customer, load_draft, load_seller, save_suppression, verify_artefacts,
 };
 use tempfile::TempDir;
 
@@ -287,4 +287,120 @@ fn missing_records_are_reported() {
     let missing = SellerId::new();
     assert!(load_seller(database.connection(), missing).is_err());
     assert!(load_draft(database.connection(), DocumentId::new()).unwrap().is_none());
+}
+
+fn issue(database: &mut Database, draft: &InvoiceDraft) -> store::IssuedInvoice {
+    insert_draft(database.connection(), draft, NOW).unwrap();
+    issue_draft(
+        database.connection_mut(),
+        IssueRequest {
+            draft_id: draft.id,
+            actor: "test",
+            device: "device-1",
+            renderer_version: "test-renderer-1",
+            now: NOW,
+        },
+        |view| Ok(format!("<Invoice><ID>{}</ID></Invoice>", view.number).into_bytes()),
+    )
+    .unwrap()
+}
+
+#[test]
+fn a_credit_note_copies_the_issued_invoice() {
+    let (_dir, mut database, seller_id, customer_id) = seeded();
+    let issued = issue(&mut database, &draft_for(seller_id, customer_id));
+
+    let credit = credit_note_for(
+        database.connection(),
+        seller_id,
+        &issued.number,
+        LocalDate::parse_iso("2026-10-28").unwrap(),
+    )
+    .unwrap()
+    .expect("the issued invoice exists");
+
+    assert_eq!(credit.doc_type, DocType::CreditNote);
+    assert_eq!(credit.customer_id, customer_id);
+    assert_eq!(credit.currency, Currency::EUR);
+    assert_eq!(credit.lines.len(), 1);
+    assert_eq!(credit.lines[0].unit_price.micros(), 50_000_000);
+    assert_eq!(credit.lines[0].quantity, Quantity::from_units(2).unwrap());
+
+    let preceding = credit.preceding_invoice.as_ref().expect("BG-3");
+    assert_eq!(preceding.id, issued.id);
+    assert_eq!(preceding.number, issued.number);
+    assert_eq!(preceding.issue_date, issued.issue_date);
+
+    insert_draft(database.connection(), &credit, NOW).unwrap();
+    let loaded = load_draft(database.connection(), credit.id).unwrap().unwrap();
+    assert_eq!(loaded.doc_type, DocType::CreditNote);
+    assert_eq!(loaded.preceding_invoice.as_ref().unwrap().number, issued.number);
+
+    let referenced = find_issued_reference(database.connection(), seller_id, &issued.number)
+        .unwrap()
+        .unwrap();
+    assert_eq!(referenced.id, issued.id);
+    assert_eq!(referenced.customer_id, customer_id);
+
+    assert!(
+        credit_note_for(database.connection(), seller_id, "2026-9999", LocalDate::today_utc())
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
+fn credit_notes_and_invoices_number_separately() {
+    let (_dir, mut database, seller_id, customer_id) = seeded();
+    let invoice = issue(&mut database, &draft_for(seller_id, customer_id));
+    let mut credit = credit_note_for(
+        database.connection(),
+        seller_id,
+        &invoice.number,
+        LocalDate::parse_iso("2026-10-28").unwrap(),
+    )
+    .unwrap()
+    .unwrap();
+    credit.due_date = None;
+    let issued_credit = issue(&mut database, &credit);
+
+    assert_eq!(invoice.number, "2026-0001");
+    assert_eq!(issued_credit.number, "2026-C0001");
+
+    let second = issue(&mut database, &draft_for(seller_id, customer_id));
+    assert_eq!(second.number, "2026-0002");
+}
+
+#[test]
+fn issuing_rejects_an_unissued_preceding_invoice() {
+    let (_dir, mut database, seller_id, customer_id) = seeded();
+    let mut draft = InvoiceDraft::credit_note(
+        seller_id,
+        customer_id,
+        Currency::EUR,
+        LocalDate::parse_iso("2026-10-28").unwrap(),
+        PrecedingInvoice::new(
+            DocumentId::new(),
+            "2026-0042",
+            LocalDate::parse_iso("2026-10-01").unwrap(),
+        ),
+    );
+    draft.lines = draft_for(seller_id, customer_id).lines;
+
+    insert_draft(database.connection(), &draft, NOW).unwrap();
+    let rejected = issue_draft(
+        database.connection_mut(),
+        IssueRequest {
+            draft_id: draft.id,
+            actor: "test",
+            device: "device-1",
+            renderer_version: "test-renderer-1",
+            now: NOW,
+        },
+        |_| Ok(b"<CreditNote/>".to_vec()),
+    );
+    assert!(rejected.is_err(), "an unknown reference must not be issued");
+
+    let invoice = issue(&mut database, &draft_for(seller_id, customer_id));
+    assert_eq!(invoice.number, "2026-0001", "the rejected issue consumed no number");
 }

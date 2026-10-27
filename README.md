@@ -106,8 +106,14 @@ bonk customer-add --name "Customer BV" --city Rotterdam
 bonk draft-new --seller <seller-id> --customer <customer-id> \
     --line "Consulting|2|50.00|21"
 bonk issue <draft-id> --out ./out
+bonk credit-note 2026-0001
+bonk issue <credit-note-draft-id> --out ./out
 bonk verify
 ```
+
+`credit-note` copies an issued invoice into a credit-note draft: same customer,
+currency, and lines, with BG-3 naming the invoice it corrects. Credit notes use
+their own number series (`2026-C0001`) so they never consume an invoice number.
 
 Line format: `name|quantity|unit_price|rate[|category[|unit[|exemption_code[|exemption_reason]]]]`. For example:
 
@@ -135,9 +141,10 @@ sh tools/validate-m1.sh
 ```
 
 The script downloads Mustangproject 2.17.0 into the ignored `target/validator/`
-directory, generates 20 varied invoices in `target/m1-validation/`, and validates
-every UBL file. Last result: **20/20 invoices valid** against EN 16931 and
-Peppol BIS 3.0. No Docker required. The validator jar is not committed.
+directory, generates 20 varied invoices plus a credit note in
+`target/m1-validation/`, and validates every document. Last result: **21/21
+documents valid** against EN 16931 and Peppol BIS 3.0. No Docker required. The
+validator jar is not committed.
 
 For VAT-category or exemption-reason changes, also run the category matrix:
 

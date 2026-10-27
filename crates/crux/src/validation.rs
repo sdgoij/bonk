@@ -4,7 +4,7 @@
 //! are stable; the business-term references are what the UI shows.
 
 use crate::findings::Finding;
-use crate::invoice::InvoiceDraft;
+use crate::invoice::{DocType, InvoiceDraft};
 use crate::party::Party;
 use crate::totals::calculate_totals;
 use crate::vat::VatCategory;
@@ -153,6 +153,28 @@ pub fn validate_draft(draft: &InvoiceDraft, seller: &Party, customer: &Party) ->
         ));
     }
 
+    match draft.doc_type {
+        DocType::CreditNote if draft.preceding_invoice.is_none() => findings.push(Finding::blocking(
+            "T1-022",
+            Some("BT-25"),
+            "preceding_invoice",
+            "a credit note must reference the invoice it corrects",
+        )),
+        DocType::CreditNote if draft.due_date.is_some() => findings.push(Finding::blocking(
+            "T1-023",
+            Some("BT-9"),
+            "due_date",
+            "a credit note has no due date",
+        )),
+        DocType::Invoice if draft.preceding_invoice.is_some() => findings.push(Finding::blocking(
+            "T1-024",
+            Some("BT-25"),
+            "preceding_invoice",
+            "an invoice must not reference a preceding invoice; use a credit note",
+        )),
+        _ => {}
+    }
+
     if !draft.lines.is_empty() {
         match calculate_totals(&draft.lines) {
             Ok(totals) => {
@@ -180,8 +202,8 @@ fn nonempty(value: Option<&str>) -> Option<&str> {
 mod tests {
     use super::*;
     use crate::date::LocalDate;
-    use crate::ids::{CustomerId, LineId, SellerId};
-    use crate::invoice::{DraftLine, InvoiceDraft};
+    use crate::ids::{CustomerId, DocumentId, LineId, SellerId};
+    use crate::invoice::{DocType, DraftLine, InvoiceDraft, PrecedingInvoice};
     use crate::money::{Currency, Money};
     use crate::party::{Address, CountryCode, Party};
     use crate::quantity::{Quantity, UnitCode};
@@ -346,5 +368,46 @@ mod tests {
             &party("Customer BV", None),
         );
         assert!(findings.iter().any(|finding| finding.code == "T1-018"));
+    }
+
+    fn preceding() -> PrecedingInvoice {
+        PrecedingInvoice::new(
+            DocumentId::new(),
+            "2026-0001",
+            LocalDate::parse_iso("2026-10-01").unwrap(),
+        )
+    }
+
+    #[test]
+    fn a_credit_note_needs_a_preceding_invoice() {
+        let mut document = draft(vec![line("Correction", 10_000, 2100)]);
+        document.doc_type = DocType::CreditNote;
+
+        let findings = validate_draft(&document, &party("Seller BV", None), &party("Customer BV", None));
+        assert!(findings.iter().any(|finding| finding.code == "T1-022"));
+
+        document.preceding_invoice = Some(preceding());
+        let findings = validate_draft(&document, &party("Seller BV", None), &party("Customer BV", None));
+        assert!(findings.iter().all(|finding| finding.code != "T1-022"), "{findings:#?}");
+    }
+
+    #[test]
+    fn a_credit_note_has_no_due_date() {
+        let mut document = draft(vec![line("Correction", 10_000, 2100)]);
+        document.doc_type = DocType::CreditNote;
+        document.preceding_invoice = Some(preceding());
+        document.due_date = Some(LocalDate::parse_iso("2026-11-30").unwrap());
+
+        let findings = validate_draft(&document, &party("Seller BV", None), &party("Customer BV", None));
+        assert!(findings.iter().any(|finding| finding.code == "T1-023"));
+    }
+
+    #[test]
+    fn an_invoice_must_not_reference_a_preceding_invoice() {
+        let mut document = draft(vec![line("Consulting", 10_000, 2100)]);
+        document.preceding_invoice = Some(preceding());
+
+        let findings = validate_draft(&document, &party("Seller BV", None), &party("Customer BV", None));
+        assert!(findings.iter().any(|finding| finding.code == "T1-024"));
     }
 }

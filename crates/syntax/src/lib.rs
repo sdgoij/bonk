@@ -7,7 +7,7 @@
 
 pub mod ubl;
 
-pub use ubl::{UblError, UblInvoice, UblLine, write_invoice};
+pub use ubl::{UblError, UblInvoice, UblLine, UblPrecedingInvoice, write_invoice};
 
 /// Crate identity, used by diagnostics and support bundles.
 pub const CRATE_NAME: &str = "syntax";

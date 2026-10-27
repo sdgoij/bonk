@@ -4,13 +4,14 @@
 //! for totals and findings, and calls the same store functions as the CLI.
 
 use crux::{
-    Address, CountryCode, Currency, CustomerId, DocumentId, DraftLine, Finding, InvoiceDraft, LineId, LocalDate, Money,
-    Party, Quantity, SellerId, Severity, TaxTreatment, UnitCode, VatCategory, VatRate, calculate_totals, has_blocking,
-    validate_draft,
+    Address, CountryCode, Currency, CustomerId, DocType, DocumentId, DraftLine, Finding, InvoiceDraft, LineId,
+    LocalDate, Money, Party, PrecedingInvoice, Quantity, SellerId, Severity, TaxTreatment, UnitCode, VatCategory,
+    VatRate, calculate_totals, has_blocking, validate_draft,
 };
 use store::{
-    CustomerRecord, IssueRequest, IssuedInvoice, SellerRecord, StoreError, Suppression, attach_artefact, first_seller,
-    insert_customer, insert_seller, issue_draft, list_customers, list_suppressions, save_draft, save_suppression,
+    CustomerRecord, IssueRequest, IssuedInvoice, SellerRecord, StoreError, Suppression, attach_artefact,
+    credit_note_for, first_seller, insert_customer, insert_seller, issue_draft, list_customers, list_suppressions,
+    save_draft, save_suppression,
 };
 
 use crate::Session;
@@ -122,6 +123,8 @@ struct CustomerForm {
 
 struct Editor {
     id: DocumentId,
+    doc_type: DocType,
+    preceding: Option<PrecedingInvoice>,
     customer: Option<CustomerId>,
     issue_date: String,
     due_date: String,
@@ -136,6 +139,8 @@ impl Clone for Editor {
     fn clone(&self) -> Self {
         Self {
             id: self.id,
+            doc_type: self.doc_type,
+            preceding: self.preceding.clone(),
             customer: self.customer,
             issue_date: self.issue_date.clone(),
             due_date: self.due_date.clone(),
@@ -152,6 +157,8 @@ impl Editor {
     fn new(customer: Option<CustomerId>) -> Self {
         Self {
             id: DocumentId::new(),
+            doc_type: DocType::Invoice,
+            preceding: None,
             customer,
             issue_date: LocalDate::today_utc().to_iso_string(),
             due_date: String::new(),
@@ -161,6 +168,33 @@ impl Editor {
             order_reference: String::new(),
             lines: vec![LineForm::default()],
         }
+    }
+
+    /// An editor pre-filled from a credit-note draft copied from an issued
+    /// invoice: the reference is fixed, the lines and customer are editable.
+    fn credit_note(draft: &InvoiceDraft) -> Option<Self> {
+        let preceding = draft.preceding_invoice.clone()?;
+        let mut editor = Self::new(Some(draft.customer_id));
+        editor.id = draft.id;
+        editor.doc_type = DocType::CreditNote;
+        editor.preceding = Some(preceding);
+        editor.issue_date = draft.issue_date.to_iso_string();
+        editor.due_date.clear();
+        editor.buyer_reference = draft.buyer_reference.clone().unwrap_or_default();
+        editor.order_reference = draft.order_reference.clone().unwrap_or_default();
+        editor.note = draft.note.clone().unwrap_or_default();
+        editor.lines = draft
+            .lines
+            .iter()
+            .map(|line| LineForm {
+                name: line.name.clone(),
+                quantity: line.quantity.to_trimmed_string(),
+                unit_price: line.unit_price.to_trimmed_string(),
+                rate: line.treatment.rate.percent_string(),
+                category: line.treatment.category,
+            })
+            .collect();
+        Some(editor)
     }
 }
 
@@ -385,8 +419,13 @@ impl Workspace {
     }
 
     fn unlocked_ui(&mut self, ui: &mut egui::Ui, session: &mut Session, focus: Option<&str>) {
+        let mut start_credit = false;
         if let Some(issued) = &self.issued {
-            ui.heading("Issued");
+            ui.heading(if issued.number.contains("-C") {
+                "Issued credit note"
+            } else {
+                "Issued"
+            });
             ui.label(format!("Number: {}", issued.number));
             ui.label(format!("Issue date: {}", issued.issue_date));
             ui.label(format!("Payable: {}", money_text(issued.totals.gross)));
@@ -394,6 +433,7 @@ impl Workspace {
         }
 
         if self.issued.is_some() {
+            let is_credit_note = self.issued.as_ref().is_some_and(|issued| issued.number.contains("-C"));
             let mut save_pdf = false;
             if let Some(pdf) = &self.pdf {
                 ui.label(format!("PDF SHA-256: {}", pdf.hash));
@@ -405,19 +445,22 @@ impl Workspace {
             }
 
             ui.add_space(8.0);
-            let reset = ui.button("New invoice").clicked();
+            let mut reset = false;
+            ui.horizontal(|ui| {
+                if !is_credit_note && ui.button("Credit note").clicked() {
+                    start_credit = true;
+                }
+                if ui.button("New invoice").clicked() {
+                    reset = true;
+                }
+            });
             if save_pdf {
                 self.save_pdf();
             }
             if reset {
-                self.issued = None;
-                self.editor = None;
-                self.pdf = None;
-                self.pdf_path.clear();
-                self.conformance_findings.clear();
-                self.suppressions.clear();
-                self.suppress_target = None;
-                self.suppression_reason.clear();
+                self.reset_document();
+            } else if start_credit {
+                self.start_credit_note(session);
             }
             return;
         }
@@ -485,6 +528,14 @@ impl Workspace {
             };
 
             ui.separator();
+            if editor.doc_type.is_credit_note() {
+                let number = editor
+                    .preceding
+                    .as_ref()
+                    .map(|preceding| preceding.number.as_str())
+                    .unwrap_or_default();
+                ui.colored_label(OK_COLOR, format!("Credit note for invoice {number}"));
+            }
             ui.horizontal(|ui| {
                 ui.label("Customer");
                 let selected = editor
@@ -645,6 +696,46 @@ impl Workspace {
 
     fn is_suppressed(&self, finding: &Finding) -> bool {
         suppressed_by(finding, &self.suppressions)
+    }
+
+    fn reset_document(&mut self) {
+        self.issued = None;
+        self.editor = None;
+        self.pdf = None;
+        self.pdf_path.clear();
+        self.conformance_findings.clear();
+        self.suppressions.clear();
+        self.suppress_target = None;
+        self.suppression_reason.clear();
+    }
+
+    /// Opens an editor for a credit note that copies the issued invoice.
+    fn start_credit_note(&mut self, session: &Session) {
+        let (Some(issued), Some(seller)) = (&self.issued, &self.seller) else {
+            return;
+        };
+        let number = issued.number.clone();
+        let seller_id = seller.id;
+        let result = credit_note_for(
+            session.database().connection(),
+            seller_id,
+            &number,
+            LocalDate::today_utc(),
+        );
+        match result {
+            Ok(Some(draft)) => match Editor::credit_note(&draft) {
+                Some(editor) => {
+                    self.reset_document();
+                    self.editor = Some(editor);
+                    self.message = Some(Message::ok(format!("Credit note for {number}")));
+                }
+                None => self.message = Some(Message::error("the draft has no preceding invoice".to_owned())),
+            },
+            Ok(None) => {
+                self.message = Some(Message::error(format!("invoice {number} was not found")));
+            }
+            Err(error) => self.message = Some(Message::error(error.to_string())),
+        }
     }
 
     fn create_seller(&mut self, session: &Session) {
@@ -886,7 +977,11 @@ fn build_draft(editor: &Editor, seller: &SellerRecord) -> Result<InvoiceDraft, S
     };
 
     let mut draft = InvoiceDraft::new(seller.id, customer_id, seller.default_currency, issue_date);
-    draft.due_date = due_date;
+    draft.doc_type = editor.doc_type;
+    draft.preceding_invoice = editor.preceding.clone();
+    if !editor.doc_type.is_credit_note() {
+        draft.due_date = due_date;
+    }
     draft.delivery_date = delivery_date;
     draft.note = nonempty(&editor.note);
     draft.buyer_reference = nonempty(&editor.buyer_reference);

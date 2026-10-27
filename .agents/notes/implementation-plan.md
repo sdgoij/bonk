@@ -290,10 +290,22 @@ synthetic `ZZQ` unit code into a copy of the source: extraction produced exactly
 that one-line diff, and re-running against the pinned source restored the
 bundle.
 
-Remaining: the official artefact runner (M2.3), credit notes (M2.7), and the
-Peppol profile layer beyond the current rule set (M2.8). Explicit deliver-to
-address fields beyond the buyer country remain for a later slice. Workspace
-tests: 181 encrypted, 179 plain.
+M2.7 is complete. Credit notes carry BG-3 (`PrecedingInvoice`: identity, BT-25
+number, BT-26 date), and the UBL writer emits the `CreditNote` binding with
+`cac:BillingReference`, `cac:CreditNoteLine`, and `cbc:CreditedQuantity`, and no
+`cbc:DueDate`. `credit_note_for` copies an issued invoice into a draft; issuing
+re-verifies that the reference is an issued document of the same seller before
+allocating a number, so a stale reference cannot be issued. Credit notes have
+their own counter and a `-C` number prefix (`2026-C0001`). T1-022 (a credit note
+needs a preceding invoice), T1-023 (no due date on a credit note), and T1-024 (an
+invoice must not carry a preceding reference) are blocking. Schema version is 4.
+The CLI gained `bonk credit-note <number>`, and the desktop Issued screen has a
+Credit note action that copies the document into the editor. `validate-m1.sh`
+now validates 20 invoices and one credit note against Mustang: **21/21 valid**.
+
+Remaining: the official artefact runner (M2.3), and the Peppol profile layer
+beyond the current rule set (M2.8). Explicit deliver-to address fields beyond the
+buyer country remain for a later slice. Workspace tests: 188 encrypted, 186 plain.
 
 Exit criteria:
 

@@ -15,7 +15,7 @@ use conformance::{Profile, SemanticInvoice};
 use crux::{InvoiceDraft, InvoiceTotals, LocalDate, Party};
 use render::PdfRenderer;
 use store::{CustomerRecord, Database, IssueView, KdfParams, KeyStore, SellerRecord, StoreError};
-use syntax::{UblInvoice, UblLine, write_invoice};
+use syntax::{UblInvoice, UblLine, UblPrecedingInvoice, write_invoice};
 
 pub use workspace::{Workspace, WorkspaceAction};
 
@@ -160,6 +160,14 @@ pub fn render_issue(view: &IssueView<'_>) -> Result<Vec<u8>, StoreError> {
         buyer_reference: view.draft.buyer_reference.as_deref(),
         order_reference: view.draft.order_reference.as_deref(),
         note: view.draft.note.as_deref(),
+        preceding_invoice: view
+            .draft
+            .preceding_invoice
+            .as_ref()
+            .map(|preceding| UblPrecedingInvoice {
+                number: &preceding.number,
+                issue_date: preceding.issue_date,
+            }),
         seller: &view.seller.party,
         customer: &view.customer.party,
         lines: &lines,
@@ -423,7 +431,7 @@ mod tests {
         {
             let session = Session::create(&database, &keystore, "passphrase").unwrap();
             assert_eq!(session.summary().unwrap().sellers, 0);
-            assert_eq!(session.summary().unwrap().schema_version, 3);
+            assert_eq!(session.summary().unwrap().schema_version, 4);
             assert!(session.database_path().exists());
         }
 

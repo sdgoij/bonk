@@ -31,6 +31,36 @@ impl DocType {
             Self::CreditNote => "381",
         }
     }
+
+    /// True for a credit note.
+    pub const fn is_credit_note(self) -> bool {
+        matches!(self, Self::CreditNote)
+    }
+}
+
+/// The invoice a credit note corrects (BG-3).
+///
+/// The number and date are snapshotted rather than looked up when printing: a
+/// correction must keep naming exactly the document it was issued against.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct PrecedingInvoice {
+    /// Identity of the issued invoice in this database.
+    pub id: DocumentId,
+    /// Its number (BT-25).
+    pub number: String,
+    /// Its issue date (BT-26).
+    pub issue_date: LocalDate,
+}
+
+impl PrecedingInvoice {
+    /// Builds a reference to an issued invoice.
+    pub fn new(id: DocumentId, number: impl Into<String>, issue_date: LocalDate) -> Self {
+        Self {
+            id,
+            number: number.into(),
+            issue_date,
+        }
+    }
 }
 
 /// Where a document is in its lifecycle.
@@ -178,6 +208,8 @@ pub struct InvoiceDraft {
     pub order_reference: Option<String>,
     /// Free-text note (BT-22).
     pub note: Option<String>,
+    /// The invoice this credit note corrects (BG-3).
+    pub preceding_invoice: Option<PrecedingInvoice>,
     /// Lines (BG-25).
     pub lines: Vec<DraftLine>,
 }
@@ -197,8 +229,23 @@ impl InvoiceDraft {
             buyer_reference: None,
             order_reference: None,
             note: None,
+            preceding_invoice: None,
             lines: Vec::new(),
         }
+    }
+
+    /// A credit note against `preceding`, with no lines.
+    pub fn credit_note(
+        seller_id: SellerId,
+        customer_id: CustomerId,
+        currency: Currency,
+        issue_date: LocalDate,
+        preceding: PrecedingInvoice,
+    ) -> Self {
+        let mut draft = Self::new(seller_id, customer_id, currency, issue_date);
+        draft.doc_type = DocType::CreditNote;
+        draft.preceding_invoice = Some(preceding);
+        draft
     }
 
     /// Sum of line nets; `None` for an empty draft.

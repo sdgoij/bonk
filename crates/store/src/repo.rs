@@ -247,13 +247,16 @@ pub fn insert_draft(conn: &Connection, draft: &InvoiceDraft, now: &str) -> Resul
 pub fn save_draft(conn: &Connection, draft: &InvoiceDraft, now: &str) -> Result<(), StoreError> {
     let transaction = conn.unchecked_transaction()?;
     let notes = draft.note.as_ref().map(|note| json!({ "note": note }).to_string());
+    let preceding = draft.preceding_invoice.as_ref();
     transaction.execute(
         "INSERT INTO invoice_draft
              (id, seller_id, customer_id, doc_type, currency, issue_date_local,
               due_date_local, delivery_date_local, buyer_reference, order_reference,
               project_reference, notes_json, payment_terms_days, raw_input_json,
-              revision, hlc, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, NULL, ?11, NULL, NULL, 0, '', ?12, ?12)
+              revision, hlc, created_at, updated_at,
+              preceding_invoice_id, preceding_number, preceding_issue_date)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, NULL, ?11, NULL, NULL, 0, '', ?12, ?12,
+                 ?13, ?14, ?15)
          ON CONFLICT(id) DO UPDATE SET
              seller_id = excluded.seller_id,
              customer_id = excluded.customer_id,
@@ -265,6 +268,9 @@ pub fn save_draft(conn: &Connection, draft: &InvoiceDraft, now: &str) -> Result<
              buyer_reference = excluded.buyer_reference,
              order_reference = excluded.order_reference,
              notes_json = excluded.notes_json,
+             preceding_invoice_id = excluded.preceding_invoice_id,
+             preceding_number = excluded.preceding_number,
+             preceding_issue_date = excluded.preceding_issue_date,
              updated_at = excluded.updated_at,
              revision = invoice_draft.revision + 1",
         params![
@@ -280,6 +286,9 @@ pub fn save_draft(conn: &Connection, draft: &InvoiceDraft, now: &str) -> Result<
             draft.order_reference,
             notes,
             now,
+            preceding.map(|preceding| preceding.id.to_string()),
+            preceding.map(|preceding| preceding.number.as_str()),
+            preceding.map(|preceding| preceding.issue_date.to_iso_string()),
         ],
     )?;
 
@@ -427,7 +436,8 @@ pub fn load_draft(conn: &Connection, id: DocumentId) -> Result<Option<InvoiceDra
     let header = conn
         .query_row(
             "SELECT seller_id, customer_id, doc_type, currency, issue_date_local,
-                    due_date_local, delivery_date_local, buyer_reference, order_reference, notes_json
+                    due_date_local, delivery_date_local, buyer_reference, order_reference, notes_json,
+                    preceding_invoice_id, preceding_number, preceding_issue_date
              FROM invoice_draft WHERE id = ?1",
             [&key],
             |row| {
@@ -442,6 +452,9 @@ pub fn load_draft(conn: &Connection, id: DocumentId) -> Result<Option<InvoiceDra
                     row.get::<_, Option<String>>(7)?,
                     row.get::<_, Option<String>>(8)?,
                     row.get::<_, Option<String>>(9)?,
+                    row.get::<_, Option<String>>(10)?,
+                    row.get::<_, Option<String>>(11)?,
+                    row.get::<_, Option<String>>(12)?,
                 ))
             },
         )
@@ -458,6 +471,9 @@ pub fn load_draft(conn: &Connection, id: DocumentId) -> Result<Option<InvoiceDra
         buyer_reference,
         order_reference,
         notes,
+        preceding_id,
+        preceding_number,
+        preceding_issue_date,
     )) = header
     else {
         return Ok(None);
@@ -481,7 +497,17 @@ pub fn load_draft(conn: &Connection, id: DocumentId) -> Result<Option<InvoiceDra
         buyer_reference,
         order_reference,
         note,
+        preceding_invoice: None,
         lines: Vec::new(),
+    };
+
+    draft.preceding_invoice = match (preceding_id, preceding_number, preceding_issue_date) {
+        (Some(id), Some(number), Some(date)) => Some(crux::PrecedingInvoice::new(
+            DocumentId::parse_str(&id).map_err(|error| StoreError::Data(error.to_string()))?,
+            number,
+            parse_date(&date)?,
+        )),
+        _ => None,
     };
 
     let mut statement = conn.prepare(
@@ -518,6 +544,170 @@ pub fn load_draft(conn: &Connection, id: DocumentId) -> Result<Option<InvoiceDra
     Ok(Some(draft))
 }
 
+/// Minimal view of an issued document, used to build references.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct IssuedReference {
+    /// Document identity.
+    pub id: DocumentId,
+    /// Human number (BT-1).
+    pub number: String,
+    /// Issue date (BT-2).
+    pub issue_date: LocalDate,
+    /// Invoice or credit note.
+    pub doc_type: DocType,
+    /// Customer the document was issued to.
+    pub customer_id: CustomerId,
+    /// Document currency.
+    pub currency: Currency,
+}
+
+/// Looks up an issued document of `seller_id` by its number.
+pub fn find_issued_reference(
+    conn: &Connection,
+    seller_id: SellerId,
+    number: &str,
+) -> Result<Option<IssuedReference>, StoreError> {
+    let raw = conn
+        .query_row(
+            "SELECT id, number, issue_date_local, doc_type, customer_id, currency
+             FROM issued_invoice WHERE seller_id = ?1 AND number = ?2",
+            params![seller_id.to_string(), number],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                    row.get::<_, String>(5)?,
+                ))
+            },
+        )
+        .optional()?;
+
+    let Some((id, number, issue_date, doc_type, customer_id, currency)) = raw else {
+        return Ok(None);
+    };
+    let customer_id = customer_id.ok_or_else(|| StoreError::Data(format!("invoice {number} has no customer")))?;
+
+    Ok(Some(IssuedReference {
+        id: DocumentId::parse_str(&id).map_err(|error| StoreError::Data(error.to_string()))?,
+        number,
+        issue_date: parse_date(&issue_date)?,
+        doc_type: parse_doc_type(&doc_type)?,
+        customer_id: CustomerId::parse_str(&customer_id).map_err(|error| StoreError::Data(error.to_string()))?,
+        currency: Currency::parse(&currency).map_err(|error| StoreError::Data(error.to_string()))?,
+    }))
+}
+
+/// Builds a credit-note draft that copies the issued invoice `number`.
+///
+/// The draft keeps the original customer, currency, and lines so the user only
+/// edits what the correction changes. Returns `None` when the seller has no
+/// issued document with that number.
+pub fn credit_note_for(
+    conn: &Connection,
+    seller_id: SellerId,
+    number: &str,
+    issue_date: LocalDate,
+) -> Result<Option<InvoiceDraft>, StoreError> {
+    let Some(reference) = find_issued_reference(conn, seller_id, number)? else {
+        return Ok(None);
+    };
+    let mut draft = InvoiceDraft::credit_note(
+        seller_id,
+        reference.customer_id,
+        reference.currency,
+        issue_date,
+        crux::PrecedingInvoice::new(reference.id, reference.number.clone(), reference.issue_date),
+    );
+    draft.lines = issued_lines(conn, reference.id, reference.currency)?;
+    Ok(Some(draft))
+}
+
+fn issued_lines(conn: &Connection, invoice_id: DocumentId, currency: Currency) -> Result<Vec<DraftLine>, StoreError> {
+    let mut statement =
+        conn.prepare("SELECT id, position, payload_json FROM issued_line WHERE invoice_id = ?1 ORDER BY position")?;
+    let mut rows = statement.query([invoice_id.to_string()])?;
+    let mut lines = Vec::new();
+    while let Some(row) = rows.next()? {
+        let _stored_id: String = row.get(0)?;
+        let payload: String = row.get(2)?;
+        let value: serde_json::Value = serde_json::from_str(&payload)?;
+        lines.push(DraftLine {
+            id: LineId::new(),
+            position: row.get(1)?,
+            name: text(&value, "name")?,
+            description: value
+                .get("description")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned),
+            quantity: Quantity::from_micros(integer(&value, "quantity_micros")?),
+            unit: UnitCode::parse(&text(&value, "unit")?).map_err(|error| StoreError::Data(error.to_string()))?,
+            unit_price: Money::from_micros(integer(&value, "unit_price_micros")?, currency),
+            price_base_quantity: Quantity::from_micros(integer(&value, "price_base_quantity_micros")?),
+            treatment: TaxTreatment {
+                category: VatCategory::parse(&text(&value, "vat_category")?)
+                    .map_err(|error| StoreError::Data(error.to_string()))?,
+                rate: VatRate::from_basis_points(
+                    u16::try_from(integer(&value, "vat_rate_bp")?)
+                        .map_err(|_| StoreError::Data("stored VAT rate is out of range".to_owned()))?,
+                )
+                .map_err(|error| StoreError::Data(error.to_string()))?,
+                exemption_reason: value
+                    .get("exemption_reason")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned),
+                exemption_reason_code: value
+                    .get("exemption_reason_code")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned),
+            },
+        });
+    }
+    Ok(lines)
+}
+
+fn integer(value: &serde_json::Value, key: &str) -> Result<i64, StoreError> {
+    value
+        .get(key)
+        .and_then(serde_json::Value::as_i64)
+        .ok_or_else(|| StoreError::Data(format!("stored line is missing {key}")))
+}
+
+fn text(value: &serde_json::Value, key: &str) -> Result<String, StoreError> {
+    value
+        .get(key)
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned)
+        .ok_or_else(|| StoreError::Data(format!("stored line is missing {key}")))
+}
+
+fn verify_preceding(
+    conn: &Connection,
+    seller_id: SellerId,
+    preceding: &crux::PrecedingInvoice,
+) -> Result<(), StoreError> {
+    let stored = conn
+        .query_row(
+            "SELECT number, issue_date_local FROM issued_invoice WHERE id = ?1 AND seller_id = ?2",
+            params![preceding.id.to_string(), seller_id.to_string()],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        )
+        .optional()?;
+
+    match stored {
+        Some((number, date)) if number == preceding.number && date == preceding.issue_date.to_iso_string() => Ok(()),
+        Some(_) => Err(StoreError::Data(
+            "the referenced invoice no longer matches the credit note".to_owned(),
+        )),
+        None => Err(StoreError::Data(format!(
+            "invoice {} is not an issued document of this seller",
+            preceding.number
+        ))),
+    }
+}
+
 /// Issues a draft, invoking `render` inside the transaction.
 pub fn issue_draft<R>(conn: &mut Connection, request: IssueRequest<'_>, render: R) -> Result<IssuedInvoice, StoreError>
 where
@@ -531,9 +721,21 @@ where
     let customer = load_customer(&transaction, draft.customer_id)?;
     let totals = calculate_totals(&draft.lines).map_err(|error| StoreError::Data(error.to_string()))?;
 
+    if let Some(preceding) = &draft.preceding_invoice {
+        verify_preceding(&transaction, draft.seller_id, preceding)?;
+    }
+
     let year = draft.issue_date.as_date().year();
+    // Invoices and credit notes keep separate counters and a distinct number
+    // prefix, so one never consumes the other's numbers.
+    let credit = draft.doc_type.is_credit_note();
+    let series = if credit { "C" } else { "A" };
     let sequence = next_number(&transaction, draft.seller_id, draft.doc_type.code(), year)?;
-    let number = format!("{year}-{sequence:04}");
+    let number = if credit {
+        format!("{year}-C{sequence:04}")
+    } else {
+        format!("{year}-{sequence:04}")
+    };
     let issued_id = DocumentId::new();
 
     let view = IssueView {
@@ -584,13 +786,15 @@ where
               issue_date_local, due_date_local, delivery_date_local, totals_json,
               tax_breakdown_json, seller_snapshot_json, buyer_snapshot_json,
               semantic_json, semantic_hash, rounded_at, posting_profile_id, state,
-              issued_at, issued_by_device, created_at)
-         VALUES (?1, ?2, ?3, 'A', ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
-                 ?14, ?15, ?16, NULL, 'issued', ?16, ?17, ?16)",
+              issued_at, issued_by_device, created_at,
+              customer_id, preceding_invoice_id, preceding_number, preceding_issue_date)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
+                 ?15, ?16, ?17, NULL, 'issued', ?17, ?18, ?17, ?19, ?20, ?21, ?22)",
         params![
             issued_id.to_string(),
             draft.seller_id.to_string(),
             draft.doc_type.code(),
+            series,
             number,
             sequence,
             draft.currency.as_str(),
@@ -605,6 +809,13 @@ where
             semantic_hash,
             request.now,
             request.device,
+            draft.customer_id.to_string(),
+            draft.preceding_invoice.as_ref().map(|value| value.id.to_string()),
+            draft.preceding_invoice.as_ref().map(|value| value.number.clone()),
+            draft
+                .preceding_invoice
+                .as_ref()
+                .map(|value| value.issue_date.to_iso_string()),
         ],
     )?;
 

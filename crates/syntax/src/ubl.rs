@@ -1,9 +1,12 @@
-//! Deterministic UBL 2.1 invoice writer (Peppol BIS Billing 3.0 profile).
+//! Deterministic UBL 2.1 writer (Peppol BIS Billing 3.0 profile).
 //!
 //! The writer is intentionally dumb: it serialises a validated view and never
 //! decides business rules. Output is byte-stable for the same input (fixed
 //! element order, no timestamps, no pretty-print variation), because artefacts
 //! are hashed and archived.
+//!
+//! Credit notes share the writer: the root element, the type code element, the
+//! line wrapper, and the quantity element differ, and BG-3 is emitted.
 
 use crux::{Currency, DocType, InvoiceTotals, LocalDate, Money, Party, Quantity, TaxTreatment, UnitCode, VatCategory};
 
@@ -27,6 +30,8 @@ pub struct UblInvoice<'a> {
     pub order_reference: Option<&'a str>,
     /// Free-text note (BT-22).
     pub note: Option<&'a str>,
+    /// The invoice this credit note corrects (BG-3).
+    pub preceding_invoice: Option<UblPrecedingInvoice<'a>>,
     /// Seller.
     pub seller: &'a Party,
     /// Customer.
@@ -35,6 +40,14 @@ pub struct UblInvoice<'a> {
     pub lines: &'a [UblLine<'a>],
     /// Totals and VAT breakdown.
     pub totals: &'a InvoiceTotals,
+}
+
+/// The invoice a credit note corrects (BG-3).
+pub struct UblPrecedingInvoice<'a> {
+    /// Preceding invoice number (BT-25).
+    pub number: &'a str,
+    /// Preceding invoice issue date (BT-26).
+    pub issue_date: LocalDate,
 }
 
 /// One invoice line.
@@ -62,30 +75,34 @@ pub struct UblLine<'a> {
 /// Problems that prevent serialisation.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum UblError {
-    /// Credit notes use a different root element and line element; M1 writes
-    /// invoices only.
-    CreditNoteNotYet,
+    /// A credit note must name the invoice it corrects (BG-3).
+    CreditNoteWithoutPrecedingInvoice,
 }
 
 impl std::fmt::Display for UblError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::CreditNoteNotYet => f.write_str("credit note UBL arrives with M2"),
+            Self::CreditNoteWithoutPrecedingInvoice => f.write_str("a credit note needs a preceding invoice reference"),
         }
     }
 }
 
 impl std::error::Error for UblError {}
 
-/// Serialises an invoice as UBL 2.1.
+/// Serialises an invoice or credit note as UBL 2.1.
 pub fn write_invoice(invoice: &UblInvoice<'_>) -> Result<String, UblError> {
-    if invoice.doc_type != DocType::Invoice {
-        return Err(UblError::CreditNoteNotYet);
+    let credit_note = invoice.doc_type.is_credit_note();
+    if credit_note && invoice.preceding_invoice.is_none() {
+        return Err(UblError::CreditNoteWithoutPrecedingInvoice);
     }
 
     let mut out = String::with_capacity(4096);
     out.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
-    out.push_str("<Invoice xmlns=\"urn:oasis:names:specification:ubl:schema:xsd:Invoice-2\"");
+    out.push_str(if credit_note {
+        "<CreditNote xmlns=\"urn:oasis:names:specification:ubl:schema:xsd:CreditNote-2\""
+    } else {
+        "<Invoice xmlns=\"urn:oasis:names:specification:ubl:schema:xsd:Invoice-2\""
+    });
     out.push_str(" xmlns:cac=\"urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2\"");
     out.push_str(" xmlns:cbc=\"urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2\">\n");
 
@@ -103,10 +120,21 @@ pub fn write_invoice(invoice: &UblInvoice<'_>) -> Result<String, UblError> {
     );
     text(&mut out, 1, "cbc:ID", invoice.number);
     text(&mut out, 1, "cbc:IssueDate", &invoice.issue_date.to_iso_string());
-    if let Some(due) = invoice.due_date {
+    if let Some(due) = invoice.due_date
+        && !credit_note
+    {
         text(&mut out, 1, "cbc:DueDate", &due.to_iso_string());
     }
-    text(&mut out, 1, "cbc:InvoiceTypeCode", invoice.doc_type.code());
+    text(
+        &mut out,
+        1,
+        if credit_note {
+            "cbc:CreditNoteTypeCode"
+        } else {
+            "cbc:InvoiceTypeCode"
+        },
+        invoice.doc_type.code(),
+    );
     if let Some(note) = invoice.note {
         text(&mut out, 1, "cbc:Note", note);
     }
@@ -118,6 +146,14 @@ pub fn write_invoice(invoice: &UblInvoice<'_>) -> Result<String, UblError> {
         open(&mut out, 1, "cac:OrderReference");
         text(&mut out, 2, "cbc:ID", order);
         close(&mut out, 1, "cac:OrderReference");
+    }
+    if let Some(preceding) = &invoice.preceding_invoice {
+        open(&mut out, 1, "cac:BillingReference");
+        open(&mut out, 2, "cac:InvoiceDocumentReference");
+        text(&mut out, 3, "cbc:ID", preceding.number);
+        text(&mut out, 3, "cbc:IssueDate", &preceding.issue_date.to_iso_string());
+        close(&mut out, 2, "cac:InvoiceDocumentReference");
+        close(&mut out, 1, "cac:BillingReference");
     }
 
     party(&mut out, "cac:AccountingSupplierParty", invoice.seller, true);
@@ -136,10 +172,10 @@ pub fn write_invoice(invoice: &UblInvoice<'_>) -> Result<String, UblError> {
     legal_total(&mut out, invoice);
 
     for line in invoice.lines {
-        invoice_line(&mut out, invoice.currency, line);
+        document_line(&mut out, invoice.currency, line, credit_note);
     }
 
-    out.push_str("</Invoice>\n");
+    out.push_str(if credit_note { "</CreditNote>\n" } else { "</Invoice>\n" });
     Ok(out)
 }
 
@@ -303,14 +339,19 @@ fn legal_total(out: &mut String, invoice: &UblInvoice<'_>) {
     close(out, 1, "cac:LegalMonetaryTotal");
 }
 
-fn invoice_line(out: &mut String, currency: Currency, line: &UblLine<'_>) {
+fn document_line(out: &mut String, currency: Currency, line: &UblLine<'_>, credit_note: bool) {
     let code = currency.as_str();
-    open(out, 1, "cac:InvoiceLine");
+    let (wrapper, quantity) = if credit_note {
+        ("cac:CreditNoteLine", "cbc:CreditedQuantity")
+    } else {
+        ("cac:InvoiceLine", "cbc:InvoicedQuantity")
+    };
+    open(out, 1, wrapper);
     text(out, 2, "cbc:ID", &line.id.to_string());
     text_attrs(
         out,
         2,
-        "cbc:InvoicedQuantity",
+        quantity,
         &[("unitCode", line.unit.as_str())],
         &line.quantity.to_trimmed_string(),
     );
@@ -353,7 +394,7 @@ fn invoice_line(out: &mut String, currency: Currency, line: &UblLine<'_>) {
         &line.base_quantity.to_trimmed_string(),
     );
     close(out, 2, "cac:Price");
-    close(out, 1, "cac:InvoiceLine");
+    close(out, 1, wrapper);
 }
 
 fn rate_basis_points(basis_points: u16) -> String {
@@ -492,6 +533,7 @@ mod tests {
             buyer_reference: Some("PO-1"),
             order_reference: Some("ORD-1"),
             note: None,
+            preceding_invoice: None,
             seller,
             customer,
             lines,
@@ -773,7 +815,54 @@ mod tests {
     }
 
     #[test]
-    fn credit_notes_are_rejected_for_now() {
+    fn credit_notes_use_the_credit_note_binding() {
+        let treatment = TaxTreatment::standard(VatRate::STANDARD_NL);
+        let line = UblLine {
+            id: 1,
+            name: "Correction",
+            description: None,
+            quantity: Quantity::ONE,
+            unit: UnitCode::PIECE,
+            unit_price: Money::from_major_units(100, Currency::EUR).unwrap(),
+            base_quantity: Quantity::ONE,
+            line_net: Money::from_major_units(100, Currency::EUR).unwrap(),
+            treatment: &treatment,
+        };
+        let lines = [line];
+        let totals = totals();
+        let seller = seller();
+        let customer = customer();
+        let mut invoice = minimal_invoice(&seller, &customer, &lines, &totals);
+        invoice.doc_type = DocType::CreditNote;
+        invoice.preceding_invoice = Some(UblPrecedingInvoice {
+            number: "2026-0007",
+            issue_date: LocalDate::parse_iso("2026-09-30").unwrap(),
+        });
+
+        let xml = write_invoice(&invoice).unwrap();
+        assert!(xml.starts_with(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<CreditNote xmlns=\"urn:oasis:names:specification:ubl:schema:xsd:CreditNote-2\""
+        ), "{xml}");
+        assert!(
+            xml.contains("<cbc:CreditNoteTypeCode>381</cbc:CreditNoteTypeCode>"),
+            "{xml}"
+        );
+        assert!(!xml.contains("InvoiceTypeCode"), "{xml}");
+        assert!(!xml.contains("<cbc:DueDate>"), "a credit note has no due date: {xml}");
+        assert!(xml.contains("<cac:BillingReference>"), "{xml}");
+        assert!(xml.contains("<cbc:ID>2026-0007</cbc:ID>"), "{xml}");
+        assert!(xml.contains("<cbc:IssueDate>2026-09-30</cbc:IssueDate>"), "{xml}");
+        assert!(xml.contains("<cac:CreditNoteLine>"), "{xml}");
+        assert!(
+            xml.contains("<cbc:CreditedQuantity unitCode=\"C62\">1</cbc:CreditedQuantity>"),
+            "{xml}"
+        );
+        assert!(!xml.contains("cac:InvoiceLine"), "{xml}");
+        assert!(xml.ends_with("</CreditNote>\n"), "{xml}");
+    }
+
+    #[test]
+    fn a_credit_note_without_a_preceding_invoice_is_rejected() {
         let treatment = TaxTreatment::standard(VatRate::STANDARD_NL);
         let line = UblLine {
             id: 1,
@@ -792,6 +881,10 @@ mod tests {
         let customer = customer();
         let mut invoice = minimal_invoice(&seller, &customer, &lines, &totals);
         invoice.doc_type = DocType::CreditNote;
-        assert_eq!(write_invoice(&invoice), Err(UblError::CreditNoteNotYet));
+
+        assert_eq!(
+            write_invoice(&invoice),
+            Err(UblError::CreditNoteWithoutPrecedingInvoice)
+        );
     }
 }

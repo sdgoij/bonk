@@ -35,7 +35,9 @@ pub use date::LocalDate;
 pub use error::DomainError;
 pub use findings::{Finding, Severity, has_blocking};
 pub use ids::{CustomerId, DeviceId, DocumentId, JournalEntryId, LineId, SellerId};
-pub use invoice::{DocType, DraftLine, InvoiceDraft, InvoiceEvent, InvoiceState, TransitionError, transition};
+pub use invoice::{
+    DocType, DraftLine, InvoiceDraft, InvoiceEvent, InvoiceState, PrecedingInvoice, TransitionError, transition,
+};
 pub use money::{Currency, MAX_SCALE, MICROS_PER_UNIT, Money};
 pub use party::{Address, CountryCode, Party, VatIdCheck, validate_vat_id};
 pub use quantity::{Quantity, UnitCode};

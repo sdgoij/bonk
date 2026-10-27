@@ -12,8 +12,8 @@ use crux::{
     validate_draft,
 };
 use store::{
-    CustomerRecord, IssueRequest, SellerRecord, StoreError, insert_customer, insert_draft, insert_seller, issue_draft,
-    load_customer, load_draft, load_seller, verify_artefacts,
+    CustomerRecord, IssueRequest, SellerRecord, StoreError, credit_note_for, first_seller, insert_customer,
+    insert_draft, insert_seller, issue_draft, load_customer, load_draft, load_seller, verify_artefacts,
 };
 
 #[derive(Parser)]
@@ -123,6 +123,24 @@ enum Command {
         buyer_ref: Option<String>,
         #[arg(long)]
         order_ref: Option<String>,
+    },
+    /// Create a credit note (381) that copies an issued invoice.
+    #[command(name = "credit-note")]
+    CreditNote {
+        /// Number of the issued invoice to correct, e.g. `2026-0001`.
+        invoice: String,
+        /// Seller identifier; defaults to the first seller.
+        #[arg(long)]
+        seller: Option<String>,
+        /// `YYYY-MM-DD`; defaults to today.
+        #[arg(long)]
+        date: Option<String>,
+        /// Replaces the copied note.
+        #[arg(long)]
+        note: Option<String>,
+        /// Print the draft without storing it.
+        #[arg(long)]
+        dry_run: bool,
     },
     /// Validate and issue a draft; writes the UBL artefact to `--out`.
     Issue {
@@ -308,6 +326,54 @@ fn run(cli: Cli) -> Result<(), CliError> {
             println!("gross: {}", totals.gross.to_fixed_string(2)?);
 
             insert_draft(session.database().connection(), &draft, &store::now_rfc3339())?;
+            Ok(())
+        }
+        Some(Command::CreditNote {
+            invoice,
+            seller,
+            date,
+            note,
+            dry_run,
+        }) => {
+            let session = open(&database, &keystore, passphrase.clone())?;
+            let connection = session.database().connection();
+            let seller_id = match seller {
+                Some(value) => SellerId::parse_str(&value)?,
+                None => {
+                    first_seller(connection)?
+                        .ok_or_else(|| CliError::Input("no seller in this database".to_owned()))?
+                        .id
+                }
+            };
+            let issue_date = match date {
+                Some(value) => LocalDate::parse_iso(&value)?,
+                None => LocalDate::today_utc(),
+            };
+
+            let mut draft = credit_note_for(connection, seller_id, &invoice, issue_date)?
+                .ok_or_else(|| CliError::Input(format!("no issued document numbered {invoice}")))?;
+            if let Some(note) = note {
+                draft.note = Some(note);
+            }
+
+            let seller_record = load_seller(connection, draft.seller_id)?;
+            let customer_record = load_customer(connection, draft.customer_id)?;
+            let findings = validate_draft(&draft, &seller_record.party, &customer_record.party);
+            print_findings(&findings);
+            if has_blocking(&findings) {
+                return Err(CliError::Validation);
+            }
+
+            let totals = calculate_totals(&draft.lines)?;
+            println!("credit note: {}", draft.id);
+            println!("corrects:    {invoice}");
+            println!("net:         {}", totals.net.to_fixed_string(2)?);
+            println!("tax:         {}", totals.tax.to_fixed_string(2)?);
+            println!("gross:       {}", totals.gross.to_fixed_string(2)?);
+
+            if !dry_run {
+                insert_draft(connection, &draft, &store::now_rfc3339())?;
+            }
             Ok(())
         }
         Some(Command::Issue {
