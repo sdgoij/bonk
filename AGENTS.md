@@ -71,6 +71,9 @@ cargo fmt --all --check
 - Money never touches floating point. Amount arithmetic follows the fixed
   rounding order in `crux`.
 - Issued documents are immutable; corrections are credit notes.
+- Every schema migration declares a down migration when a safe rollback exists,
+  or explicitly marks itself irreversible. A down migration must never delete
+  issued-document or audit evidence.
 - Every validation finding carries a stable code, a BT reference when one
   exists, and a field path the UI can focus.
 - UBL output must be byte-deterministic.

@@ -80,6 +80,23 @@ sh tools/cargo-strawberry.sh run -p cli -- gui
 prompts. Passing a passphrase on the command line is for tests only (shell
 history).
 
+### Schema rollback
+
+Reversible migrations can be rolled back explicitly:
+
+```sh
+bonk migrate-down --to 2 --yes
+```
+
+Rollback preflights the whole chain first. If any migration above the target has
+no down migration, nothing is applied. Migrations 0001 and 0002 are intentionally
+irreversible: they create the issued-document, artefact, and audit-evidence
+schema. Migration 0003 is reversible because it owns only the suppression table.
+
+Run the older binary after a rollback. A newer binary applies all compiled
+migrations when it opens the database, so starting it again would reapply the
+forward change.
+
 ### First invoice from the CLI
 
 ```sh

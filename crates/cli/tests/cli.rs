@@ -100,6 +100,42 @@ fn init_then_verify() {
 }
 
 #[test]
+fn migrate_down_is_guarded_and_respects_irreversible_migrations() {
+    let dir = TempDir::new().expect("temp dir");
+    let (database, keystore) = run_init(&dir);
+    let common = [
+        "--db",
+        database.as_str(),
+        "--keystore",
+        keystore.as_str(),
+        "--passphrase",
+        "correct horse battery staple",
+    ];
+
+    let mut args = vec!["migrate-down", "--to", "2"];
+    args.extend(common);
+    let output = bonk().args(&args).output().expect("binary runs");
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("without --yes"));
+
+    let mut args = vec!["migrate-down", "--to", "2", "--yes"];
+    args.extend(common);
+    let output = bonk_ok(&args);
+    assert!(output.contains("rolled back: 1 migration(s)"), "{output}");
+    assert!(output.contains("schema:   2"), "{output}");
+
+    let mut args = vec!["migrate-down", "--to", "1", "--yes"];
+    args.extend(common);
+    let output = bonk().args(&args).output().expect("binary runs");
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("no down migration"));
+
+    let mut args = vec!["verify"];
+    args.extend(common);
+    assert!(bonk_ok(&args).contains("schema:   3"));
+}
+
+#[test]
 fn verify_rejects_a_wrong_passphrase() {
     let dir = TempDir::new().expect("temp dir");
     let (database, keystore) = run_init(&dir);

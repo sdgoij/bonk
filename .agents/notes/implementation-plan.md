@@ -272,10 +272,13 @@ Number allocation, issue-time conformance, finding paths, and click-to-focus are
 in place. M2.5 is complete: non-blocking warnings can be suppressed with a
 mandatory reason, stored in `validation_suppression`, and recorded on the audit
 chain as `finding_suppressed`; blocking findings are never suppressible. Schema
-version is now 3. Remaining: codelist bundles and integrity manifests (M2.2), the
-official artefact runner (M2.3), credit notes (M2.7), and the Peppol profile layer
-beyond the current rule set (M2.8). Explicit deliver-to address fields beyond the
-buyer country remain for a later slice. Workspace tests: 160 encrypted, 158 plain.
+version is now 3. Migrations carry optional down SQL: `bonk migrate-down --to 2
+--yes` preflights the chain and rolls back 0003; 0001/0002 are deliberately
+irreversible because they create legal evidence. Remaining: codelist bundles and
+integrity manifests (M2.2), the official artefact runner (M2.3), credit notes
+(M2.7), and the Peppol profile layer beyond the current rule set (M2.8). Explicit
+deliver-to address fields beyond the buyer country remain for a later slice.
+Workspace tests: 161 encrypted, 159 plain.
 
 Exit criteria:
 

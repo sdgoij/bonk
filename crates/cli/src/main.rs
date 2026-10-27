@@ -41,6 +41,16 @@ enum Command {
     Init,
     /// Check integrity, the audit chain, and every stored artefact.
     Verify,
+    /// Roll back reversible migrations. Refuses to cross an irreversible one.
+    #[command(name = "migrate-down")]
+    MigrateDown {
+        /// Target schema version.
+        #[arg(long)]
+        to: i64,
+        /// Confirm the rollback. Required because down migrations can drop data.
+        #[arg(long)]
+        yes: bool,
+    },
     /// Add a seller and print its identifier.
     #[command(name = "seller-add")]
     SellerAdd {
@@ -186,6 +196,18 @@ fn run(cli: Cli) -> Result<(), CliError> {
             println!("drafts:   {}", summary.drafts);
             println!("audit:    {audit_events} events verified");
             println!("artefacts: {artefacts} hashes verified");
+            Ok(())
+        }
+        Some(Command::MigrateDown { to, yes }) => {
+            if !yes {
+                return Err(CliError::Input(
+                    "refusing to roll back migrations without --yes".to_owned(),
+                ));
+            }
+            let mut session = open(&database, &keystore, passphrase.clone())?;
+            let rolled_back = store::migrations::rollback_to(session.database_mut().connection_mut(), to)?;
+            println!("rolled back: {rolled_back} migration(s)");
+            println!("schema:   {}", session.summary()?.schema_version);
             Ok(())
         }
         Some(Command::SellerAdd {
