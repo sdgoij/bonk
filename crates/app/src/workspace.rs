@@ -48,6 +48,7 @@ pub struct Workspace {
     pdf: Option<PdfDocument>,
     pdf_path: String,
     conformance_findings: Vec<Finding>,
+    focus_request: Option<String>,
     message: Option<Message>,
 }
 
@@ -185,6 +186,7 @@ impl Workspace {
             pdf: None,
             pdf_path: String::new(),
             conformance_findings: Vec::new(),
+            focus_request: None,
             message: None,
         })
     }
@@ -192,6 +194,7 @@ impl Workspace {
     /// Draws the workspace.
     pub fn ui(&mut self, ui: &mut egui::Ui, session: &mut Session) -> WorkspaceAction {
         let mut lock = false;
+        let focus = self.focus_request.take();
 
         ui.horizontal(|ui| {
             ui.heading("Bonk");
@@ -214,14 +217,16 @@ impl Workspace {
         }
 
         if !self.conformance_findings.is_empty() {
-            show_findings(ui, &self.conformance_findings);
+            if let Some(field) = show_findings(ui, &self.conformance_findings) {
+                self.focus_request = Some(field);
+            }
             ui.separator();
         }
 
         if self.seller.is_none() {
-            self.seller_onboarding(ui, session);
+            self.seller_onboarding(ui, session, focus.as_deref());
         } else {
-            self.unlocked_ui(ui, session);
+            self.unlocked_ui(ui, session, focus.as_deref());
         }
 
         if lock {
@@ -231,26 +236,26 @@ impl Workspace {
         }
     }
 
-    fn seller_onboarding(&mut self, ui: &mut egui::Ui, session: &Session) {
+    fn seller_onboarding(&mut self, ui: &mut egui::Ui, session: &Session, focus: Option<&str>) {
         ui.heading("Create your seller profile");
         ui.label("One legal entity per database in v1.");
         ui.add_space(8.0);
 
         egui::Grid::new("seller-form").num_columns(2).show(ui, |ui| {
             ui.label("Legal name");
-            ui.text_edit_singleline(&mut self.seller_form.name);
+            text_field(ui, &mut self.seller_form.name, "seller.name", 200.0, focus);
             ui.end_row();
             ui.label("City");
-            ui.text_edit_singleline(&mut self.seller_form.city);
+            text_field(ui, &mut self.seller_form.city, "seller.city", 200.0, focus);
             ui.end_row();
             ui.label("Country");
-            ui.text_edit_singleline(&mut self.seller_form.country);
+            text_field(ui, &mut self.seller_form.country, "seller.country", 200.0, focus);
             ui.end_row();
             ui.label("VAT ID");
-            ui.text_edit_singleline(&mut self.seller_form.vat);
+            text_field(ui, &mut self.seller_form.vat, "seller.vat_id", 200.0, focus);
             ui.end_row();
             ui.label("KvK number");
-            ui.text_edit_singleline(&mut self.seller_form.kvk);
+            text_field(ui, &mut self.seller_form.kvk, "seller.kvk_number", 200.0, focus);
             ui.end_row();
         });
 
@@ -260,7 +265,7 @@ impl Workspace {
         }
     }
 
-    fn unlocked_ui(&mut self, ui: &mut egui::Ui, session: &mut Session) {
+    fn unlocked_ui(&mut self, ui: &mut egui::Ui, session: &mut Session, focus: Option<&str>) {
         if let Some(issued) = &self.issued {
             ui.heading("Issued");
             ui.label(format!("Number: {}", issued.number));
@@ -314,16 +319,16 @@ impl Workspace {
                 ui.label("New customer");
                 egui::Grid::new("customer-form").num_columns(2).show(ui, |ui| {
                     ui.label("Name");
-                    ui.text_edit_singleline(&mut self.customer_form.name);
+                    text_field(ui, &mut self.customer_form.name, "customer.name", 200.0, focus);
                     ui.end_row();
                     ui.label("City");
-                    ui.text_edit_singleline(&mut self.customer_form.city);
+                    text_field(ui, &mut self.customer_form.city, "customer.city", 200.0, focus);
                     ui.end_row();
                     ui.label("Country");
-                    ui.text_edit_singleline(&mut self.customer_form.country);
+                    text_field(ui, &mut self.customer_form.country, "customer.country", 200.0, focus);
                     ui.end_row();
                     ui.label("VAT ID");
-                    ui.text_edit_singleline(&mut self.customer_form.vat);
+                    text_field(ui, &mut self.customer_form.vat, "customer.vat_id", 200.0, focus);
                     ui.end_row();
                 });
                 if ui.button("Save customer").clicked() {
@@ -333,14 +338,14 @@ impl Workspace {
         }
 
         if self.editor.is_some() {
-            self.editor_ui(ui, session);
+            self.editor_ui(ui, session, focus);
         } else {
             ui.add_space(8.0);
             ui.label("Open a new invoice to start. Existing drafts are not listed yet.");
         }
     }
 
-    fn editor_ui(&mut self, ui: &mut egui::Ui, session: &mut Session) {
+    fn editor_ui(&mut self, ui: &mut egui::Ui, session: &mut Session, focus: Option<&str>) {
         let Some(seller) = self.seller.clone() else {
             return;
         };
@@ -377,24 +382,24 @@ impl Workspace {
 
             egui::Grid::new("header-form").num_columns(4).show(ui, |ui| {
                 ui.label("Issue date");
-                ui.add(egui::TextEdit::singleline(&mut editor.issue_date).desired_width(110.0));
+                text_field(ui, &mut editor.issue_date, "issue_date", 110.0, focus);
                 ui.label("Due date");
-                ui.add(egui::TextEdit::singleline(&mut editor.due_date).desired_width(110.0));
+                text_field(ui, &mut editor.due_date, "due_date", 110.0, focus);
                 ui.end_row();
                 ui.label("Buyer ref");
-                ui.add(egui::TextEdit::singleline(&mut editor.buyer_reference).desired_width(110.0));
+                text_field(ui, &mut editor.buyer_reference, "buyer_reference", 110.0, focus);
                 ui.label("Order ref");
-                ui.add(egui::TextEdit::singleline(&mut editor.order_reference).desired_width(110.0));
+                text_field(ui, &mut editor.order_reference, "order_reference", 110.0, focus);
                 ui.end_row();
                 ui.label("Delivery date");
-                ui.add(egui::TextEdit::singleline(&mut editor.delivery_date).desired_width(110.0));
+                text_field(ui, &mut editor.delivery_date, "delivery_date", 110.0, focus);
                 ui.label("");
                 ui.label("");
                 ui.end_row();
             });
             ui.horizontal(|ui| {
                 ui.label("Note");
-                ui.add(egui::TextEdit::singleline(&mut editor.note).desired_width(420.0));
+                text_field(ui, &mut editor.note, "note", 420.0, focus);
             });
 
             ui.add_space(8.0);
@@ -412,17 +417,27 @@ impl Workspace {
                         ui.end_row();
 
                         for (index, line) in editor.lines.iter_mut().enumerate() {
-                            ui.add(egui::TextEdit::singleline(&mut line.name).desired_width(180.0));
-                            ui.add(egui::TextEdit::singleline(&mut line.quantity).desired_width(60.0));
-                            ui.add(egui::TextEdit::singleline(&mut line.unit_price).desired_width(80.0));
-                            ui.add(egui::TextEdit::singleline(&mut line.rate).desired_width(50.0));
-                            egui::ComboBox::from_id_salt(("vat", index))
+                            text_field(ui, &mut line.name, &format!("lines[{index}].name"), 180.0, focus);
+                            text_field(ui, &mut line.quantity, &format!("lines[{index}].quantity"), 60.0, focus);
+                            text_field(
+                                ui,
+                                &mut line.unit_price,
+                                &format!("lines[{index}].unit_price"),
+                                80.0,
+                                focus,
+                            );
+                            text_field(ui, &mut line.rate, &format!("lines[{index}].rate"), 50.0, focus);
+                            let vat_field = format!("lines[{index}].vat_category");
+                            let combo = egui::ComboBox::from_id_salt(("vat", index))
                                 .selected_text(category_label(line.category))
                                 .show_ui(ui, |ui| {
                                     for category in CATEGORIES {
                                         ui.selectable_value(&mut line.category, category, category_label(category));
                                     }
                                 });
+                            if focus == Some(vat_field.as_str()) {
+                                combo.response.request_focus();
+                            }
                             if ui.button("Remove").clicked() {
                                 remove_line = Some(index);
                             }
@@ -444,6 +459,7 @@ impl Workspace {
             issue = ui.button("Issue").clicked();
         }
 
+        let mut focus_request = None;
         if let Some(editor) = &self.editor {
             match build_draft(editor, &seller) {
                 Ok(draft) => {
@@ -468,7 +484,9 @@ impl Workspace {
                     {
                         Some(customer) => {
                             let findings = validate_draft(&draft, &seller.party, &customer.party);
-                            show_findings(ui, &findings);
+                            if let Some(field) = show_findings(ui, &findings) {
+                                focus_request = Some(field);
+                            }
                         }
                         None => {
                             ui.colored_label(ERROR_COLOR, "Select a customer to validate.");
@@ -479,6 +497,9 @@ impl Workspace {
                     ui.colored_label(ERROR_COLOR, error);
                 }
             }
+        }
+        if let Some(field) = focus_request {
+            self.focus_request = Some(field);
         }
 
         if save {
@@ -766,7 +787,19 @@ fn build_draft(editor: &Editor, seller: &SellerRecord) -> Result<InvoiceDraft, S
     Ok(draft)
 }
 
-fn show_findings(ui: &mut egui::Ui, findings: &[Finding]) {
+fn text_field(ui: &mut egui::Ui, value: &mut String, field: &str, width: f32, focus: Option<&str>) {
+    let response = ui.add(
+        egui::TextEdit::singleline(value)
+            .id(egui::Id::unique(field))
+            .desired_width(width),
+    );
+    if focus == Some(field) {
+        response.request_focus();
+    }
+}
+
+fn show_findings(ui: &mut egui::Ui, findings: &[Finding]) -> Option<String> {
+    let mut focus = None;
     for finding in findings.iter().take(12) {
         let color = match finding.severity {
             Severity::Blocking => ERROR_COLOR,
@@ -774,11 +807,46 @@ fn show_findings(ui: &mut egui::Ui, findings: &[Finding]) {
             Severity::Info => egui::Color32::GRAY,
         };
         let bt = finding.bt.unwrap_or("-");
-        ui.colored_label(
-            color,
-            format!("{} [{}] {}: {}", finding.code, bt, finding.field, finding.message),
-        );
+        let text = format!("{} [{}] {}: {}", finding.code, bt, finding.field, finding.message);
+        if focusable(&finding.field) {
+            ui.horizontal(|ui| {
+                ui.colored_label(color, text);
+                if ui.small_button("Focus").clicked() {
+                    focus = Some(finding.field.clone());
+                }
+            });
+        } else {
+            ui.colored_label(color, text);
+        }
     }
+    focus
+}
+
+fn focusable(field: &str) -> bool {
+    if matches!(
+        field,
+        "issue_date"
+            | "due_date"
+            | "delivery_date"
+            | "buyer_reference"
+            | "order_reference"
+            | "note"
+            | "seller.name"
+            | "seller.city"
+            | "seller.country"
+            | "seller.vat_id"
+            | "seller.kvk_number"
+            | "customer.name"
+            | "customer.city"
+            | "customer.country"
+            | "customer.vat_id"
+    ) {
+        return true;
+    }
+    field.strip_prefix("lines[").is_some_and(|rest| {
+        rest.split_once("].")
+            .is_some_and(|(_, suffix)| matches!(suffix, "name" | "quantity" | "unit_price" | "rate" | "vat_category"))
+    })
 }
 
 fn category_label(category: VatCategory) -> &'static str {
@@ -867,5 +935,28 @@ mod tests {
     fn category_labels_are_stable() {
         assert_eq!(category_label(VatCategory::Standard), "S standard");
         assert_eq!(category_label(VatCategory::ReverseCharge), "AE reverse charge");
+    }
+
+    #[test]
+    fn only_editable_fields_offer_focus() {
+        for field in [
+            "issue_date",
+            "delivery_date",
+            "seller.vat_id",
+            "customer.country",
+            "lines[12].quantity",
+            "lines[0].vat_category",
+        ] {
+            assert!(focusable(field), "{field} should be focusable");
+        }
+        for field in [
+            "lines",
+            "totals.net",
+            "tax_breakdown[0].tax",
+            "lines[0].position",
+            "seller",
+        ] {
+            assert!(!focusable(field), "{field} should not be focusable");
+        }
     }
 }

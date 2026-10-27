@@ -6,13 +6,13 @@ scheduled next. Nothing leaves the machine unless the user explicitly sends it.
 **Status:** M1 complete. M2 is underway: the `conformance` crate has
 profiles, a BT/BG registry, a semantic invoice view, and the core BR-CO and
 VAT-category rules. The shared issue path refuses blocking conformance findings
-before anything is stored, and the UBL writer emits exemption reasons and
-delivery data for the standard, zero-rated, exempt, reverse-charge,
-intra-community, export, and outside-scope categories. The domain core, encrypted
-keystore, migrations, CLI, GUI workspace, deterministic UBL writer, and visual PDF
-via the Typst CLI all work end to end. A 20-invoice corpus and a 7-category VAT
-matrix pass Mustangproject against EN 16931 and Peppol BIS 3.0 with zero
-failures.
+before anything is stored, the GUI can focus the editable field behind a
+finding, and the UBL writer emits exemption reasons and delivery data for the
+standard, zero-rated, exempt, reverse-charge, intra-community, export, and
+outside-scope categories. The domain core, encrypted keystore, migrations, CLI,
+GUI workspace, deterministic UBL writer, and visual PDF via the Typst CLI all
+work end to end. A 20-invoice corpus and a 7-category VAT matrix pass
+Mustangproject against EN 16931 and Peppol BIS 3.0 with zero failures.
 
 Design documents live in [`.agents/notes/`](.agents/notes/README.md):
 
