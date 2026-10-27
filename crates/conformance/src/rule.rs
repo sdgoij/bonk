@@ -292,6 +292,13 @@ rule!(
     Some(Bg::VatBreakdown),
     "An intra-community VAT breakdown has an exemption reason."
 );
+rule!(
+    BR_IC_11,
+    "BR-IC-11",
+    Some(Bt::ActualDeliveryDate),
+    None,
+    "Intra-community supply has an actual delivery date or invoicing period."
+);
 
 rule!(
     BR_G_01,
@@ -479,8 +486,8 @@ pub static CORE_RULES: &[&Rule] = &[
     &BR_02, &BR_16, &BR_CO_10, &BR_CO_13, &BR_CO_14, &BR_CO_15, &BR_CO_16, &BR_CO_17, &BR_CO_26, &BR_S_01, &BR_S_05,
     &BR_S_08, &BR_S_09, &BR_S_10, &BR_Z_01, &BR_Z_05, &BR_Z_08, &BR_Z_09, &BR_Z_10, &BR_E_01, &BR_E_05, &BR_E_08,
     &BR_E_09, &BR_E_10, &BR_AE_01, &BR_AE_05, &BR_AE_08, &BR_AE_09, &BR_AE_10, &BR_IC_01, &BR_IC_05, &BR_IC_08,
-    &BR_IC_09, &BR_IC_10, &BR_G_01, &BR_G_05, &BR_G_08, &BR_G_09, &BR_G_10, &BR_O_01, &BR_O_05, &BR_O_08, &BR_O_09,
-    &BR_O_10, &BR_O_12,
+    &BR_IC_09, &BR_IC_10, &BR_IC_11, &BR_G_01, &BR_G_05, &BR_G_08, &BR_G_09, &BR_G_10, &BR_O_01, &BR_O_05, &BR_O_08,
+    &BR_O_09, &BR_O_10, &BR_O_12,
 ];
 
 /// Looks up a rule by code.

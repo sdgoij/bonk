@@ -34,6 +34,7 @@ fn draft_for(seller: SellerId, customer: CustomerId) -> InvoiceDraft {
         LocalDate::parse_iso("2026-10-27").unwrap(),
     );
     draft.due_date = Some(LocalDate::parse_iso("2026-11-26").unwrap());
+    draft.delivery_date = Some(LocalDate::parse_iso("2026-10-25").unwrap());
     draft.lines.push(DraftLine {
         id: LineId::new(),
         position: 1,
@@ -98,6 +99,7 @@ fn parties_and_drafts_round_trip() {
     assert_eq!(loaded.lines[0].unit_price.micros(), 50_000_000);
     assert_eq!(loaded.lines[0].treatment.rate, VatRate::STANDARD_NL);
     assert_eq!(loaded.due_date, draft.due_date);
+    assert_eq!(loaded.delivery_date, draft.delivery_date);
 }
 
 #[test]

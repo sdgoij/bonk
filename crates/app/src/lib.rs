@@ -154,6 +154,7 @@ pub fn render_issue(view: &IssueView<'_>) -> Result<Vec<u8>, StoreError> {
         number: view.number,
         issue_date: view.draft.issue_date,
         due_date: view.draft.due_date,
+        delivery_date: view.draft.delivery_date,
         doc_type: view.draft.doc_type,
         currency: view.draft.currency,
         buyer_reference: view.draft.buyer_reference.as_deref(),

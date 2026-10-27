@@ -18,6 +18,8 @@ pub struct SemanticInvoice<'a> {
     pub issue_date: LocalDate,
     /// Due date (BT-9), when present.
     pub due_date: Option<LocalDate>,
+    /// Actual delivery date (BT-72), when present.
+    pub delivery_date: Option<LocalDate>,
     /// Invoice or credit note (BT-3).
     pub doc_type: DocType,
     /// Document currency (BT-5).
@@ -70,6 +72,7 @@ impl<'a> SemanticInvoice<'a> {
             number,
             issue_date: draft.issue_date,
             due_date: draft.due_date,
+            delivery_date: draft.delivery_date,
             doc_type: draft.doc_type,
             currency: draft.currency,
             seller,

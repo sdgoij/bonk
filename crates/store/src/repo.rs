@@ -242,7 +242,7 @@ pub fn save_draft(conn: &Connection, draft: &InvoiceDraft, now: &str) -> Result<
               due_date_local, delivery_date_local, buyer_reference, order_reference,
               project_reference, notes_json, payment_terms_days, raw_input_json,
               revision, hlc, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL, ?8, ?9, NULL, ?10, NULL, NULL, 0, '', ?11, ?11)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, NULL, ?11, NULL, NULL, 0, '', ?12, ?12)
          ON CONFLICT(id) DO UPDATE SET
              seller_id = excluded.seller_id,
              customer_id = excluded.customer_id,
@@ -250,6 +250,7 @@ pub fn save_draft(conn: &Connection, draft: &InvoiceDraft, now: &str) -> Result<
              currency = excluded.currency,
              issue_date_local = excluded.issue_date_local,
              due_date_local = excluded.due_date_local,
+             delivery_date_local = excluded.delivery_date_local,
              buyer_reference = excluded.buyer_reference,
              order_reference = excluded.order_reference,
              notes_json = excluded.notes_json,
@@ -263,6 +264,7 @@ pub fn save_draft(conn: &Connection, draft: &InvoiceDraft, now: &str) -> Result<
             draft.currency.as_str(),
             draft.issue_date.to_iso_string(),
             draft.due_date.map(LocalDate::to_iso_string),
+            draft.delivery_date.map(LocalDate::to_iso_string),
             draft.buyer_reference,
             draft.order_reference,
             notes,
@@ -344,7 +346,7 @@ pub fn load_draft(conn: &Connection, id: DocumentId) -> Result<Option<InvoiceDra
     let header = conn
         .query_row(
             "SELECT seller_id, customer_id, doc_type, currency, issue_date_local,
-                    due_date_local, buyer_reference, order_reference, notes_json
+                    due_date_local, delivery_date_local, buyer_reference, order_reference, notes_json
              FROM invoice_draft WHERE id = ?1",
             [&key],
             |row| {
@@ -358,6 +360,7 @@ pub fn load_draft(conn: &Connection, id: DocumentId) -> Result<Option<InvoiceDra
                     row.get::<_, Option<String>>(6)?,
                     row.get::<_, Option<String>>(7)?,
                     row.get::<_, Option<String>>(8)?,
+                    row.get::<_, Option<String>>(9)?,
                 ))
             },
         )
@@ -370,6 +373,7 @@ pub fn load_draft(conn: &Connection, id: DocumentId) -> Result<Option<InvoiceDra
         currency,
         issue_date,
         due_date,
+        delivery_date,
         buyer_reference,
         order_reference,
         notes,
@@ -392,6 +396,7 @@ pub fn load_draft(conn: &Connection, id: DocumentId) -> Result<Option<InvoiceDra
         currency: Currency::parse(&currency).map_err(|error| StoreError::Data(error.to_string()))?,
         issue_date: parse_date(&issue_date)?,
         due_date: due_date.as_deref().map(parse_date).transpose()?,
+        delivery_date: delivery_date.as_deref().map(parse_date).transpose()?,
         buyer_reference,
         order_reference,
         note,
@@ -471,6 +476,7 @@ where
             "currency": draft.currency.as_str(),
             "issue_date": draft.issue_date.to_iso_string(),
             "due_date": draft.due_date.map(LocalDate::to_iso_string),
+            "delivery_date": draft.delivery_date.map(LocalDate::to_iso_string),
         },
         "seller": dto::party_to_value(&seller.party)?,
         "customer": dto::party_to_value(&customer.party)?,
@@ -498,8 +504,8 @@ where
               tax_breakdown_json, seller_snapshot_json, buyer_snapshot_json,
               semantic_json, semantic_hash, rounded_at, posting_profile_id, state,
               issued_at, issued_by_device, created_at)
-         VALUES (?1, ?2, ?3, 'A', ?4, ?5, ?6, ?7, ?8, NULL, ?9, ?10, ?11, ?12,
-                 ?13, ?14, ?15, NULL, 'issued', ?15, ?16, ?15)",
+         VALUES (?1, ?2, ?3, 'A', ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
+                 ?14, ?15, ?16, NULL, 'issued', ?16, ?17, ?16)",
         params![
             issued_id.to_string(),
             draft.seller_id.to_string(),
@@ -509,6 +515,7 @@ where
             draft.currency.as_str(),
             draft.issue_date.to_iso_string(),
             draft.due_date.map(LocalDate::to_iso_string),
+            draft.delivery_date.map(LocalDate::to_iso_string),
             serde_json::to_string(&totals_json)?,
             breakdown_json,
             serde_json::to_string(&dto::party_to_value(&seller.party)?)?,

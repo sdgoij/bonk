@@ -15,6 +15,8 @@ pub struct UblInvoice<'a> {
     pub issue_date: LocalDate,
     /// Due date (BT-9).
     pub due_date: Option<LocalDate>,
+    /// Actual delivery date (BT-72).
+    pub delivery_date: Option<LocalDate>,
     /// Document type.
     pub doc_type: DocType,
     /// Document currency (BT-5).
@@ -121,6 +123,15 @@ pub fn write_invoice(invoice: &UblInvoice<'_>) -> Result<String, UblError> {
     party(&mut out, "cac:AccountingSupplierParty", invoice.seller, true);
     party(&mut out, "cac:AccountingCustomerParty", invoice.customer, false);
 
+    let needs_delivery = invoice.delivery_date.is_some()
+        || invoice
+            .lines
+            .iter()
+            .any(|line| line.treatment.category == VatCategory::IntraCommunity);
+    if needs_delivery {
+        delivery(&mut out, invoice);
+    }
+
     tax_total(&mut out, invoice);
     legal_total(&mut out, invoice);
 
@@ -194,6 +205,26 @@ fn party(out: &mut String, wrapper: &str, party: &Party, is_seller: bool) {
     close(out, 1, wrapper);
 }
 
+fn delivery(out: &mut String, invoice: &UblInvoice<'_>) {
+    open(out, 1, "cac:Delivery");
+    if let Some(date) = invoice.delivery_date {
+        text(out, 2, "cbc:ActualDeliveryDate", &date.to_iso_string());
+    }
+    open(out, 2, "cac:DeliveryLocation");
+    open(out, 3, "cac:Address");
+    open(out, 4, "cac:Country");
+    text(
+        out,
+        5,
+        "cbc:IdentificationCode",
+        invoice.customer.address.country.as_str(),
+    );
+    close(out, 4, "cac:Country");
+    close(out, 3, "cac:Address");
+    close(out, 2, "cac:DeliveryLocation");
+    close(out, 1, "cac:Delivery");
+}
+
 fn tax_total(out: &mut String, invoice: &UblInvoice<'_>) {
     let currency = invoice.currency.as_str();
     open(out, 1, "cac:TaxTotal");
@@ -236,8 +267,18 @@ fn exemption_reason<'a>(
         .find(|line| {
             line.treatment.category == row.category
                 && (row.category != VatCategory::Standard || line.treatment.rate.basis_points() == row.rate_bp)
+                && (line
+                    .treatment
+                    .exemption_reason_code
+                    .as_deref()
+                    .is_some_and(|value| !value.trim().is_empty())
+                    || line
+                        .treatment
+                        .exemption_reason
+                        .as_deref()
+                        .is_some_and(|value| !value.trim().is_empty()))
         })
-        .and_then(|line| {
+        .map(|line| {
             let code = line
                 .treatment
                 .exemption_reason_code
@@ -248,11 +289,7 @@ fn exemption_reason<'a>(
                 .exemption_reason
                 .as_deref()
                 .filter(|value| !value.trim().is_empty());
-            if code.is_none() && reason.is_none() {
-                None
-            } else {
-                Some((code, reason))
-            }
+            (code, reason)
         })
 }
 
@@ -449,6 +486,7 @@ mod tests {
             number: "2026-0001",
             issue_date: LocalDate::parse_iso("2026-10-27").unwrap(),
             due_date: Some(LocalDate::parse_iso("2026-11-26").unwrap()),
+            delivery_date: None,
             doc_type: DocType::Invoice,
             currency: Currency::EUR,
             buyer_reference: Some("PO-1"),
@@ -699,6 +737,39 @@ mod tests {
             "{xml}"
         );
         assert!(!xml.contains("<cbc:Percent>"), "{xml}");
+    }
+
+    #[test]
+    fn intra_community_writes_delivery_date_and_country() {
+        let treatment = TaxTreatment::zero(VatCategory::IntraCommunity).with_exemption_reason("Intra-community supply");
+        let line = UblLine {
+            id: 1,
+            name: "Intra-community supply",
+            description: None,
+            quantity: Quantity::ONE,
+            unit: UnitCode::PIECE,
+            unit_price: Money::from_major_units(100, Currency::EUR).unwrap(),
+            base_quantity: Quantity::ONE,
+            line_net: Money::from_major_units(100, Currency::EUR).unwrap(),
+            treatment: &treatment,
+        };
+        let lines = [line];
+        let totals = zero_totals(VatCategory::IntraCommunity);
+        let seller = seller();
+        let customer = customer();
+        let mut invoice = minimal_invoice(&seller, &customer, &lines, &totals);
+        invoice.delivery_date = Some(LocalDate::parse_iso("2026-10-25").unwrap());
+
+        let xml = write_invoice(&invoice).unwrap();
+        assert!(xml.contains("<cac:Delivery>"), "{xml}");
+        assert!(
+            xml.contains("<cbc:ActualDeliveryDate>2026-10-25</cbc:ActualDeliveryDate>"),
+            "{xml}"
+        );
+        assert!(
+            xml.contains("<cbc:IdentificationCode>NL</cbc:IdentificationCode>"),
+            "{xml}"
+        );
     }
 
     #[test]

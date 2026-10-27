@@ -10,7 +10,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use crux::{Finding, Money, VatCategory, VatRate, tax_amount};
 
 use crate::rule::{
-    BR_02, BR_16, BR_CO_10, BR_CO_13, BR_CO_14, BR_CO_15, BR_CO_16, BR_CO_17, BR_CO_26, BR_O_12, Rule, category_rules,
+    BR_02, BR_16, BR_CO_10, BR_CO_13, BR_CO_14, BR_CO_15, BR_CO_16, BR_CO_17, BR_CO_26, BR_IC_11, BR_O_12, Rule,
+    category_rules,
 };
 use crate::semantic::SemanticInvoice;
 
@@ -29,6 +30,19 @@ pub fn validate(invoice: &SemanticInvoice<'_>) -> Vec<Finding> {
         findings.push(BR_CO_26.finding(
             "seller",
             "the seller needs a VAT identifier or a legal registration identifier",
+        ));
+    }
+
+    if invoice.delivery_date.is_none()
+        && invoice
+            .totals
+            .breakdown
+            .iter()
+            .any(|row| row.category == VatCategory::IntraCommunity)
+    {
+        findings.push(BR_IC_11.finding(
+            "delivery_date",
+            "intra-community supply requires an actual delivery date",
         ));
     }
 
@@ -555,6 +569,21 @@ mod tests {
         let invoice = semantic_invoice("2026-0001", &draft, &seller, &buyer);
 
         assert!(has(&validate(&invoice), "BR-E-05"));
+    }
+
+    #[test]
+    fn intra_community_requires_a_delivery_date() {
+        let seller = seller();
+        let buyer = party("Buyer BV");
+        let treatment = TaxTreatment::zero(VatCategory::IntraCommunity).with_exemption_reason("Intra-community supply");
+        let mut draft = draft(vec![line(1, 100, treatment)]);
+
+        let invoice = semantic_invoice("2026-0001", &draft, &seller, &buyer);
+        assert!(has(&validate(&invoice), "BR-IC-11"));
+
+        draft.delivery_date = Some(LocalDate::parse_iso("2026-10-25").unwrap());
+        let invoice = semantic_invoice("2026-0001", &draft, &seller, &buyer);
+        assert!(!has(&validate(&invoice), "BR-IC-11"));
     }
 
     #[test]

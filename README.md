@@ -6,12 +6,13 @@ scheduled next. Nothing leaves the machine unless the user explicitly sends it.
 **Status:** M1 complete. M2 is underway: the `conformance` crate has
 profiles, a BT/BG registry, a semantic invoice view, and the core BR-CO and
 VAT-category rules. The shared issue path refuses blocking conformance findings
-before anything is stored, and the UBL writer emits exemption reasons for the
-standard, zero-rated, exempt, reverse-charge, export, and outside-scope
-categories. The domain core, encrypted keystore, migrations, CLI, GUI workspace,
-deterministic UBL writer, and visual PDF via the Typst CLI all work end to end.
-A 20-invoice corpus and a 6-category VAT matrix pass Mustangproject against
-EN 16931 and Peppol BIS 3.0 with zero failures.
+before anything is stored, and the UBL writer emits exemption reasons and
+delivery data for the standard, zero-rated, exempt, reverse-charge,
+intra-community, export, and outside-scope categories. The domain core, encrypted
+keystore, migrations, CLI, GUI workspace, deterministic UBL writer, and visual PDF
+via the Typst CLI all work end to end. A 20-invoice corpus and a 7-category VAT
+matrix pass Mustangproject against EN 16931 and Peppol BIS 3.0 with zero
+failures.
 
 Design documents live in [`.agents/notes/`](.agents/notes/README.md):
 
@@ -96,9 +97,10 @@ Line format: `name|quantity|unit_price|rate[|category[|unit[|exemption_code[|exe
 --line "Exempt supply|1|100.00|0|E|||Exempt supply"
 ```
 
-`issue` writes `<number>.xml` and, when Typst is installed, `<number>.pdf`; both
-are stored as artefacts. `verify` recomputes the audit chain and every artefact
-hash.
+Intra-community supply also needs `--delivery YYYY-MM-DD`; the deliver-to country
+is taken from the customer address. `issue` writes `<number>.xml` and, when Typst
+is installed, `<number>.pdf`; both are stored as artefacts. `verify` recomputes
+the audit chain and every artefact hash.
 
 PDF rendering shells out to `typst` 0.14 (override with `BONK_TYPST`). If Typst
 is unavailable, issuing still succeeds and prints a warning; the UBL artefact is
@@ -124,8 +126,8 @@ For VAT-category or exemption-reason changes, also run the category matrix:
 sh tools/validate-vat-matrix.sh
 ```
 
-It validates standard, zero-rated, exempt, reverse-charge, export, and
-outside-scope invoices. Last result: **6/6 invoices valid**.
+It validates standard, zero-rated, exempt, reverse-charge, intra-community,
+export, and outside-scope invoices. Last result: **7/7 invoices valid**.
 
 ### Desktop
 

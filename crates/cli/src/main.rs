@@ -102,6 +102,9 @@ enum Command {
         /// `YYYY-MM-DD`.
         #[arg(long)]
         due: Option<String>,
+        /// Actual delivery date, `YYYY-MM-DD`; required for intra-community supply.
+        #[arg(long)]
+        delivery: Option<String>,
         #[arg(long = "line", required = true)]
         lines: Vec<String>,
         #[arg(long)]
@@ -243,6 +246,7 @@ fn run(cli: Cli) -> Result<(), CliError> {
             customer,
             date,
             due,
+            delivery,
             lines,
             note,
             buyer_ref,
@@ -260,6 +264,7 @@ fn run(cli: Cli) -> Result<(), CliError> {
             };
             let mut draft = InvoiceDraft::new(seller_id, customer_id, seller_record.default_currency, issue_date);
             draft.due_date = due.as_deref().map(LocalDate::parse_iso).transpose()?;
+            draft.delivery_date = delivery.as_deref().map(LocalDate::parse_iso).transpose()?;
             draft.note = note;
             draft.buyer_reference = buyer_ref;
             draft.order_reference = order_ref;

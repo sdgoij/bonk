@@ -261,15 +261,18 @@ rejected issue does not consume `2026-0001`.
 
 The UBL writer now emits BT-120/BT-121 at the VAT breakdown and omits the rate
 for outside-scope lines and subtotals. CLI line specs accept exemption code and
-text as optional seventh and eighth fields. `tools/validate-vat-matrix.sh`
-validates standard, zero-rated, exempt, reverse-charge, export, and outside-scope
-invoices against Mustang: **6/6 valid**.
+text as optional seventh and eighth fields. Intra-community supply writes BT-72
+from `--delivery` and BT-80 from the customer country; `BR-IC-11` blocks a
+missing delivery date. T1-021 rejects conflicting exemption reasons within one
+VAT breakdown. `tools/validate-vat-matrix.sh` validates standard, zero-rated,
+exempt, reverse-charge, intra-community, export, and outside-scope invoices
+against Mustang: **7/7 valid**.
 
-Not yet done: intra-community supply (needs delivery date/country fields),
-click-to-focus mapping and suppression with reason (M2.5), codelist bundles and
-integrity manifests (M2.2), the official artefact runner (M2.3), credit notes
-(M2.7), and the Peppol profile layer beyond the current rule set (M2.8).
-Workspace tests: 154 encrypted, 152 plain.
+Not yet done: click-to-focus mapping and suppression with reason (M2.5), codelist
+bundles and integrity manifests (M2.2), the official artefact runner (M2.3),
+credit notes (M2.7), and the Peppol profile layer beyond the current rule set
+(M2.8). Explicit deliver-to address fields beyond the buyer country remain for a
+later slice. Workspace tests: 157 encrypted, 155 plain.
 
 Exit criteria:
 

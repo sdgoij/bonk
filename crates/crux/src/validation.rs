@@ -7,6 +7,7 @@ use crate::findings::Finding;
 use crate::invoice::InvoiceDraft;
 use crate::party::Party;
 use crate::totals::calculate_totals;
+use crate::vat::VatCategory;
 
 /// Validates a draft against the parties that will appear on it.
 pub fn validate_draft(draft: &InvoiceDraft, seller: &Party, customer: &Party) -> Vec<Finding> {
@@ -24,6 +25,8 @@ pub fn validate_draft(draft: &InvoiceDraft, seller: &Party, customer: &Party) ->
     }
 
     let mut positions = std::collections::BTreeSet::new();
+    let mut exemption_reasons: std::collections::BTreeMap<(VatCategory, u16), (Option<String>, Option<String>)> =
+        std::collections::BTreeMap::new();
     for (index, line) in draft.lines.iter().enumerate() {
         let field = |suffix: &str| format!("lines[{index}].{suffix}");
 
@@ -94,6 +97,34 @@ pub fn validate_draft(draft: &InvoiceDraft, seller: &Party, customer: &Party) ->
                 "an exemption reason is expected for this VAT category",
             ));
         }
+
+        let key = (line.treatment.category, line.treatment.rate.basis_points());
+        let current_code = nonempty(line.treatment.exemption_reason_code.as_deref());
+        let current_reason = nonempty(line.treatment.exemption_reason.as_deref());
+        match exemption_reasons.get(&key) {
+            Some((existing_code, existing_reason)) => {
+                let code_conflict = existing_code
+                    .as_deref()
+                    .is_some_and(|existing| current_code.is_some_and(|current| current != existing));
+                let reason_conflict = existing_reason
+                    .as_deref()
+                    .is_some_and(|existing| current_reason.is_some_and(|current| current != existing));
+                if code_conflict || reason_conflict {
+                    findings.push(Finding::blocking(
+                        "T1-021",
+                        Some("BT-120"),
+                        field("exemption_reason"),
+                        "lines in the same VAT breakdown must share an exemption reason",
+                    ));
+                }
+            }
+            None => {
+                exemption_reasons.insert(
+                    key,
+                    (current_code.map(str::to_owned), current_reason.map(str::to_owned)),
+                );
+            }
+        }
         match line.net() {
             Ok(net) if net.is_zero() => findings.push(Finding::warning(
                 "T1-015",
@@ -141,6 +172,10 @@ pub fn validate_draft(draft: &InvoiceDraft, seller: &Party, customer: &Party) ->
     findings
 }
 
+fn nonempty(value: Option<&str>) -> Option<&str> {
+    value.filter(|value| !value.trim().is_empty())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -150,7 +185,7 @@ mod tests {
     use crate::money::{Currency, Money};
     use crate::party::{Address, CountryCode, Party};
     use crate::quantity::{Quantity, UnitCode};
-    use crate::vat::{TaxTreatment, VatRate};
+    use crate::vat::{TaxTreatment, VatCategory, VatRate};
 
     fn party(name: &str, vat: Option<&str>) -> Party {
         let mut party = Party::new(name, Address::new("Amsterdam", CountryCode::NL));
@@ -270,6 +305,22 @@ mod tests {
             &party("Customer BV", None),
         );
         assert!(!valid.iter().any(|finding| finding.code == "T1-011"));
+    }
+
+    #[test]
+    fn conflicting_exemption_reasons_in_one_breakdown_are_blocking() {
+        let mut first = line("A", 10_000, 0);
+        first.treatment = TaxTreatment::zero(VatCategory::Exempt).with_exemption_reason("First reason");
+        let mut second = line("B", 10_000, 0);
+        second.position = 2;
+        second.treatment = TaxTreatment::zero(VatCategory::Exempt).with_exemption_reason("Second reason");
+
+        let findings = validate_draft(
+            &draft(vec![first, second]),
+            &party("Seller BV", None),
+            &party("Customer BV", None),
+        );
+        assert!(findings.iter().any(|finding| finding.code == "T1-021"));
     }
 
     #[test]

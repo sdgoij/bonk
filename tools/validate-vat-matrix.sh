@@ -69,17 +69,26 @@ vat_customer=$(
         --vat NL111111110B01 |
         field customer
 )
+de_customer=$(
+    "$BONK_BIN" customer-add \
+        --db "$DB" --keystore "$KEY" --passphrase "$PASS" \
+        --name "German Customer GmbH" --city Berlin --country DE \
+        --vat DE123456789 |
+        field customer
+)
 
 make_invoice() {
     label=$1
     customer=$2
     line_spec=$3
+    delivery=${4:-}
 
     set -- draft-new \
         --db "$DB" --keystore "$KEY" --passphrase "$PASS" \
         --seller "$seller" --customer "$customer" \
         --date 2026-10-27 --due 2026-11-26 \
         --line "$line_spec"
+    [ -z "$delivery" ] || set -- "$@" --delivery "$delivery"
     draft=$("$BONK_BIN" "$@" | field draft)
     if [ -z "$draft" ]; then
         echo "error: could not create $label draft" >&2
@@ -95,6 +104,7 @@ make_invoice "zero-rated" "$plain_customer" "Zero rated|1|100.00|0|Z"
 make_invoice "exempt" "$plain_customer" "Exempt supply|1|100.00|0|E|||Exempt supply"
 make_invoice "reverse-charge" "$vat_customer" "Reverse charge|1|100.00|0|AE||VATEX-EU-AE|Reverse charge"
 make_invoice "export" "$plain_customer" "Export outside the EU|1|100.00|0|G||VATEX-EU-G|Export outside the EU"
+make_invoice "intra-community" "$de_customer" "Intra-community supply|1|100.00|0|K||VATEX-EU-IC|Intra-community supply" "2026-10-25"
 
 # Outside-scope invoices must not carry seller or buyer VAT identifiers, so this
 # scenario needs its own database.
@@ -129,8 +139,8 @@ o_draft=$(
     --out "$O_OUT" >/dev/null
 
 invoices=$(find "$OUT" "$O_OUT" -maxdepth 1 -name '*.xml' | wc -l | tr -d ' ')
-if [ "$invoices" -ne 6 ]; then
-    echo "error: expected 6 invoices, found $invoices" >&2
+if [ "$invoices" -ne 7 ]; then
+    echo "error: expected 7 invoices, found $invoices" >&2
     exit 1
 fi
 

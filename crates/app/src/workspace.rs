@@ -110,6 +110,7 @@ struct Editor {
     customer: Option<CustomerId>,
     issue_date: String,
     due_date: String,
+    delivery_date: String,
     note: String,
     buyer_reference: String,
     order_reference: String,
@@ -123,6 +124,7 @@ impl Clone for Editor {
             customer: self.customer,
             issue_date: self.issue_date.clone(),
             due_date: self.due_date.clone(),
+            delivery_date: self.delivery_date.clone(),
             note: self.note.clone(),
             buyer_reference: self.buyer_reference.clone(),
             order_reference: self.order_reference.clone(),
@@ -138,6 +140,7 @@ impl Editor {
             customer,
             issue_date: LocalDate::today_utc().to_iso_string(),
             due_date: String::new(),
+            delivery_date: String::new(),
             note: String::new(),
             buyer_reference: String::new(),
             order_reference: String::new(),
@@ -382,6 +385,11 @@ impl Workspace {
                 ui.add(egui::TextEdit::singleline(&mut editor.buyer_reference).desired_width(110.0));
                 ui.label("Order ref");
                 ui.add(egui::TextEdit::singleline(&mut editor.order_reference).desired_width(110.0));
+                ui.end_row();
+                ui.label("Delivery date");
+                ui.add(egui::TextEdit::singleline(&mut editor.delivery_date).desired_width(110.0));
+                ui.label("");
+                ui.label("");
                 ui.end_row();
             });
             ui.horizontal(|ui| {
@@ -710,9 +718,18 @@ fn build_draft(editor: &Editor, seller: &SellerRecord) -> Result<InvoiceDraft, S
     } else {
         Some(LocalDate::parse_iso(editor.due_date.trim()).map_err(|_| "Due date must be YYYY-MM-DD.".to_owned())?)
     };
+    let delivery_date = if editor.delivery_date.trim().is_empty() {
+        None
+    } else {
+        Some(
+            LocalDate::parse_iso(editor.delivery_date.trim())
+                .map_err(|_| "Delivery date must be YYYY-MM-DD.".to_owned())?,
+        )
+    };
 
     let mut draft = InvoiceDraft::new(seller.id, customer_id, seller.default_currency, issue_date);
     draft.due_date = due_date;
+    draft.delivery_date = delivery_date;
     draft.note = nonempty(&editor.note);
     draft.buyer_reference = nonempty(&editor.buyer_reference);
     draft.order_reference = nonempty(&editor.order_reference);

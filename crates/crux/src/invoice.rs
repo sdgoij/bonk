@@ -170,6 +170,8 @@ pub struct InvoiceDraft {
     pub issue_date: LocalDate,
     /// Due date (BT-9).
     pub due_date: Option<LocalDate>,
+    /// Actual delivery date (BT-72).
+    pub delivery_date: Option<LocalDate>,
     /// Buyer reference (BT-10).
     pub buyer_reference: Option<String>,
     /// Purchase order reference (BT-13).
@@ -191,6 +193,7 @@ impl InvoiceDraft {
             currency,
             issue_date,
             due_date: None,
+            delivery_date: None,
             buyer_reference: None,
             order_reference: None,
             note: None,
