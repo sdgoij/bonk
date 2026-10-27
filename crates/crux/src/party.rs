@@ -112,6 +112,19 @@ impl Party {
         }
     }
 
+    /// The Peppol endpoint identifier split into its EAS scheme and value.
+    ///
+    /// BT-34/BT-49 are written as `schemeID` plus a value. An identifier that
+    /// does not have both parts cannot be serialised, so callers must treat a
+    /// `None` here as "no usable endpoint", not as "no endpoint configured".
+    pub fn peppol_endpoint(&self) -> Option<(&str, &str)> {
+        let (scheme, value) = self.peppol_id.as_deref()?.split_once(':')?;
+        if scheme.is_empty() || value.is_empty() {
+            return None;
+        }
+        Some((scheme, value))
+    }
+
     /// Validates the party, attributing findings to `role` (for example
     /// `seller` or `customer`).
     pub fn validate(&self, role: &str) -> Vec<Finding> {
@@ -267,6 +280,24 @@ mod tests {
         assert_eq!(validate_vat_id("NL123456782B01"), VatIdCheck::Valid);
         assert_eq!(validate_vat_id("nl123456782b01"), VatIdCheck::Valid);
         assert_eq!(validate_vat_id("NL123456788B01"), VatIdCheck::ChecksumFailed);
+    }
+
+    #[test]
+    fn peppol_endpoints_need_a_scheme_and_a_value() {
+        let mut party = Party::new("Party BV", Address::new("Amsterdam", CountryCode::NL));
+        assert_eq!(party.peppol_endpoint(), None);
+
+        party.peppol_id = Some("0106:12345678".to_owned());
+        assert_eq!(party.peppol_endpoint(), Some(("0106", "12345678")));
+
+        party.peppol_id = Some("12345678".to_owned());
+        assert_eq!(party.peppol_endpoint(), None, "a scheme is required");
+
+        party.peppol_id = Some("0106:".to_owned());
+        assert_eq!(party.peppol_endpoint(), None, "a value is required");
+
+        party.peppol_id = Some(":12345678".to_owned());
+        assert_eq!(party.peppol_endpoint(), None, "an empty scheme is not a scheme");
     }
 
     #[test]

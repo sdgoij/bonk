@@ -341,7 +341,7 @@ buyer and order reference from the document they correct, so the copied draft
 still passes R003.
 
 Remaining in M2: nothing blocking. Explicit deliver-to address fields beyond the
-buyer country remain for a later slice. Workspace tests: 203 encrypted, 201 plain.
+buyer country remain for a later slice. Workspace tests: 206 encrypted, 204 plain.
 
 Exit criteria:
 

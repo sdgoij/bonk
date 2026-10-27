@@ -142,12 +142,8 @@ fn validate_peppol(invoice: &SemanticInvoice<'_>, findings: &mut Vec<Finding>) {
             "a Peppol invoice needs a buyer reference or an order reference",
         ));
     }
-    if invoice.seller.peppol_id.is_none() {
-        findings.push(PEPPOL_R020.finding("seller.peppol_id", "the seller needs a Peppol endpoint identifier"));
-    }
-    if invoice.buyer.peppol_id.is_none() {
-        findings.push(PEPPOL_R010.finding("buyer.peppol_id", "the buyer needs a Peppol endpoint identifier"));
-    }
+    endpoint_finding(&PEPPOL_R020, invoice.seller, "seller", findings);
+    endpoint_finding(&PEPPOL_R010, invoice.buyer, "buyer", findings);
 
     if invoice.seller.address.country == CountryCode::NL
         && (invoice.seller.address.street.is_none() || invoice.seller.address.postal_code.is_none())
@@ -190,6 +186,19 @@ fn validate_peppol(invoice: &SemanticInvoice<'_>, findings: &mut Vec<Finding>) {
     }
 }
 
+/// Reports a missing or unusable endpoint identifier for one party.
+fn endpoint_finding(rule: &Rule, party: &Party, role: &str, findings: &mut Vec<Finding>) {
+    if party.peppol_endpoint().is_some() {
+        return;
+    }
+    let message = if party.peppol_id.is_some() {
+        format!("the {role}'s Peppol endpoint identifier must be written as EAS:value")
+    } else {
+        format!("the {role} needs a Peppol endpoint identifier")
+    };
+    findings.push(rule.finding(format!("{role}.peppol_id"), message));
+}
+
 fn party_codelists(party: &Party, role: &str, country_bt: Bt, endpoint_bt: Bt, findings: &mut Vec<Finding>) {
     let country = party.address.country.as_str();
     if !Codelist::CountryCode.contains(country) {
@@ -200,13 +209,7 @@ fn party_codelists(party: &Party, role: &str, country_bt: Bt, endpoint_bt: Bt, f
         ));
     }
 
-    // A Peppol identifier without a scheme is dropped by the UBL writer; the
-    // requirement for a well-formed one belongs to the Peppol profile layer.
-    let scheme = party
-        .peppol_id
-        .as_deref()
-        .and_then(|endpoint| endpoint.split_once(':'))
-        .map(|(scheme, _)| scheme);
+    let scheme = party.peppol_endpoint().map(|(scheme, _)| scheme);
     if let Some(scheme) = scheme
         && !Codelist::EndpointSchemeCode.contains(scheme)
     {
@@ -969,6 +972,21 @@ mod tests {
         with_order.order_reference = Some("ORD-1".to_owned());
         let invoice = peppol_invoice("2026-0001", &with_order, &seller, &buyer);
         assert!(!has(&validate(&invoice), "PEPPOL-EN16931-R003"));
+    }
+
+    #[test]
+    fn a_malformed_endpoint_identifier_is_not_an_endpoint() {
+        let mut seller = complete_party("Seller BV", "0106:12345678");
+        seller.peppol_id = Some("12345678".to_owned());
+        let buyer = complete_party("Buyer BV", "0106:87654321");
+        let mut draft = draft(vec![line(1, 100, TaxTreatment::standard(VatRate::STANDARD_NL))]);
+        draft.buyer_reference = Some("PO-1".to_owned());
+        let invoice = peppol_invoice("2026-0001", &draft, &seller, &buyer);
+
+        let findings = validate(&invoice);
+        let finding = finding(&findings, "PEPPOL-EN16931-R020");
+        assert_eq!(finding.field, "seller.peppol_id");
+        assert!(finding.message.contains("EAS:value"), "{}", finding.message);
     }
 
     #[test]

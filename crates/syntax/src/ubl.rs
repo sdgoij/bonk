@@ -77,12 +77,15 @@ pub struct UblLine<'a> {
 pub enum UblError {
     /// A credit note must name the invoice it corrects (BG-3).
     CreditNoteWithoutPrecedingInvoice,
+    /// A Peppol endpoint identifier must look like `EAS:value`.
+    MalformedEndpoint,
 }
 
 impl std::fmt::Display for UblError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::CreditNoteWithoutPrecedingInvoice => f.write_str("a credit note needs a preceding invoice reference"),
+            Self::MalformedEndpoint => f.write_str("a Peppol endpoint identifier must be written as EAS:value"),
         }
     }
 }
@@ -156,8 +159,8 @@ pub fn write_invoice(invoice: &UblInvoice<'_>) -> Result<String, UblError> {
         close(&mut out, 1, "cac:BillingReference");
     }
 
-    party(&mut out, "cac:AccountingSupplierParty", invoice.seller, true);
-    party(&mut out, "cac:AccountingCustomerParty", invoice.customer, false);
+    party(&mut out, "cac:AccountingSupplierParty", invoice.seller, true)?;
+    party(&mut out, "cac:AccountingCustomerParty", invoice.customer, false)?;
 
     let needs_delivery = invoice.delivery_date.is_some()
         || invoice
@@ -179,13 +182,19 @@ pub fn write_invoice(invoice: &UblInvoice<'_>) -> Result<String, UblError> {
     Ok(out)
 }
 
-fn party(out: &mut String, wrapper: &str, party: &Party, is_seller: bool) {
+/// Splits a Peppol endpoint identifier into its EAS scheme and value.
+///
+/// An identifier without a non-empty scheme and value cannot be written: BT-34
+/// and BT-49 require the scheme, and dropping the element silently would leave
+/// the recipient unable to route the document.
+fn party(out: &mut String, wrapper: &str, party: &Party, is_seller: bool) -> Result<(), UblError> {
     open(out, 1, wrapper);
     open(out, 2, "cac:Party");
 
-    if let Some(endpoint) = &party.peppol_id
-        && let Some((scheme, value)) = endpoint.split_once(':')
-    {
+    if party.peppol_id.is_some() {
+        let Some((scheme, value)) = party.peppol_endpoint() else {
+            return Err(UblError::MalformedEndpoint);
+        };
         text_attrs(out, 3, "cbc:EndpointID", &[("schemeID", scheme)], value);
     }
 
@@ -241,6 +250,7 @@ fn party(out: &mut String, wrapper: &str, party: &Party, is_seller: bool) {
 
     close(out, 2, "cac:Party");
     close(out, 1, wrapper);
+    Ok(())
 }
 
 fn delivery(out: &mut String, invoice: &UblInvoice<'_>) {
@@ -890,6 +900,30 @@ mod tests {
         );
         assert!(!xml.contains("cac:InvoiceLine"), "{xml}");
         assert!(xml.ends_with("</CreditNote>\n"), "{xml}");
+    }
+
+    #[test]
+    fn a_malformed_endpoint_identifier_is_rejected() {
+        let treatment = TaxTreatment::standard(VatRate::STANDARD_NL);
+        let line = UblLine {
+            id: 1,
+            name: "Consulting",
+            description: None,
+            quantity: Quantity::ONE,
+            unit: UnitCode::PIECE,
+            unit_price: Money::from_major_units(100, Currency::EUR).unwrap(),
+            base_quantity: Quantity::ONE,
+            line_net: Money::from_major_units(100, Currency::EUR).unwrap(),
+            treatment: &treatment,
+        };
+        let lines = [line];
+        let totals = totals();
+        let seller = seller();
+        let mut customer = customer();
+        customer.peppol_id = Some("12345678".to_owned());
+        let invoice = minimal_invoice(&seller, &customer, &lines, &totals);
+
+        assert_eq!(write_invoice(&invoice), Err(UblError::MalformedEndpoint));
     }
 
     #[test]
