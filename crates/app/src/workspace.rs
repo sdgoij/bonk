@@ -47,6 +47,7 @@ pub struct Workspace {
     issued: Option<IssuedInvoice>,
     pdf: Option<PdfDocument>,
     pdf_path: String,
+    conformance_findings: Vec<Finding>,
     message: Option<Message>,
 }
 
@@ -180,6 +181,7 @@ impl Workspace {
             issued: None,
             pdf: None,
             pdf_path: String::new(),
+            conformance_findings: Vec::new(),
             message: None,
         })
     }
@@ -205,6 +207,11 @@ impl Workspace {
         if let Some(message) = &self.message {
             let color = if message.error { ERROR_COLOR } else { OK_COLOR };
             ui.colored_label(color, message.text.as_str());
+            ui.separator();
+        }
+
+        if !self.conformance_findings.is_empty() {
+            show_findings(ui, &self.conformance_findings);
             ui.separator();
         }
 
@@ -280,6 +287,7 @@ impl Workspace {
                 self.editor = None;
                 self.pdf = None;
                 self.pdf_path.clear();
+                self.conformance_findings.clear();
             }
             return;
         }
@@ -565,6 +573,7 @@ impl Workspace {
     }
 
     fn issue(&mut self, session: &mut Session) {
+        self.conformance_findings.clear();
         let Some(seller) = self.seller.clone() else {
             return;
         };
@@ -647,11 +656,22 @@ impl Workspace {
 
                 self.issued = Some(issued);
                 self.editor = None;
+                self.conformance_findings.clear();
                 if let Some(error) = attach_error {
                     self.message = Some(Message::error(format!("Issued, but the PDF was not attached: {error}")));
                 } else if self.pdf.is_some() {
                     self.message = None;
                 }
+            }
+            Err(StoreError::Conformance(findings)) => {
+                let count = findings
+                    .iter()
+                    .filter(|finding| finding.severity == Severity::Blocking)
+                    .count();
+                self.conformance_findings = findings;
+                self.message = Some(Message::error(format!(
+                    "{count} conformance finding(s); nothing was issued."
+                )));
             }
             Err(error) => self.message = Some(Message::error(error.to_string())),
         }

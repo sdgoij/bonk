@@ -304,7 +304,7 @@ fn run(cli: Cli) -> Result<(), CliError> {
             }
 
             let mut rendered: Option<Vec<u8>> = None;
-            let issued = issue_draft(
+            let issued = match issue_draft(
                 session.database_mut().connection_mut(),
                 IssueRequest {
                     draft_id,
@@ -318,7 +318,14 @@ fn run(cli: Cli) -> Result<(), CliError> {
                     rendered = Some(bytes.clone());
                     Ok(bytes)
                 },
-            )?;
+            ) {
+                Ok(issued) => issued,
+                Err(StoreError::Conformance(findings)) => {
+                    print_findings(&findings);
+                    return Err(CliError::Validation);
+                }
+                Err(error) => return Err(error.into()),
+            };
 
             std::fs::create_dir_all(&out)?;
             let path = out.join(format!("{}.xml", issued.number));

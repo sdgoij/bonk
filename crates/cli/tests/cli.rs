@@ -229,6 +229,80 @@ fn full_slice_through_the_cli() {
 }
 
 #[test]
+fn conformance_findings_stop_issue_creation() {
+    let dir = TempDir::new().expect("temp dir");
+    let database = dir.path().join("bonk.db");
+    let keystore = dir.path().join("keystore.bin");
+    let output_dir = dir.path().join("out");
+    let db = database.to_str().expect("utf-8");
+    let key = keystore.to_str().expect("utf-8");
+    let out = output_dir.to_str().expect("utf-8");
+    let common = ["--db", db, "--keystore", key, "--passphrase", "pass"];
+
+    let mut args = vec!["init"];
+    args.extend(common);
+    bonk_ok(&args);
+
+    let mut args = vec![
+        "seller-add",
+        "--name",
+        "Seller BV",
+        "--city",
+        "Amsterdam",
+        "--vat",
+        "NL123456782B01",
+    ];
+    args.extend(common);
+    let seller = field(&bonk_ok(&args), "seller:");
+
+    let mut args = vec!["customer-add", "--name", "Customer BV", "--city", "Rotterdam"];
+    args.extend(common);
+    let customer = field(&bonk_ok(&args), "customer:");
+
+    let mut args = vec![
+        "draft-new",
+        "--seller",
+        &seller,
+        "--customer",
+        &customer,
+        "--date",
+        "2026-10-27",
+        "--line",
+        "Export consulting|1|100.00|0|G",
+    ];
+    args.extend(common);
+    let draft = field(&bonk_ok(&args), "draft:");
+
+    let mut args = vec!["issue", &draft, "--out", out];
+    args.extend(common);
+    let output = bonk().args(&args).output().expect("binary runs");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("BR-G-10"), "{stderr}");
+    assert!(stderr.contains("nothing was issued"), "{stderr}");
+    assert!(!output_dir.join("2026-0001.xml").exists());
+
+    let mut args = vec![
+        "draft-new",
+        "--seller",
+        &seller,
+        "--customer",
+        &customer,
+        "--date",
+        "2026-10-27",
+        "--line",
+        "Consulting|2|50.00|21",
+    ];
+    args.extend(common);
+    let valid_draft = field(&bonk_ok(&args), "draft:");
+
+    let mut args = vec!["issue", &valid_draft, "--out", out];
+    args.extend(common);
+    let issued = bonk_ok(&args);
+    assert!(issued.contains("issued: 2026-0001"), "{issued}");
+}
+
+#[test]
 fn blocking_findings_stop_issue_creation() {
     let dir = TempDir::new().expect("temp dir");
     let database = dir.path().join("bonk.db");

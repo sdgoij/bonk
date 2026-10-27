@@ -253,12 +253,17 @@ BR-02, BR-16, BR-CO-10/13/14/15/16/17, the S/Z/E/AE/IC/G/O category presence,
 rate, base, tax, and exemption rules, and the not-subject-to-VAT exclusivity
 rule. 18 conformance tests cover clean invoices and each rule family.
 
-Not yet done: codelist bundles and integrity manifests (M2.2), the official
-artefact runner (M2.3), finding-to-field UI integration and suppression (M2.5),
-the full tax scenario matrix (M2.6), credit notes (M2.7), and the Peppol profile
-layer (M2.8). The rule engine is therefore not yet called by the issue pipeline;
-that wiring lands with M2.5 so findings can be shown per field rather than
-collapsed into one error string. Workspace tests: 149 encrypted, 147 plain.
+The shared issue path (`app::render_issue`) now runs the Peppol-profile rules
+after number allocation and before any insert. Blocking findings abort the
+issue transaction, so the allocated number is rolled back; the CLI prints the
+findings and the GUI lists them with their field paths. A CLI regression test
+proves a rejected issue does not consume `2026-0001`.
+
+Not yet done: click-to-focus mapping and suppression with reason (M2.5),
+codelist bundles and integrity manifests (M2.2), the official artefact runner
+(M2.3), the full tax scenario matrix (M2.6), credit notes (M2.7), and the Peppol
+profile layer beyond the current rule set (M2.8). Workspace tests: 150 encrypted,
+148 plain.
 
 Exit criteria:
 

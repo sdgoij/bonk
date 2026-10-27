@@ -3,12 +3,13 @@
 Local-first e-invoicing client for the EU market, with the accounting layer
 scheduled next. Nothing leaves the machine unless the user explicitly sends it.
 
-**Status:** M1 complete. M2 is underway: the `conformance` crate now has
+**Status:** M1 complete. M2 is underway: the `conformance` crate has
 profiles, a BT/BG registry, a semantic invoice view, and the core BR-CO and
-VAT-category rules. The domain core, encrypted keystore, migrations, CLI, GUI
-workspace, deterministic UBL writer, and visual PDF via the Typst CLI all work
-end to end. A 20-invoice corpus passes Mustangproject against EN 16931 and
-Peppol BIS 3.0 with zero failures.
+VAT-category rules. The shared issue path now refuses blocking conformance
+findings before anything is stored. The domain core, encrypted keystore,
+migrations, CLI, GUI workspace, deterministic UBL writer, and visual PDF via the
+Typst CLI all work end to end. A 20-invoice corpus passes Mustangproject against
+EN 16931 and Peppol BIS 3.0 with zero failures.
 
 Design documents live in [`.agents/notes/`](.agents/notes/README.md):
 

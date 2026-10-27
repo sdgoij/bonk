@@ -6,6 +6,8 @@
 
 use thiserror::Error;
 
+use crux::Finding;
+
 /// Storage-layer failures.
 #[derive(Debug, Error)]
 pub enum StoreError {
@@ -59,6 +61,10 @@ pub enum StoreError {
     /// Artefact rendering failed.
     #[error("rendering failed: {0}")]
     Render(String),
+
+    /// Conformance validation blocked the operation.
+    #[error("conformance validation failed with {} finding(s)", .0.len())]
+    Conformance(Vec<Finding>),
 
     /// The build is missing a required capability.
     #[error("this build lacks the {0} feature")]

@@ -17,6 +17,7 @@ plain = ["store/plain"]
 [dependencies]
 crux.workspace = true
 store = { path = "../store", default-features = false }
+conformance.workspace = true
 syntax.workspace = true
 render.workspace = true
 time.workspace = true

@@ -11,6 +11,7 @@ mod workspace;
 
 use std::path::{Path, PathBuf};
 
+use conformance::{Profile, SemanticInvoice};
 use crux::{InvoiceDraft, InvoiceTotals, LocalDate, Party};
 use render::PdfRenderer;
 use store::{CustomerRecord, Database, IssueView, KdfParams, KeyStore, SellerRecord, StoreError};
@@ -120,6 +121,19 @@ impl Session {
 ///
 /// Shared by the GUI and the CLI so both produce byte-identical artefacts.
 pub fn render_issue(view: &IssueView<'_>) -> Result<Vec<u8>, StoreError> {
+    let semantic = SemanticInvoice::from_draft(
+        view.number,
+        view.draft,
+        &view.seller.party,
+        &view.customer.party,
+        view.totals.clone(),
+        Profile::PeppolBis3,
+    );
+    let findings = conformance::validate(&semantic);
+    if crux::has_blocking(&findings) {
+        return Err(StoreError::Conformance(findings));
+    }
+
     let mut lines = Vec::with_capacity(view.draft.lines.len());
     for line in &view.draft.lines {
         let net = line.net().map_err(|error| StoreError::Data(error.to_string()))?;
