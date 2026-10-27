@@ -12,6 +12,8 @@ ALTER TABLE invoice_draft ADD COLUMN preceding_number TEXT;
 ALTER TABLE invoice_draft ADD COLUMN preceding_issue_date TEXT;
 
 ALTER TABLE issued_invoice ADD COLUMN customer_id TEXT;
+ALTER TABLE issued_invoice ADD COLUMN buyer_reference TEXT;
+ALTER TABLE issued_invoice ADD COLUMN order_reference TEXT;
 ALTER TABLE issued_invoice ADD COLUMN preceding_invoice_id TEXT;
 ALTER TABLE issued_invoice ADD COLUMN preceding_number TEXT;
 ALTER TABLE issued_invoice ADD COLUMN preceding_issue_date TEXT;

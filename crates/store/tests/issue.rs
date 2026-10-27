@@ -36,6 +36,7 @@ fn draft_for(seller: SellerId, customer: CustomerId) -> InvoiceDraft {
     );
     draft.due_date = Some(LocalDate::parse_iso("2026-11-26").unwrap());
     draft.delivery_date = Some(LocalDate::parse_iso("2026-10-25").unwrap());
+    draft.buyer_reference = Some("PO-1".to_owned());
     draft.lines.push(DraftLine {
         id: LineId::new(),
         position: 1,
@@ -322,6 +323,7 @@ fn a_credit_note_copies_the_issued_invoice() {
     assert_eq!(credit.doc_type, DocType::CreditNote);
     assert_eq!(credit.customer_id, customer_id);
     assert_eq!(credit.currency, Currency::EUR);
+    assert_eq!(credit.buyer_reference.as_deref(), Some("PO-1"));
     assert_eq!(credit.lines.len(), 1);
     assert_eq!(credit.lines[0].unit_price.micros(), 50_000_000);
     assert_eq!(credit.lines[0].quantity, Quantity::from_units(2).unwrap());

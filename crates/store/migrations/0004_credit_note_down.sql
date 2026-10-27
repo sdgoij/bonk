@@ -7,6 +7,8 @@ DROP INDEX issued_invoice_number_idx;
 ALTER TABLE issued_invoice DROP COLUMN preceding_issue_date;
 ALTER TABLE issued_invoice DROP COLUMN preceding_number;
 ALTER TABLE issued_invoice DROP COLUMN preceding_invoice_id;
+ALTER TABLE issued_invoice DROP COLUMN order_reference;
+ALTER TABLE issued_invoice DROP COLUMN buyer_reference;
 ALTER TABLE issued_invoice DROP COLUMN customer_id;
 
 ALTER TABLE invoice_draft DROP COLUMN preceding_issue_date;

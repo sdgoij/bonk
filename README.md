@@ -101,15 +101,23 @@ forward change.
 
 ```sh
 bonk init
-bonk seller-add --name "Your BV" --city Amsterdam --vat NL123456782B01
-bonk customer-add --name "Customer BV" --city Rotterdam
+bonk seller-add --name "Your BV" --city Amsterdam --street "Main 1" --postal "1000 AA" \
+    --peppol 0106:12345678 --vat NL123456782B01 --kvk 12345678
+bonk customer-add --name "Customer BV" --city Rotterdam --street "Buyer 1" \
+    --postal "3000 AA" --peppol 0106:87654321
 bonk draft-new --seller <seller-id> --customer <customer-id> \
+    --due 2026-11-26 --buyer-ref PO-1 \
     --line "Consulting|2|50.00|21"
 bonk issue <draft-id> --out ./out
 bonk credit-note 2026-0001
 bonk issue <credit-note-draft-id> --out ./out
 bonk verify
 ```
+
+Peppol BIS 3.0 requires an endpoint identifier for both parties and a buyer or
+order reference, and a Dutch seller also needs a street, a post code, and a KvK
+number. Omitting them is a blocking finding, not a warning, because the recipient
+cannot route the document without them.
 
 `credit-note` copies an issued invoice into a credit-note draft: same customer,
 currency, and lines, with BG-3 naming the invoice it corrects. Credit notes use

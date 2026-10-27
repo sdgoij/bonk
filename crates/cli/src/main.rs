@@ -64,6 +64,9 @@ enum Command {
         vat: Option<String>,
         #[arg(long)]
         kvk: Option<String>,
+        /// Peppol endpoint identifier, `EAS:value`, e.g. `0106:12345678`.
+        #[arg(long)]
+        peppol: Option<String>,
         #[arg(long)]
         street: Option<String>,
         #[arg(long)]
@@ -90,6 +93,9 @@ enum Command {
         vat: Option<String>,
         #[arg(long)]
         kvk: Option<String>,
+        /// Peppol endpoint identifier, `EAS:value`, e.g. `0106:12345678`.
+        #[arg(long)]
+        peppol: Option<String>,
         #[arg(long)]
         street: Option<String>,
         #[arg(long)]
@@ -234,6 +240,7 @@ fn run(cli: Cli) -> Result<(), CliError> {
             country,
             vat,
             kvk,
+            peppol,
             street,
             postal,
             email,
@@ -242,7 +249,7 @@ fn run(cli: Cli) -> Result<(), CliError> {
             locale,
         }) => {
             let session = open(&database, &keystore, passphrase.clone())?;
-            let party = party(name, city, country, street, postal, vat, kvk, email, contact)?;
+            let party = party(name, city, country, street, postal, vat, kvk, peppol, email, contact)?;
             let id = SellerId::new();
             insert_seller(
                 session.database().connection(),
@@ -263,6 +270,7 @@ fn run(cli: Cli) -> Result<(), CliError> {
             country,
             vat,
             kvk,
+            peppol,
             street,
             postal,
             email,
@@ -274,7 +282,7 @@ fn run(cli: Cli) -> Result<(), CliError> {
                 session.database().connection(),
                 &CustomerRecord {
                     id,
-                    party: party(name, city, country, street, postal, vat, kvk, email, contact)?,
+                    party: party(name, city, country, street, postal, vat, kvk, peppol, email, contact)?,
                 },
                 &store::now_rfc3339(),
             )?;
@@ -485,6 +493,7 @@ fn party(
     postal: Option<String>,
     vat: Option<String>,
     kvk: Option<String>,
+    peppol: Option<String>,
     email: Option<String>,
     contact: Option<String>,
 ) -> Result<Party, CliError> {
@@ -499,6 +508,7 @@ fn party(
     );
     party.vat_id = vat.map(|value| value.trim().to_ascii_uppercase());
     party.kvk_number = kvk;
+    party.peppol_id = peppol.map(|value| value.trim().to_owned());
     party.email = email;
     party.contact_name = contact;
     Ok(party)

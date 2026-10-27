@@ -53,14 +53,15 @@ seller=$(
     "$BONK_BIN" seller-add \
         --db "$DB" --keystore "$KEY" --passphrase "$PASS" \
         --name "Validation Seller BV" --city Amsterdam \
+        --street "Main 1" --postal "1000 AA" --peppol 0106:12345678 \
         --vat NL123456782B01 --kvk 12345678 |
         field seller
 )
 
-c1=$("$BONK_BIN" customer-add --db "$DB" --keystore "$KEY" --passphrase "$PASS" --name "Alpha Customer BV" --city Rotterdam | field customer)
-c2=$("$BONK_BIN" customer-add --db "$DB" --keystore "$KEY" --passphrase "$PASS" --name "Beta Customer BV" --city Utrecht | field customer)
-c3=$("$BONK_BIN" customer-add --db "$DB" --keystore "$KEY" --passphrase "$PASS" --name "Gamma Customer BV" --city Eindhoven | field customer)
-c4=$("$BONK_BIN" customer-add --db "$DB" --keystore "$KEY" --passphrase "$PASS" --name "Delta Customer BV" --city Groningen | field customer)
+c1=$("$BONK_BIN" customer-add --db "$DB" --keystore "$KEY" --passphrase "$PASS" --name "Alpha Customer BV" --city Rotterdam --street "Alpha 1" --postal "3000 AA" --peppol 0106:10000001 | field customer)
+c2=$("$BONK_BIN" customer-add --db "$DB" --keystore "$KEY" --passphrase "$PASS" --name "Beta Customer BV" --city Utrecht --street "Beta 2" --postal "3500 AA" --peppol 0106:10000002 | field customer)
+c3=$("$BONK_BIN" customer-add --db "$DB" --keystore "$KEY" --passphrase "$PASS" --name "Gamma Customer BV" --city Eindhoven --street "Gamma 3" --postal "5600 AA" --peppol 0106:10000003 | field customer)
+c4=$("$BONK_BIN" customer-add --db "$DB" --keystore "$KEY" --passphrase "$PASS" --name "Delta Customer BV" --city Groningen --street "Delta 4" --postal "9700 AA" --peppol 0106:10000004 | field customer)
 
 n=0
 while IFS='|' read -r date due item qty price rate note buyer_ref; do

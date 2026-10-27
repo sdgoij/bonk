@@ -409,6 +409,105 @@ rule!(
     None,
     "Invoice currency code MUST be coded using ISO code list 4217 alpha-3."
 );
+
+// Peppol BIS Billing 3.0 adds rules on top of EN 16931. Ids and wording come
+// from `PEPPOL-EN16931-UBL.sch` (release 3.0.20).
+rule!(
+    PEPPOL_R003,
+    "PEPPOL-EN16931-R003",
+    Some(Bt::BuyerReference),
+    None,
+    "A buyer reference or purchase order reference MUST be provided."
+);
+rule!(
+    PEPPOL_R010,
+    "PEPPOL-EN16931-R010",
+    Some(Bt::BuyerEndpointId),
+    Some(Bg::Buyer),
+    "Buyer electronic address MUST be provided."
+);
+rule!(
+    PEPPOL_R020,
+    "PEPPOL-EN16931-R020",
+    Some(Bt::SellerEndpointId),
+    Some(Bg::Seller),
+    "Seller electronic address MUST be provided."
+);
+rule!(
+    PEPPOL_NL_R002,
+    "NL-R-002",
+    None,
+    Some(Bg::Seller),
+    "A Dutch seller's address MUST contain a street name, a city, and a post code."
+);
+rule!(
+    PEPPOL_P0104,
+    "PEPPOL-EN16931-P0104",
+    Some(Bt::VatExemptionCode),
+    Some(Bg::VatBreakdown),
+    "VAT category G MUST be used when the exemption reason code is VATEX-EU-G."
+);
+rule!(
+    PEPPOL_P0105,
+    "PEPPOL-EN16931-P0105",
+    Some(Bt::VatExemptionCode),
+    Some(Bg::VatBreakdown),
+    "VAT category O MUST be used when the exemption reason code is VATEX-EU-O."
+);
+rule!(
+    PEPPOL_P0106,
+    "PEPPOL-EN16931-P0106",
+    Some(Bt::VatExemptionCode),
+    Some(Bg::VatBreakdown),
+    "VAT category K MUST be used when the exemption reason code is VATEX-EU-IC."
+);
+rule!(
+    PEPPOL_P0107,
+    "PEPPOL-EN16931-P0107",
+    Some(Bt::VatExemptionCode),
+    Some(Bg::VatBreakdown),
+    "VAT category AE MUST be used when the exemption reason code is VATEX-EU-AE."
+);
+rule!(
+    PEPPOL_P0108,
+    "PEPPOL-EN16931-P0108",
+    Some(Bt::VatExemptionCode),
+    Some(Bg::VatBreakdown),
+    "VAT category E MUST be used when the exemption reason code is VATEX-EU-D."
+);
+rule!(
+    PEPPOL_P0109,
+    "PEPPOL-EN16931-P0109",
+    Some(Bt::VatExemptionCode),
+    Some(Bg::VatBreakdown),
+    "VAT category E MUST be used when the exemption reason code is VATEX-EU-F."
+);
+rule!(
+    PEPPOL_P0110,
+    "PEPPOL-EN16931-P0110",
+    Some(Bt::VatExemptionCode),
+    Some(Bg::VatBreakdown),
+    "VAT category E MUST be used when the exemption reason code is VATEX-EU-I."
+);
+rule!(
+    PEPPOL_P0111,
+    "PEPPOL-EN16931-P0111",
+    Some(Bt::VatExemptionCode),
+    Some(Bg::VatBreakdown),
+    "VAT category E MUST be used when the exemption reason code is VATEX-EU-J."
+);
+
+/// Exemption reason codes whose Peppol rule pins the VAT category.
+pub const VATEX_CATEGORY_RULES: &[(&str, VatCategory, &Rule)] = &[
+    ("VATEX-EU-G", VatCategory::Export, &PEPPOL_P0104),
+    ("VATEX-EU-O", VatCategory::OutsideScope, &PEPPOL_P0105),
+    ("VATEX-EU-IC", VatCategory::IntraCommunity, &PEPPOL_P0106),
+    ("VATEX-EU-AE", VatCategory::ReverseCharge, &PEPPOL_P0107),
+    ("VATEX-EU-D", VatCategory::Exempt, &PEPPOL_P0108),
+    ("VATEX-EU-F", VatCategory::Exempt, &PEPPOL_P0109),
+    ("VATEX-EU-I", VatCategory::Exempt, &PEPPOL_P0110),
+    ("VATEX-EU-J", VatCategory::Exempt, &PEPPOL_P0111),
+];
 rule!(
     BR_CL_14,
     "BR-CL-14",
@@ -542,11 +641,70 @@ pub fn category_rules(category: VatCategory) -> Option<&'static CategoryRules> {
 
 /// Every rule the engine can emit.
 pub static CORE_RULES: &[&Rule] = &[
-    &BR_02, &BR_16, &BR_CO_10, &BR_CO_13, &BR_CO_14, &BR_CO_15, &BR_CO_16, &BR_CO_17, &BR_CO_26, &BR_S_01, &BR_S_05,
-    &BR_S_08, &BR_S_09, &BR_S_10, &BR_Z_01, &BR_Z_05, &BR_Z_08, &BR_Z_09, &BR_Z_10, &BR_E_01, &BR_E_05, &BR_E_08,
-    &BR_E_09, &BR_E_10, &BR_AE_01, &BR_AE_05, &BR_AE_08, &BR_AE_09, &BR_AE_10, &BR_IC_01, &BR_IC_05, &BR_IC_08,
-    &BR_IC_09, &BR_IC_10, &BR_IC_11, &BR_G_01, &BR_G_05, &BR_G_08, &BR_G_09, &BR_G_10, &BR_O_01, &BR_O_05, &BR_O_08,
-    &BR_O_09, &BR_O_10, &BR_O_12, &BR_CO_25, &BR_CL_04, &BR_CL_14, &BR_CL_22, &BR_CL_23, &BR_CL_25,
+    &BR_02,
+    &BR_16,
+    &BR_CO_10,
+    &BR_CO_13,
+    &BR_CO_14,
+    &BR_CO_15,
+    &BR_CO_16,
+    &BR_CO_17,
+    &BR_CO_26,
+    &BR_S_01,
+    &BR_S_05,
+    &BR_S_08,
+    &BR_S_09,
+    &BR_S_10,
+    &BR_Z_01,
+    &BR_Z_05,
+    &BR_Z_08,
+    &BR_Z_09,
+    &BR_Z_10,
+    &BR_E_01,
+    &BR_E_05,
+    &BR_E_08,
+    &BR_E_09,
+    &BR_E_10,
+    &BR_AE_01,
+    &BR_AE_05,
+    &BR_AE_08,
+    &BR_AE_09,
+    &BR_AE_10,
+    &BR_IC_01,
+    &BR_IC_05,
+    &BR_IC_08,
+    &BR_IC_09,
+    &BR_IC_10,
+    &BR_IC_11,
+    &BR_G_01,
+    &BR_G_05,
+    &BR_G_08,
+    &BR_G_09,
+    &BR_G_10,
+    &BR_O_01,
+    &BR_O_05,
+    &BR_O_08,
+    &BR_O_09,
+    &BR_O_10,
+    &BR_O_12,
+    &BR_CO_25,
+    &BR_CL_04,
+    &BR_CL_14,
+    &BR_CL_22,
+    &BR_CL_23,
+    &BR_CL_25,
+    &PEPPOL_R003,
+    &PEPPOL_R010,
+    &PEPPOL_R020,
+    &PEPPOL_NL_R002,
+    &PEPPOL_P0104,
+    &PEPPOL_P0105,
+    &PEPPOL_P0106,
+    &PEPPOL_P0107,
+    &PEPPOL_P0108,
+    &PEPPOL_P0109,
+    &PEPPOL_P0110,
+    &PEPPOL_P0111,
 ];
 
 /// Looks up a rule by code.

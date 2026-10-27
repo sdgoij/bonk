@@ -81,6 +81,8 @@ pub enum Bt {
     SpecificationIdentifier,
     /// Seller name (BT-27).
     SellerName,
+    /// Seller legal registration identifier (BT-30).
+    SellerLegalRegistrationId,
     /// Seller VAT identifier (BT-31).
     SellerVatId,
     /// Seller tax registration identifier (BT-32).
@@ -169,6 +171,7 @@ impl Bt {
             Self::Note => "BT-22",
             Self::SpecificationIdentifier => "BT-24",
             Self::SellerName => "BT-27",
+            Self::SellerLegalRegistrationId => "BT-30",
             Self::SellerVatId => "BT-31",
             Self::SellerTaxRegistrationId => "BT-32",
             Self::SellerEndpointId => "BT-34",
@@ -221,6 +224,7 @@ impl Bt {
             Self::Note => "Invoice note",
             Self::SpecificationIdentifier => "Specification identifier",
             Self::SellerName => "Seller name",
+            Self::SellerLegalRegistrationId => "Seller legal registration identifier",
             Self::SellerVatId => "Seller VAT identifier",
             Self::SellerTaxRegistrationId => "Seller tax registration identifier",
             Self::SellerEndpointId => "Seller endpoint identifier",
@@ -264,6 +268,7 @@ impl Bt {
     pub const fn group(self) -> Option<Bg> {
         match self {
             Self::SellerName
+            | Self::SellerLegalRegistrationId
             | Self::SellerVatId
             | Self::SellerTaxRegistrationId
             | Self::SellerEndpointId

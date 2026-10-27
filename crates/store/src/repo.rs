@@ -557,6 +557,10 @@ pub struct IssuedReference {
     pub doc_type: DocType,
     /// Customer the document was issued to.
     pub customer_id: CustomerId,
+    /// Buyer reference carried by the document (BT-10).
+    pub buyer_reference: Option<String>,
+    /// Order reference carried by the document (BT-13).
+    pub order_reference: Option<String>,
     /// Document currency.
     pub currency: Currency,
 }
@@ -569,7 +573,8 @@ pub fn find_issued_reference(
 ) -> Result<Option<IssuedReference>, StoreError> {
     let raw = conn
         .query_row(
-            "SELECT id, number, issue_date_local, doc_type, customer_id, currency
+            "SELECT id, number, issue_date_local, doc_type, customer_id, currency,
+                    buyer_reference, order_reference
              FROM issued_invoice WHERE seller_id = ?1 AND number = ?2",
             params![seller_id.to_string(), number],
             |row| {
@@ -580,12 +585,14 @@ pub fn find_issued_reference(
                     row.get::<_, String>(3)?,
                     row.get::<_, Option<String>>(4)?,
                     row.get::<_, String>(5)?,
+                    row.get::<_, Option<String>>(6)?,
+                    row.get::<_, Option<String>>(7)?,
                 ))
             },
         )
         .optional()?;
 
-    let Some((id, number, issue_date, doc_type, customer_id, currency)) = raw else {
+    let Some((id, number, issue_date, doc_type, customer_id, currency, buyer_reference, order_reference)) = raw else {
         return Ok(None);
     };
     let customer_id = customer_id.ok_or_else(|| StoreError::Data(format!("invoice {number} has no customer")))?;
@@ -596,6 +603,8 @@ pub fn find_issued_reference(
         issue_date: parse_date(&issue_date)?,
         doc_type: parse_doc_type(&doc_type)?,
         customer_id: CustomerId::parse_str(&customer_id).map_err(|error| StoreError::Data(error.to_string()))?,
+        buyer_reference,
+        order_reference,
         currency: Currency::parse(&currency).map_err(|error| StoreError::Data(error.to_string()))?,
     }))
 }
@@ -621,6 +630,8 @@ pub fn credit_note_for(
         issue_date,
         crux::PrecedingInvoice::new(reference.id, reference.number.clone(), reference.issue_date),
     );
+    draft.buyer_reference = reference.buyer_reference;
+    draft.order_reference = reference.order_reference;
     draft.lines = issued_lines(conn, reference.id, reference.currency)?;
     Ok(Some(draft))
 }
@@ -787,9 +798,10 @@ where
               tax_breakdown_json, seller_snapshot_json, buyer_snapshot_json,
               semantic_json, semantic_hash, rounded_at, posting_profile_id, state,
               issued_at, issued_by_device, created_at,
-              customer_id, preceding_invoice_id, preceding_number, preceding_issue_date)
+              customer_id, buyer_reference, order_reference,
+              preceding_invoice_id, preceding_number, preceding_issue_date)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
-                 ?15, ?16, ?17, NULL, 'issued', ?17, ?18, ?17, ?19, ?20, ?21, ?22)",
+                 ?15, ?16, ?17, NULL, 'issued', ?17, ?18, ?17, ?19, ?20, ?21, ?22, ?23, ?24)",
         params![
             issued_id.to_string(),
             draft.seller_id.to_string(),
@@ -810,6 +822,8 @@ where
             request.now,
             request.device,
             draft.customer_id.to_string(),
+            draft.buyer_reference,
+            draft.order_reference,
             draft.preceding_invoice.as_ref().map(|value| value.id.to_string()),
             draft.preceding_invoice.as_ref().map(|value| value.number.clone()),
             draft

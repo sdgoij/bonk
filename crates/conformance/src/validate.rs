@@ -7,13 +7,14 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crux::{DocType, Finding, Money, Party, VatCategory, VatRate, tax_amount};
+use crux::{CountryCode, DocType, Finding, Money, Party, VatCategory, VatRate, tax_amount};
 
 use crate::bt::Bt;
 use crate::codelist::Codelist;
 use crate::rule::{
     BR_02, BR_16, BR_CL_04, BR_CL_14, BR_CL_22, BR_CL_23, BR_CL_25, BR_CO_10, BR_CO_13, BR_CO_14, BR_CO_15, BR_CO_16,
-    BR_CO_17, BR_CO_25, BR_CO_26, BR_IC_11, BR_O_12, Rule, category_rules,
+    BR_CO_17, BR_CO_25, BR_CO_26, BR_IC_11, BR_O_12, PEPPOL_NL_R002, PEPPOL_R003, PEPPOL_R010, PEPPOL_R020, Rule,
+    VATEX_CATEGORY_RULES, category_rules,
 };
 use crate::semantic::SemanticInvoice;
 
@@ -36,6 +37,7 @@ pub fn validate(invoice: &SemanticInvoice<'_>) -> Vec<Finding> {
     }
 
     validate_codelists(invoice, &mut findings);
+    validate_peppol(invoice, &mut findings);
 
     // BR-CO-25 applies to invoices; a credit note has no payment due date.
     if invoice.doc_type == DocType::Invoice && invoice.amount_due.is_positive() && invoice.due_date.is_none() {
@@ -119,6 +121,70 @@ fn validate_codelists(invoice: &SemanticInvoice<'_>, findings: &mut Vec<Finding>
             findings.push(BR_CL_22.finding(
                 format!("lines[{index}].exemption_reason_code"),
                 format!("{code} is not a CEF VATEX exemption reason code"),
+            ));
+        }
+    }
+}
+
+/// Checks the Peppol BIS 3.0 rules that the domain model can express.
+///
+/// Ids come from `PEPPOL-EN16931-UBL.sch` (release 3.0.20). Rules about
+/// allowances, payment mandates, or invoice periods are absent because the
+/// model does not carry those groups yet; they are not silently assumed.
+fn validate_peppol(invoice: &SemanticInvoice<'_>, findings: &mut Vec<Finding>) {
+    if !invoice.profile.is_peppol() {
+        return;
+    }
+
+    if invoice.buyer_reference.is_none() && invoice.order_reference.is_none() {
+        findings.push(PEPPOL_R003.finding(
+            "buyer_reference",
+            "a Peppol invoice needs a buyer reference or an order reference",
+        ));
+    }
+    if invoice.seller.peppol_id.is_none() {
+        findings.push(PEPPOL_R020.finding("seller.peppol_id", "the seller needs a Peppol endpoint identifier"));
+    }
+    if invoice.buyer.peppol_id.is_none() {
+        findings.push(PEPPOL_R010.finding("buyer.peppol_id", "the buyer needs a Peppol endpoint identifier"));
+    }
+
+    if invoice.seller.address.country == CountryCode::NL
+        && (invoice.seller.address.street.is_none() || invoice.seller.address.postal_code.is_none())
+    {
+        findings.push(PEPPOL_NL_R002.finding(
+            "seller.address",
+            "a Dutch seller's address needs a street name and a post code",
+        ));
+    }
+
+    // NL-R-003 constrains the scheme of a legal registration identifier, not its
+    // presence. The writer always emits a Dutch KvK as scheme 0106, so the rule
+    // is satisfied structurally and is asserted by a syntax test instead of an
+    // unreachable finding.
+
+    for (index, line) in invoice.lines.iter().enumerate() {
+        let Some(code) = line
+            .treatment
+            .exemption_reason_code
+            .as_deref()
+            .map(str::trim)
+            .filter(|code| !code.is_empty())
+        else {
+            continue;
+        };
+        let code = code.to_ascii_uppercase();
+        let Some((_, expected, rule)) = VATEX_CATEGORY_RULES.iter().find(|(known, _, _)| *known == code) else {
+            continue;
+        };
+        if line.treatment.category != *expected {
+            findings.push(rule.finding(
+                format!("lines[{index}].vat_category"),
+                format!(
+                    "{code} requires VAT category {}, found {}",
+                    expected.code(),
+                    line.treatment.category.code()
+                ),
             ));
         }
     }
@@ -507,6 +573,32 @@ mod tests {
         SemanticInvoice::from_draft(number, draft, seller, buyer, totals, Profile::En16931)
     }
 
+    fn peppol_invoice<'a>(
+        number: &'a str,
+        draft: &'a InvoiceDraft,
+        seller: &'a Party,
+        buyer: &'a Party,
+    ) -> SemanticInvoice<'a> {
+        let totals = calculate_totals(&draft.lines).unwrap();
+        SemanticInvoice::from_draft(number, draft, seller, buyer, totals, Profile::PeppolBis3)
+    }
+
+    fn complete_party(name: &str, endpoint: &str) -> Party {
+        let mut party = Party::new(
+            name,
+            Address {
+                street: Some("Main 1".to_owned()),
+                city: "Amsterdam".to_owned(),
+                postal_code: Some("1000 AA".to_owned()),
+                country: CountryCode::NL,
+            },
+        );
+        party.vat_id = Some("NL123456782B01".to_owned());
+        party.kvk_number = Some("12345678".to_owned());
+        party.peppol_id = Some(endpoint.to_owned());
+        party
+    }
+
     fn has(findings: &[Finding], code: &str) -> bool {
         findings.iter().any(|finding| finding.code == code)
     }
@@ -835,5 +927,62 @@ mod tests {
 
         let findings = validate(&invoice);
         assert!(!has(&findings, "BR-CO-25"), "{findings:?}");
+    }
+
+    #[test]
+    fn peppol_requires_endpoint_identifiers_and_a_dutch_address() {
+        let seller = seller();
+        let buyer = party("Buyer BV");
+        let mut draft = draft(vec![line(1, 100, TaxTreatment::standard(VatRate::STANDARD_NL))]);
+        draft.buyer_reference = Some("PO-1".to_owned());
+        let invoice = peppol_invoice("2026-0001", &draft, &seller, &buyer);
+
+        let findings = validate(&invoice);
+        assert!(has(&findings, "PEPPOL-EN16931-R020"), "seller endpoint: {findings:?}");
+        assert!(has(&findings, "PEPPOL-EN16931-R010"), "buyer endpoint: {findings:?}");
+        assert!(has(&findings, "NL-R-002"), "dutch address: {findings:?}");
+        assert!(!has(&findings, "PEPPOL-EN16931-R003"), "a reference is present");
+    }
+
+    #[test]
+    fn a_peppol_invoice_with_complete_parties_is_clean() {
+        let seller = complete_party("Seller BV", "0106:12345678");
+        let buyer = complete_party("Buyer BV", "0106:87654321");
+        let mut draft = draft(vec![line(1, 100, TaxTreatment::standard(VatRate::STANDARD_NL))]);
+        draft.buyer_reference = Some("PO-1".to_owned());
+        let invoice = peppol_invoice("2026-0001", &draft, &seller, &buyer);
+
+        let findings = validate(&invoice);
+        assert!(findings.is_empty(), "unexpected findings: {findings:?}");
+    }
+
+    #[test]
+    fn peppol_requires_a_buyer_reference_or_order_reference() {
+        let seller = complete_party("Seller BV", "0106:12345678");
+        let buyer = complete_party("Buyer BV", "0106:87654321");
+
+        let draft_without_reference = draft(vec![line(1, 100, TaxTreatment::standard(VatRate::STANDARD_NL))]);
+        let invoice = peppol_invoice("2026-0001", &draft_without_reference, &seller, &buyer);
+        assert!(has(&validate(&invoice), "PEPPOL-EN16931-R003"));
+
+        let mut with_order = draft_without_reference.clone();
+        with_order.order_reference = Some("ORD-1".to_owned());
+        let invoice = peppol_invoice("2026-0001", &with_order, &seller, &buyer);
+        assert!(!has(&validate(&invoice), "PEPPOL-EN16931-R003"));
+    }
+
+    #[test]
+    fn a_vatex_code_must_match_the_vat_category() {
+        let seller = complete_party("Seller BV", "0106:12345678");
+        let buyer = complete_party("Buyer BV", "0106:87654321");
+        let treatment = TaxTreatment::zero(VatCategory::Exempt).with_exemption_reason_code("VATEX-EU-AE");
+        let mut draft = draft(vec![line(1, 100, treatment)]);
+        draft.buyer_reference = Some("PO-1".to_owned());
+        let invoice = peppol_invoice("2026-0001", &draft, &seller, &buyer);
+
+        let findings = validate(&invoice);
+        let finding = finding(&findings, "PEPPOL-EN16931-P0107");
+        assert_eq!(finding.field, "lines[0].vat_category");
+        assert_eq!(finding.bt, Some("BT-121"));
     }
 }

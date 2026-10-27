@@ -201,6 +201,12 @@ fn full_slice_through_the_cli() {
         "Seller BV",
         "--city",
         "Amsterdam",
+        "--street",
+        "Main 1",
+        "--postal",
+        "1000 AA",
+        "--peppol",
+        "0106:12345678",
         "--vat",
         "NL123456782B01",
         "--kvk",
@@ -209,7 +215,19 @@ fn full_slice_through_the_cli() {
     args.extend(common);
     let seller = field(&bonk_ok(&args), "seller:");
 
-    let mut args = vec!["customer-add", "--name", "Customer BV", "--city", "Rotterdam"];
+    let mut args = vec![
+        "customer-add",
+        "--name",
+        "Customer BV",
+        "--city",
+        "Rotterdam",
+        "--street",
+        "Buyer 1",
+        "--postal",
+        "3000 AA",
+        "--peppol",
+        "0106:87654321",
+    ];
     args.extend(common);
     let customer = field(&bonk_ok(&args), "customer:");
 
@@ -223,6 +241,8 @@ fn full_slice_through_the_cli() {
         "2026-10-27",
         "--due",
         "2026-11-26",
+        "--buyer-ref",
+        "PO-1",
         "--line",
         "Consulting|2|50.00|21",
     ];
@@ -311,13 +331,33 @@ fn conformance_findings_stop_issue_creation() {
         "Seller BV",
         "--city",
         "Amsterdam",
+        "--street",
+        "Main 1",
+        "--postal",
+        "1000 AA",
+        "--peppol",
+        "0106:12345678",
         "--vat",
         "NL123456782B01",
+        "--kvk",
+        "12345678",
     ];
     args.extend(common);
     let seller = field(&bonk_ok(&args), "seller:");
 
-    let mut args = vec!["customer-add", "--name", "Customer BV", "--city", "Rotterdam"];
+    let mut args = vec![
+        "customer-add",
+        "--name",
+        "Customer BV",
+        "--city",
+        "Rotterdam",
+        "--street",
+        "Buyer 1",
+        "--postal",
+        "3000 AA",
+        "--peppol",
+        "0106:87654321",
+    ];
     args.extend(common);
     let customer = field(&bonk_ok(&args), "customer:");
 
@@ -331,6 +371,8 @@ fn conformance_findings_stop_issue_creation() {
         "2026-10-27",
         "--due",
         "2026-11-26",
+        "--buyer-ref",
+        "PO-1",
         "--line",
         "Export consulting|1|100.00|0|G",
     ];
@@ -356,6 +398,8 @@ fn conformance_findings_stop_issue_creation() {
         "2026-10-27",
         "--due",
         "2026-11-26",
+        "--buyer-ref",
+        "PO-2",
         "--line",
         "Consulting|2|50.00|21",
     ];

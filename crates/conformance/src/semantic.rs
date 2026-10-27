@@ -24,6 +24,10 @@ pub struct SemanticInvoice<'a> {
     pub doc_type: DocType,
     /// Document currency (BT-5).
     pub currency: Currency,
+    /// Buyer reference (BT-10).
+    pub buyer_reference: Option<&'a str>,
+    /// Purchase order reference (BT-13).
+    pub order_reference: Option<&'a str>,
     /// Seller snapshot.
     pub seller: &'a Party,
     /// Buyer snapshot.
@@ -75,6 +79,8 @@ impl<'a> SemanticInvoice<'a> {
             delivery_date: draft.delivery_date,
             doc_type: draft.doc_type,
             currency: draft.currency,
+            buyer_reference: draft.buyer_reference.as_deref(),
+            order_reference: draft.order_reference.as_deref(),
             seller,
             buyer,
             lines: &draft.lines,

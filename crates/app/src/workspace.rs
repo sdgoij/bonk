@@ -96,9 +96,12 @@ impl Message {
 struct SellerForm {
     name: String,
     city: String,
+    street: String,
+    postal: String,
     country: String,
     vat: String,
     kvk: String,
+    peppol: String,
 }
 
 impl Default for SellerForm {
@@ -106,9 +109,12 @@ impl Default for SellerForm {
         Self {
             name: String::new(),
             city: String::new(),
+            street: String::new(),
+            postal: String::new(),
             country: "NL".to_owned(),
             vat: String::new(),
             kvk: String::new(),
+            peppol: String::new(),
         }
     }
 }
@@ -117,8 +123,11 @@ impl Default for SellerForm {
 struct CustomerForm {
     name: String,
     city: String,
+    street: String,
+    postal: String,
     country: String,
     vat: String,
+    peppol: String,
 }
 
 struct Editor {
@@ -398,6 +407,12 @@ impl Workspace {
             ui.label("Legal name");
             text_field(ui, &mut self.seller_form.name, "seller.name", 200.0, focus);
             ui.end_row();
+            ui.label("Street");
+            text_field(ui, &mut self.seller_form.street, "seller.street", 200.0, focus);
+            ui.end_row();
+            ui.label("Post code");
+            text_field(ui, &mut self.seller_form.postal, "seller.postal_code", 200.0, focus);
+            ui.end_row();
             ui.label("City");
             text_field(ui, &mut self.seller_form.city, "seller.city", 200.0, focus);
             ui.end_row();
@@ -409,6 +424,9 @@ impl Workspace {
             ui.end_row();
             ui.label("KvK number");
             text_field(ui, &mut self.seller_form.kvk, "seller.kvk_number", 200.0, focus);
+            ui.end_row();
+            ui.label("Peppol ID");
+            text_field(ui, &mut self.seller_form.peppol, "seller.peppol", 200.0, focus);
             ui.end_row();
         });
 
@@ -489,6 +507,12 @@ impl Workspace {
                     ui.label("Name");
                     text_field(ui, &mut self.customer_form.name, "customer.name", 200.0, focus);
                     ui.end_row();
+                    ui.label("Street");
+                    text_field(ui, &mut self.customer_form.street, "customer.street", 200.0, focus);
+                    ui.end_row();
+                    ui.label("Post code");
+                    text_field(ui, &mut self.customer_form.postal, "customer.postal_code", 200.0, focus);
+                    ui.end_row();
                     ui.label("City");
                     text_field(ui, &mut self.customer_form.city, "customer.city", 200.0, focus);
                     ui.end_row();
@@ -497,6 +521,9 @@ impl Workspace {
                     ui.end_row();
                     ui.label("VAT ID");
                     text_field(ui, &mut self.customer_form.vat, "customer.vat_id", 200.0, focus);
+                    ui.end_row();
+                    ui.label("Peppol ID");
+                    text_field(ui, &mut self.customer_form.peppol, "customer.peppol", 200.0, focus);
                     ui.end_row();
                 });
                 if ui.button("Save customer").clicked() {
@@ -749,10 +776,16 @@ impl Workspace {
         };
         let mut party = Party::new(
             form.name.trim().to_owned(),
-            Address::new(form.city.trim().to_owned(), country),
+            Address {
+                street: nonempty(&form.street),
+                city: form.city.trim().to_owned(),
+                postal_code: nonempty(&form.postal),
+                country,
+            },
         );
         party.vat_id = nonempty(&form.vat).map(|value| value.to_ascii_uppercase());
         party.kvk_number = nonempty(&form.kvk);
+        party.peppol_id = nonempty(&form.peppol);
 
         let record = SellerRecord {
             id: SellerId::new(),
@@ -782,9 +815,15 @@ impl Workspace {
         };
         let mut party = Party::new(
             form.name.trim().to_owned(),
-            Address::new(form.city.trim().to_owned(), country),
+            Address {
+                street: nonempty(&form.street),
+                city: form.city.trim().to_owned(),
+                postal_code: nonempty(&form.postal),
+                country,
+            },
         );
         party.vat_id = nonempty(&form.vat).map(|value| value.to_ascii_uppercase());
+        party.peppol_id = nonempty(&form.peppol);
 
         let record = CustomerRecord {
             id: CustomerId::new(),

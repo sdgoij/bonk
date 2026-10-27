@@ -321,9 +321,27 @@ failed the official one. The rule is now implemented and blocking for invoices
 (not for credit notes, which have no due date), with a catalogue entry, a BT-9
 field path, and tests.
 
-Remaining: the Peppol profile layer beyond the current rule set (M2.8). Explicit
-deliver-to address fields beyond the buyer country remain for a later slice.
-Workspace tests: 198 encrypted, 196 plain.
+M2.8 is complete for the rules the domain can express. The Peppol BIS 3.0 layer
+is transcribed from `PEPPOL-EN16931-UBL.sch` (release 3.0.20) and runs only when
+the profile is Peppol: PEPPOL-EN16931-R003 (buyer or order reference),
+R010/R020 (buyer and seller endpoint identifiers), NL-R-002 (a Dutch seller needs
+a street and a post code), and P0104–P0111 (the VATEX code must match the VAT
+category). NL-R-003 is satisfied structurally: the writer emits a Dutch KvK as
+`cbc:CompanyID schemeID="0106"`, asserted by a syntax test. Rules about
+allowances, payment mandates, invoice periods, and national DE/IT/SE/GR/IS/DK
+rules are deliberately absent because the model does not carry those groups;
+they are listed rather than assumed.
+
+That change made the Peppol profile stricter, as the published artefact is: an
+invoice now needs endpoint identifiers for both parties, a buyer or order
+reference, and (for a Dutch seller) a street and post code. The CLI gained
+`--peppol` on `seller-add` and `customer-add`, the desktop forms gained address
+and Peppol fields, and the validation scripts were updated. Credit notes copy the
+buyer and order reference from the document they correct, so the copied draft
+still passes R003.
+
+Remaining in M2: nothing blocking. Explicit deliver-to address fields beyond the
+buyer country remain for a later slice. Workspace tests: 203 encrypted, 201 plain.
 
 Exit criteria:
 

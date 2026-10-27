@@ -219,7 +219,9 @@ fn party(out: &mut String, wrapper: &str, party: &Party, is_seller: bool) {
     open(out, 3, "cac:PartyLegalEntity");
     text(out, 4, "cbc:RegistrationName", &party.legal_name);
     if is_seller && let Some(kvk) = &party.kvk_number {
-        text(out, 4, "cbc:CompanyID", kvk);
+        // NL-R-003: a Dutch legal registration identifier carries its scheme.
+        // 0106 is the EAS scheme for a Dutch chamber of commerce number.
+        text_attrs(out, 4, "cbc:CompanyID", &[("schemeID", "0106")], kvk);
     }
     close(out, 3, "cac:PartyLegalEntity");
 
@@ -597,7 +599,7 @@ mod tests {
       </cac:PartyTaxScheme>
       <cac:PartyLegalEntity>
         <cbc:RegistrationName>Seller BV</cbc:RegistrationName>
-        <cbc:CompanyID>12345678</cbc:CompanyID>
+        <cbc:CompanyID schemeID="0106">12345678</cbc:CompanyID>
       </cac:PartyLegalEntity>
     </cac:Party>
   </cac:AccountingSupplierParty>
@@ -810,6 +812,35 @@ mod tests {
         );
         assert!(
             xml.contains("<cbc:IdentificationCode>NL</cbc:IdentificationCode>"),
+            "{xml}"
+        );
+    }
+
+    #[test]
+    fn a_dutch_legal_registration_carries_scheme_0106() {
+        let treatment = TaxTreatment::standard(VatRate::STANDARD_NL);
+        let line = UblLine {
+            id: 1,
+            name: "Consulting",
+            description: None,
+            quantity: Quantity::ONE,
+            unit: UnitCode::PIECE,
+            unit_price: Money::from_major_units(100, Currency::EUR).unwrap(),
+            base_quantity: Quantity::ONE,
+            line_net: Money::from_major_units(100, Currency::EUR).unwrap(),
+            treatment: &treatment,
+        };
+        let lines = [line];
+        let totals = totals();
+        let seller = seller();
+        let customer = customer();
+        let invoice = minimal_invoice(&seller, &customer, &lines, &totals);
+
+        // Peppol NL-R-003 requires scheme 0106 or 0190 on a Dutch seller's
+        // legal registration identifier.
+        let xml = write_invoice(&invoice).unwrap();
+        assert!(
+            xml.contains("<cbc:CompanyID schemeID=\"0106\">12345678</cbc:CompanyID>"),
             "{xml}"
         );
     }

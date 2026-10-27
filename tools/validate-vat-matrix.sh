@@ -53,19 +53,22 @@ seller=$(
     "$BONK_BIN" seller-add \
         --db "$DB" --keystore "$KEY" --passphrase "$PASS" \
         --name "Validation Seller BV" --city Amsterdam \
+        --street "Main 1" --postal "1000 AA" --peppol 0106:12345678 \
         --vat NL123456782B01 --kvk 12345678 |
         field seller
 )
 plain_customer=$(
     "$BONK_BIN" customer-add \
         --db "$DB" --keystore "$KEY" --passphrase "$PASS" \
-        --name "Domestic Customer BV" --city Rotterdam |
+        --name "Domestic Customer BV" --city Rotterdam \
+        --street "Domestic 1" --postal "3000 AA" --peppol 0106:20000001 |
         field customer
 )
 vat_customer=$(
     "$BONK_BIN" customer-add \
         --db "$DB" --keystore "$KEY" --passphrase "$PASS" \
         --name "Business Customer BV" --city Utrecht \
+        --street "Business 2" --postal "3500 AA" --peppol 0106:20000002 \
         --vat NL111111110B01 |
         field customer
 )
@@ -73,6 +76,7 @@ de_customer=$(
     "$BONK_BIN" customer-add \
         --db "$DB" --keystore "$KEY" --passphrase "$PASS" \
         --name "German Customer GmbH" --city Berlin --country DE \
+        --street "Hauptstrasse 1" --postal "10115" --peppol 0204:DE123456789 \
         --vat DE123456789 |
         field customer
 )
@@ -86,7 +90,7 @@ make_invoice() {
     set -- draft-new \
         --db "$DB" --keystore "$KEY" --passphrase "$PASS" \
         --seller "$seller" --customer "$customer" \
-        --date 2026-10-27 --due 2026-11-26 \
+        --date 2026-10-27 --due 2026-11-26 --buyer-ref "PO-$label" \
         --line "$line_spec"
     [ -z "$delivery" ] || set -- "$@" --delivery "$delivery"
     draft=$("$BONK_BIN" "$@" | field draft)
@@ -117,20 +121,23 @@ mkdir -p "$O_WORK" "$O_OUT"
 o_seller=$(
     "$BONK_BIN" seller-add \
         --db "$O_DB" --keystore "$O_KEY" --passphrase "$PASS" \
-        --name "Outside Scope Seller BV" --city Amsterdam --kvk 87654321 |
+        --name "Outside Scope Seller BV" --city Amsterdam \
+        --street "Scope 1" --postal "1000 AA" --peppol 0106:30000001 \
+        --kvk 87654321 |
         field seller
 )
 o_customer=$(
     "$BONK_BIN" customer-add \
         --db "$O_DB" --keystore "$O_KEY" --passphrase "$PASS" \
-        --name "Outside Scope Customer BV" --city Rotterdam |
+        --name "Outside Scope Customer BV" --city Rotterdam \
+        --street "Scope 2" --postal "3000 AA" --peppol 0106:30000002 |
         field customer
 )
 o_draft=$(
     "$BONK_BIN" draft-new \
         --db "$O_DB" --keystore "$O_KEY" --passphrase "$PASS" \
         --seller "$o_seller" --customer "$o_customer" \
-        --date 2026-10-27 --due 2026-11-26 \
+        --date 2026-10-27 --due 2026-11-26 --buyer-ref "PO-outside-scope" \
         --line "Outside scope|1|100.00|0|O||VATEX-EU-O|Not subject to VAT" |
         field draft
 )
