@@ -249,21 +249,27 @@ Work packages:
 **Status, 2026-10-27.** The conformance foundation is in place. `conformance`
 now exposes EN 16931 and Peppol BIS 3.0 profiles, a BT/BG registry, a rule
 catalogue with official codes, a semantic invoice view, and blocking checks for
-BR-02, BR-16, BR-CO-10/13/14/15/16/17, the S/Z/E/AE/IC/G/O category presence,
-rate, base, tax, and exemption rules, and the not-subject-to-VAT exclusivity
-rule. 18 conformance tests cover clean invoices and each rule family.
+BR-02, BR-16, BR-CO-10/13/14/15/16/17, BR-CO-26, the S/Z/E/AE/IC/G/O category
+presence, rate, base, tax, and exemption rules, and the not-subject-to-VAT
+exclusivity rule. 19 conformance tests cover clean invoices and each rule family.
 
-The shared issue path (`app::render_issue`) now runs the Peppol-profile rules
-after number allocation and before any insert. Blocking findings abort the
-issue transaction, so the allocated number is rolled back; the CLI prints the
-findings and the GUI lists them with their field paths. A CLI regression test
-proves a rejected issue does not consume `2026-0001`.
+The shared issue path (`app::render_issue`) runs the Peppol-profile rules after
+number allocation and before any insert. Blocking findings abort the issue
+transaction, so the allocated number is rolled back; the CLI prints the findings
+and the GUI lists them with their field paths. A CLI regression test proves a
+rejected issue does not consume `2026-0001`.
 
-Not yet done: click-to-focus mapping and suppression with reason (M2.5),
-codelist bundles and integrity manifests (M2.2), the official artefact runner
-(M2.3), the full tax scenario matrix (M2.6), credit notes (M2.7), and the Peppol
-profile layer beyond the current rule set (M2.8). Workspace tests: 150 encrypted,
-148 plain.
+The UBL writer now emits BT-120/BT-121 at the VAT breakdown and omits the rate
+for outside-scope lines and subtotals. CLI line specs accept exemption code and
+text as optional seventh and eighth fields. `tools/validate-vat-matrix.sh`
+validates standard, zero-rated, exempt, reverse-charge, export, and outside-scope
+invoices against Mustang: **6/6 valid**.
+
+Not yet done: intra-community supply (needs delivery date/country fields),
+click-to-focus mapping and suppression with reason (M2.5), codelist bundles and
+integrity manifests (M2.2), the official artefact runner (M2.3), credit notes
+(M2.7), and the Peppol profile layer beyond the current rule set (M2.8).
+Workspace tests: 154 encrypted, 152 plain.
 
 Exit criteria:
 

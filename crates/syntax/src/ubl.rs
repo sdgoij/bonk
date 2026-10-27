@@ -5,7 +5,7 @@
 //! element order, no timestamps, no pretty-print variation), because artefacts
 //! are hashed and archived.
 
-use crux::{Currency, DocType, InvoiceTotals, LocalDate, Money, Party, Quantity, TaxTreatment, UnitCode};
+use crux::{Currency, DocType, InvoiceTotals, LocalDate, Money, Party, Quantity, TaxTreatment, UnitCode, VatCategory};
 
 /// A document ready to be serialised.
 pub struct UblInvoice<'a> {
@@ -205,7 +205,17 @@ fn tax_total(out: &mut String, invoice: &UblInvoice<'_>) {
         amount(out, 3, "cbc:TaxAmount", currency, row.tax);
         open(out, 3, "cac:TaxCategory");
         text(out, 4, "cbc:ID", row.category.code());
-        text(out, 4, "cbc:Percent", &rate_basis_points(row.rate_bp));
+        if row.category != VatCategory::OutsideScope {
+            text(out, 4, "cbc:Percent", &rate_basis_points(row.rate_bp));
+        }
+        if let Some((code, reason)) = exemption_reason(invoice, row) {
+            if let Some(code) = code {
+                text(out, 4, "cbc:TaxExemptionReasonCode", code);
+            }
+            if let Some(reason) = reason {
+                text(out, 4, "cbc:TaxExemptionReason", reason);
+            }
+        }
         open(out, 4, "cac:TaxScheme");
         text(out, 5, "cbc:ID", "VAT");
         close(out, 4, "cac:TaxScheme");
@@ -214,6 +224,36 @@ fn tax_total(out: &mut String, invoice: &UblInvoice<'_>) {
     }
 
     close(out, 1, "cac:TaxTotal");
+}
+
+fn exemption_reason<'a>(
+    invoice: &UblInvoice<'a>,
+    row: &crux::TaxBreakdown,
+) -> Option<(Option<&'a str>, Option<&'a str>)> {
+    invoice
+        .lines
+        .iter()
+        .find(|line| {
+            line.treatment.category == row.category
+                && (row.category != VatCategory::Standard || line.treatment.rate.basis_points() == row.rate_bp)
+        })
+        .and_then(|line| {
+            let code = line
+                .treatment
+                .exemption_reason_code
+                .as_deref()
+                .filter(|value| !value.trim().is_empty());
+            let reason = line
+                .treatment
+                .exemption_reason
+                .as_deref()
+                .filter(|value| !value.trim().is_empty());
+            if code.is_none() && reason.is_none() {
+                None
+            } else {
+                Some((code, reason))
+            }
+        })
 }
 
 fn legal_total(out: &mut String, invoice: &UblInvoice<'_>) {
@@ -246,12 +286,14 @@ fn invoice_line(out: &mut String, currency: Currency, line: &UblLine<'_>) {
     }
     open(out, 3, "cac:ClassifiedTaxCategory");
     text(out, 4, "cbc:ID", line.treatment.category.code());
-    text(
-        out,
-        4,
-        "cbc:Percent",
-        &rate_basis_points(line.treatment.rate.basis_points()),
-    );
+    if line.treatment.category != VatCategory::OutsideScope {
+        text(
+            out,
+            4,
+            "cbc:Percent",
+            &rate_basis_points(line.treatment.rate.basis_points()),
+        );
+    }
     open(out, 4, "cac:TaxScheme");
     text(out, 5, "cbc:ID", "VAT");
     close(out, 4, "cac:TaxScheme");
@@ -585,6 +627,78 @@ mod tests {
         let xml = write_invoice(&invoice).unwrap();
         assert!(xml.contains("A &amp; B &lt;C&gt; &quot;D&quot; &apos;E&apos;"), "{xml}");
         assert!(!xml.contains("<C>"));
+    }
+
+    fn zero_totals(category: VatCategory) -> InvoiceTotals {
+        let net = Money::from_major_units(100, Currency::EUR).unwrap();
+        InvoiceTotals {
+            net,
+            tax: Money::zero(Currency::EUR),
+            gross: net,
+            breakdown: vec![TaxBreakdown {
+                category,
+                rate_bp: 0,
+                taxable_base: net,
+                tax: Money::zero(Currency::EUR),
+            }],
+        }
+    }
+
+    #[test]
+    fn exemption_reasons_are_written_at_the_tax_subtotal() {
+        let treatment = TaxTreatment::zero(VatCategory::Exempt).with_exemption_reason("Exempt supply");
+        let line = UblLine {
+            id: 1,
+            name: "Consulting",
+            description: None,
+            quantity: Quantity::ONE,
+            unit: UnitCode::PIECE,
+            unit_price: Money::from_major_units(100, Currency::EUR).unwrap(),
+            base_quantity: Quantity::ONE,
+            line_net: Money::from_major_units(100, Currency::EUR).unwrap(),
+            treatment: &treatment,
+        };
+        let lines = [line];
+        let totals = zero_totals(VatCategory::Exempt);
+        let seller = seller();
+        let customer = customer();
+        let invoice = minimal_invoice(&seller, &customer, &lines, &totals);
+
+        let xml = write_invoice(&invoice).unwrap();
+        assert!(xml.contains("<cbc:ID>E</cbc:ID>"), "{xml}");
+        assert!(
+            xml.contains("<cbc:TaxExemptionReason>Exempt supply</cbc:TaxExemptionReason>"),
+            "{xml}"
+        );
+    }
+
+    #[test]
+    fn exemption_reason_codes_are_written_and_outside_scope_omits_the_rate() {
+        let mut treatment = TaxTreatment::zero(VatCategory::OutsideScope);
+        treatment.exemption_reason_code = Some("VATEX-EU-O".to_owned());
+        let line = UblLine {
+            id: 1,
+            name: "Outside scope",
+            description: None,
+            quantity: Quantity::ONE,
+            unit: UnitCode::PIECE,
+            unit_price: Money::from_major_units(100, Currency::EUR).unwrap(),
+            base_quantity: Quantity::ONE,
+            line_net: Money::from_major_units(100, Currency::EUR).unwrap(),
+            treatment: &treatment,
+        };
+        let lines = [line];
+        let totals = zero_totals(VatCategory::OutsideScope);
+        let seller = seller();
+        let customer = customer();
+        let invoice = minimal_invoice(&seller, &customer, &lines, &totals);
+
+        let xml = write_invoice(&invoice).unwrap();
+        assert!(
+            xml.contains("<cbc:TaxExemptionReasonCode>VATEX-EU-O</cbc:TaxExemptionReasonCode>"),
+            "{xml}"
+        );
+        assert!(!xml.contains("<cbc:Percent>"), "{xml}");
     }
 
     #[test]

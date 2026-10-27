@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use crux::{Finding, Money, VatCategory, VatRate, tax_amount};
 
 use crate::rule::{
-    BR_02, BR_16, BR_CO_10, BR_CO_13, BR_CO_14, BR_CO_15, BR_CO_16, BR_CO_17, BR_O_12, Rule, category_rules,
+    BR_02, BR_16, BR_CO_10, BR_CO_13, BR_CO_14, BR_CO_15, BR_CO_16, BR_CO_17, BR_CO_26, BR_O_12, Rule, category_rules,
 };
 use crate::semantic::SemanticInvoice;
 
@@ -23,6 +23,13 @@ pub fn validate(invoice: &SemanticInvoice<'_>) -> Vec<Finding> {
 
     if invoice.number.trim().is_empty() {
         findings.push(BR_02.finding("number", "An invoice shall have an invoice number."));
+    }
+
+    if invoice.seller.vat_id.is_none() && invoice.seller.kvk_number.is_none() {
+        findings.push(BR_CO_26.finding(
+            "seller",
+            "the seller needs a VAT identifier or a legal registration identifier",
+        ));
     }
 
     if invoice.lines.is_empty() {
@@ -354,6 +361,13 @@ mod tests {
         Party::new(name, Address::new("Amsterdam", CountryCode::NL))
     }
 
+    fn seller() -> Party {
+        let mut party = party("Seller BV");
+        party.vat_id = Some("NL123456782B01".to_owned());
+        party.kvk_number = Some("12345678".to_owned());
+        party
+    }
+
     fn line(position: u32, major: i64, treatment: TaxTreatment) -> DraftLine {
         DraftLine {
             id: LineId::new(),
@@ -395,7 +409,7 @@ mod tests {
 
     #[test]
     fn a_consistent_standard_invoice_is_clean() {
-        let seller = party("Seller BV");
+        let seller = seller();
         let buyer = party("Buyer BV");
         let draft = draft(vec![line(1, 100, TaxTreatment::standard(VatRate::STANDARD_NL))]);
         let invoice = semantic_invoice("2026-0001", &draft, &seller, &buyer);
@@ -406,7 +420,7 @@ mod tests {
 
     #[test]
     fn invoice_number_is_required() {
-        let seller = party("Seller BV");
+        let seller = seller();
         let buyer = party("Buyer BV");
         let draft = draft(vec![line(1, 100, TaxTreatment::standard(VatRate::STANDARD_NL))]);
         let invoice = semantic_invoice("", &draft, &seller, &buyer);
@@ -415,8 +429,22 @@ mod tests {
     }
 
     #[test]
+    fn seller_identifier_is_required() {
+        let buyer = party("Buyer BV");
+        let draft = draft(vec![line(1, 100, TaxTreatment::standard(VatRate::STANDARD_NL))]);
+        let unidentified = party("Seller BV");
+        let invoice = semantic_invoice("2026-0001", &draft, &unidentified, &buyer);
+        assert!(has(&validate(&invoice), "BR-CO-26"));
+
+        let mut identified = party("Seller BV");
+        identified.kvk_number = Some("12345678".to_owned());
+        let invoice = semantic_invoice("2026-0001", &draft, &identified, &buyer);
+        assert!(!has(&validate(&invoice), "BR-CO-26"));
+    }
+
+    #[test]
     fn an_empty_invoice_stops_at_br_16() {
-        let seller = party("Seller BV");
+        let seller = seller();
         let buyer = party("Buyer BV");
         let draft = draft(Vec::new());
         let totals = InvoiceTotals {
@@ -434,7 +462,7 @@ mod tests {
 
     #[test]
     fn line_sum_mismatch_is_br_co_10() {
-        let seller = party("Seller BV");
+        let seller = seller();
         let buyer = party("Buyer BV");
         let draft = draft(vec![line(1, 100, TaxTreatment::standard(VatRate::STANDARD_NL))]);
         let mut invoice = semantic_invoice("2026-0001", &draft, &seller, &buyer);
@@ -445,7 +473,7 @@ mod tests {
 
     #[test]
     fn total_arithmetic_has_specific_codes() {
-        let seller = party("Seller BV");
+        let seller = seller();
         let buyer = party("Buyer BV");
         let draft = draft(vec![line(1, 100, TaxTreatment::standard(VatRate::STANDARD_NL))]);
 
@@ -468,7 +496,7 @@ mod tests {
 
     #[test]
     fn breakdown_tax_and_base_use_category_rules() {
-        let seller = party("Seller BV");
+        let seller = seller();
         let buyer = party("Buyer BV");
         let draft = draft(vec![line(1, 100, TaxTreatment::standard(VatRate::STANDARD_NL))]);
 
@@ -483,7 +511,7 @@ mod tests {
 
     #[test]
     fn category_rate_pairing_is_checked() {
-        let seller = party("Seller BV");
+        let seller = seller();
         let buyer = party("Buyer BV");
         let draft = draft(vec![line(1, 100, TaxTreatment::standard(VatRate::ZERO))]);
         let invoice = semantic_invoice("2026-0001", &draft, &seller, &buyer);
@@ -493,7 +521,7 @@ mod tests {
 
     #[test]
     fn exempt_breakdown_needs_an_exemption_reason() {
-        let seller = party("Seller BV");
+        let seller = seller();
         let buyer = party("Buyer BV");
         let draft = draft(vec![line(1, 100, TaxTreatment::zero(VatCategory::Exempt))]);
         let invoice = semantic_invoice("2026-0001", &draft, &seller, &buyer);
@@ -503,7 +531,7 @@ mod tests {
 
     #[test]
     fn exempt_breakdown_with_a_reason_is_clean() {
-        let seller = party("Seller BV");
+        let seller = seller();
         let buyer = party("Buyer BV");
         let treatment = TaxTreatment::zero(VatCategory::Exempt).with_exemption_reason("Exempt supply");
         let draft = draft(vec![line(1, 100, treatment)]);
@@ -515,7 +543,7 @@ mod tests {
 
     #[test]
     fn exempt_line_rejects_a_non_zero_rate() {
-        let seller = party("Seller BV");
+        let seller = seller();
         let buyer = party("Buyer BV");
         let treatment = TaxTreatment {
             category: VatCategory::Exempt,
@@ -531,7 +559,7 @@ mod tests {
 
     #[test]
     fn outside_scope_cannot_mix_categories() {
-        let seller = party("Seller BV");
+        let seller = seller();
         let buyer = party("Buyer BV");
         let draft = draft(vec![
             line(1, 100, TaxTreatment::zero(VatCategory::OutsideScope)),
@@ -544,7 +572,7 @@ mod tests {
 
     #[test]
     fn every_emitted_code_is_catalogued() {
-        let seller = party("Seller BV");
+        let seller = seller();
         let buyer = party("Buyer BV");
         let draft = draft(vec![
             line(1, 100, TaxTreatment::standard(VatRate::ZERO)),

@@ -89,7 +89,7 @@ enum Command {
         #[arg(long)]
         contact: Option<String>,
     },
-    /// Create a draft. Each `--line` is `name|quantity|unit_price|rate[|category[|unit]]`.
+    /// Create a draft. Each `--line` is `name|quantity|unit_price|rate[|category[|unit[|exemption_code[|exemption_reason]]]]`.
     #[command(name = "draft-new")]
     DraftNew {
         #[arg(long)]
@@ -434,6 +434,14 @@ fn parse_line(spec: &str, currency: Currency, position: u32) -> Result<DraftLine
         Some(code) => UnitCode::parse(code)?,
         None => UnitCode::PIECE,
     };
+    let exemption_reason_code = parts
+        .get(6)
+        .filter(|value| !value.is_empty())
+        .map(|value| (*value).to_owned());
+    let exemption_reason = parts
+        .get(7)
+        .filter(|value| !value.is_empty())
+        .map(|value| (*value).to_owned());
 
     Ok(DraftLine {
         id: LineId::new(),
@@ -447,8 +455,8 @@ fn parse_line(spec: &str, currency: Currency, position: u32) -> Result<DraftLine
         treatment: TaxTreatment {
             category,
             rate,
-            exemption_reason: None,
-            exemption_reason_code: None,
+            exemption_reason,
+            exemption_reason_code,
         },
     })
 }
@@ -526,6 +534,23 @@ mod tests {
     fn line_parsing_defaults_zero_rate_to_zero_rated() {
         let line = parse_line("Export|1|100|0", Currency::EUR, 1).unwrap();
         assert_eq!(line.treatment.category, VatCategory::ZeroRated);
+    }
+
+    #[test]
+    fn line_parsing_accepts_exemption_reasons() {
+        let line = parse_line("Exempt|1|100|0|E|||Exempt supply", Currency::EUR, 1).unwrap();
+        assert_eq!(line.treatment.category, VatCategory::Exempt);
+        assert!(line.treatment.exemption_reason_code.is_none());
+        assert_eq!(line.treatment.exemption_reason.as_deref(), Some("Exempt supply"));
+
+        let line = parse_line(
+            "Reverse charge|1|100|0|AE||VATEX-EU-AE|Reverse charge",
+            Currency::EUR,
+            1,
+        )
+        .unwrap();
+        assert_eq!(line.treatment.exemption_reason_code.as_deref(), Some("VATEX-EU-AE"));
+        assert_eq!(line.treatment.exemption_reason.as_deref(), Some("Reverse charge"));
     }
 
     #[test]

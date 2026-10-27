@@ -38,8 +38,14 @@ For UBL serialisation, validation, or PDF rendering changes, also run:
 sh tools/validate-m1.sh
 ```
 
-The validation script downloads Mustang into the ignored `target/validator/`
-directory and requires Java 17+. It is a development gate, not part of the
+For VAT-category, exemption-reason, or breakdown changes, also run:
+
+```sh
+sh tools/validate-vat-matrix.sh
+```
+
+The validation scripts download Mustang into the ignored `target/validator/`
+directory and require Java 17+. They are development gates, not part of the
 offline test suite.
 
 Docs-only changes require:
