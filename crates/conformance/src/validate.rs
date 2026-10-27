@@ -7,13 +7,13 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crux::{Finding, Money, Party, VatCategory, VatRate, tax_amount};
+use crux::{DocType, Finding, Money, Party, VatCategory, VatRate, tax_amount};
 
 use crate::bt::Bt;
 use crate::codelist::Codelist;
 use crate::rule::{
     BR_02, BR_16, BR_CL_04, BR_CL_14, BR_CL_22, BR_CL_23, BR_CL_25, BR_CO_10, BR_CO_13, BR_CO_14, BR_CO_15, BR_CO_16,
-    BR_CO_17, BR_CO_26, BR_IC_11, BR_O_12, Rule, category_rules,
+    BR_CO_17, BR_CO_25, BR_CO_26, BR_IC_11, BR_O_12, Rule, category_rules,
 };
 use crate::semantic::SemanticInvoice;
 
@@ -36,6 +36,14 @@ pub fn validate(invoice: &SemanticInvoice<'_>) -> Vec<Finding> {
     }
 
     validate_codelists(invoice, &mut findings);
+
+    // BR-CO-25 applies to invoices; a credit note has no payment due date.
+    if invoice.doc_type == DocType::Invoice && invoice.amount_due.is_positive() && invoice.due_date.is_none() {
+        findings.push(BR_CO_25.finding(
+            "due_date",
+            "an invoice with a positive amount due needs a payment due date",
+        ));
+    }
 
     if invoice.delivery_date.is_none()
         && invoice
@@ -484,6 +492,7 @@ mod tests {
             Currency::EUR,
             LocalDate::parse_iso("2026-10-27").unwrap(),
         );
+        draft.due_date = Some(LocalDate::parse_iso("2026-11-26").unwrap());
         draft.lines = lines;
         draft
     }
@@ -799,5 +808,32 @@ mod tests {
 
         let findings = validate(&invoice);
         assert!(findings.is_empty(), "unexpected findings: {findings:?}");
+    }
+
+    #[test]
+    fn a_positive_amount_due_needs_a_due_date() {
+        let seller = seller();
+        let buyer = party("Buyer BV");
+        let mut draft = draft(vec![line(1, 100, TaxTreatment::standard(VatRate::STANDARD_NL))]);
+        draft.due_date = None;
+        let invoice = semantic_invoice("2026-0001", &draft, &seller, &buyer);
+
+        let findings = validate(&invoice);
+        let finding = finding(&findings, "BR-CO-25");
+        assert_eq!(finding.field, "due_date");
+        assert_eq!(finding.bt, Some("BT-9"));
+    }
+
+    #[test]
+    fn a_credit_note_needs_no_due_date() {
+        let seller = seller();
+        let buyer = party("Buyer BV");
+        let mut draft = draft(vec![line(1, 100, TaxTreatment::standard(VatRate::STANDARD_NL))]);
+        draft.doc_type = DocType::CreditNote;
+        draft.due_date = None;
+        let invoice = semantic_invoice("2026-C0001", &draft, &seller, &buyer);
+
+        let findings = validate(&invoice);
+        assert!(!has(&findings, "BR-CO-25"), "{findings:?}");
     }
 }

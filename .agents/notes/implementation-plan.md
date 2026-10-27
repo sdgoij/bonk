@@ -303,9 +303,27 @@ The CLI gained `bonk credit-note <number>`, and the desktop Issued screen has a
 Credit note action that copies the document into the editor. `validate-m1.sh`
 now validates 20 invoices and one credit note against Mustang: **21/21 valid**.
 
-Remaining: the official artefact runner (M2.3), and the Peppol profile layer
-beyond the current rule set (M2.8). Explicit deliver-to address fields beyond the
-buyer country remain for a later slice. Workspace tests: 188 encrypted, 186 plain.
+M2.3 is complete, with a changed design. The validation spike closed the
+question: the published `EN16931-UBL-validation.xslt` is XSLT 2.0 (184 uses of
+`xsl:function`, `for-each-group`, and XPath 2.0 functions), and libxslt is XSLT
+1.0 only, so a native binding cannot run it. ADR-006 was amended: the authority
+path is an external validator behind the `official-validation` feature.
+`conformance-official::report` turns the validator's report into typed failures
+with the rule id, the first BT reference, the XPath, and the assertion text;
+`conformance-official::oracle` runs the process. `cargo run -p xtask --
+conformance <dir>` validates every document in a directory and exits non-zero on
+any failure; `tools/validate-m1.sh` remains the end-to-end gate.
+
+Running the oracle over the M1 corpus immediately found a real gap: BR-CO-25
+("a positive amount due needs a payment due date or payment terms") was not
+implemented, so an invoice issued without a due date passed our engine and
+failed the official one. The rule is now implemented and blocking for invoices
+(not for credit notes, which have no due date), with a catalogue entry, a BT-9
+field path, and tests.
+
+Remaining: the Peppol profile layer beyond the current rule set (M2.8). Explicit
+deliver-to address fields beyond the buyer country remain for a later slice.
+Workspace tests: 198 encrypted, 196 plain.
 
 Exit criteria:
 

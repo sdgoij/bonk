@@ -329,6 +329,8 @@ fn conformance_findings_stop_issue_creation() {
         &customer,
         "--date",
         "2026-10-27",
+        "--due",
+        "2026-11-26",
         "--line",
         "Export consulting|1|100.00|0|G",
     ];
@@ -352,6 +354,8 @@ fn conformance_findings_stop_issue_creation() {
         &customer,
         "--date",
         "2026-10-27",
+        "--due",
+        "2026-11-26",
         "--line",
         "Consulting|2|50.00|21",
     ];

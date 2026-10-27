@@ -8,3 +8,4 @@ publish = false
 
 [dependencies]
 sha2.workspace = true
+conformance-official = { workspace = true, features = ["official-validation"] }

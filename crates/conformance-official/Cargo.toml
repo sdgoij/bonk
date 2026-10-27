@@ -8,7 +8,9 @@ publish = false
 
 [features]
 default = []
-# Enables the native libxslt binding once the M0 spike has settled on a build.
+# Enables the external-validator oracle. The published artefacts are XSLT 2.0,
+# which has no embeddable engine; the oracle runs a Java validator instead, so it
+# is a development and release tool and never part of the shipped binary.
 official-validation = []
 
 [dependencies]

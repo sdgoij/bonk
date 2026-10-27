@@ -2,10 +2,11 @@
 //! Developer automation: artifact fetching, conformance runs, packaging.
 
 mod codelists;
+mod conformance;
 
 fn tasks() -> &'static [(&'static str, &'static str)] {
     &[
-        ("conformance", "run the conformance corpus (M2)"),
+        ("conformance", "validate a directory with the official artefacts"),
         ("codelists", "regenerate the vendored EN 16931 code lists"),
         ("spikes", "re-run the M0 risk spikes"),
         ("package", "build signed installers (M6/M7)"),
@@ -23,6 +24,7 @@ fn main() -> std::process::ExitCode {
             std::process::ExitCode::SUCCESS
         }
         Some("codelists") => codelists::run(arguments.get(2..).unwrap_or_default()),
+        Some("conformance") => conformance::run(arguments.get(2..).unwrap_or_default()),
         Some(other) => {
             eprintln!("xtask: unknown task {other:?}");
             std::process::ExitCode::from(2)

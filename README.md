@@ -155,6 +155,20 @@ sh tools/validate-vat-matrix.sh
 It validates standard, zero-rated, exempt, reverse-charge, intra-community,
 export, and outside-scope invoices. Last result: **7/7 invoices valid**.
 
+### Official validator (M2.3)
+
+Any directory of UBL documents can be checked against the official artefacts:
+
+```sh
+MUSTANG_JAR=target/validator/Mustang-CLI-2.17.0.jar \
+    cargo run -p xtask -- conformance target/m1-validation/out
+```
+
+It prints one line per document, lists the rule ids that failed with their BT
+reference and message, and exits non-zero on any invalid document. The oracle
+needs Java 17+; it is a developer and release tool and never part of the shipped
+binary (`official-validation` feature).
+
 ### Code lists
 
 Validation uses vendored EN 16931 code lists (currency, country, VAT category,
