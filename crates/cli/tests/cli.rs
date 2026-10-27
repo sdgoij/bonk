@@ -1,0 +1,269 @@
+//! Integration test: the binary must initialise and verify a database without
+//! ever touching a GUI.
+
+use std::path::Path;
+use std::process::Command;
+
+use tempfile::TempDir;
+
+fn bonk() -> Command {
+    Command::new(env!("CARGO_BIN_EXE_bonk"))
+}
+
+fn bonk_ok(args: &[&str]) -> String {
+    let output = bonk().args(args).output().expect("binary runs");
+    assert!(
+        output.status.success(),
+        "command failed: {}\nstdout: {}",
+        String::from_utf8_lossy(&output.stderr),
+        String::from_utf8_lossy(&output.stdout)
+    );
+    String::from_utf8_lossy(&output.stdout).into_owned()
+}
+
+fn field(output: &str, prefix: &str) -> String {
+    output
+        .lines()
+        .find_map(|line| line.strip_prefix(prefix))
+        .map(str::trim)
+        .unwrap_or_else(|| panic!("missing {prefix:?} in {output}"))
+        .to_owned()
+}
+
+fn run_init(dir: &TempDir) -> (String, String) {
+    let database = dir.path().join("bonk.db");
+    let keystore = dir.path().join("keystore.bin");
+
+    let output = bonk()
+        .args([
+            "init",
+            "--db",
+            database.to_str().expect("temp path is UTF-8"),
+            "--keystore",
+            keystore.to_str().expect("temp path is UTF-8"),
+            "--passphrase",
+            "correct horse battery staple",
+        ])
+        .output()
+        .expect("binary runs");
+
+    assert!(
+        output.status.success(),
+        "init failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    (
+        database.to_str().expect("temp path is UTF-8").to_owned(),
+        keystore.to_str().expect("temp path is UTF-8").to_owned(),
+    )
+}
+
+fn typst_available() -> bool {
+    let binary = std::env::var("BONK_TYPST").unwrap_or_else(|_| "typst".to_owned());
+    Command::new(binary)
+        .arg("--version")
+        .output()
+        .is_ok_and(|output| output.status.success())
+}
+
+#[test]
+fn init_then_verify() {
+    let dir = TempDir::new().expect("temp dir");
+    let (database, keystore) = run_init(&dir);
+
+    let output = bonk()
+        .args([
+            "verify",
+            "--db",
+            &database,
+            "--keystore",
+            &keystore,
+            "--passphrase",
+            "correct horse battery staple",
+        ])
+        .output()
+        .expect("binary runs");
+
+    assert!(
+        output.status.success(),
+        "verify failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("integrity check passed"), "stdout: {stdout}");
+    assert!(stdout.contains("schema:   2"), "stdout: {stdout}");
+    if cfg!(feature = "cipher") {
+        assert!(stdout.contains("encryption: sqlcipher"), "stdout: {stdout}");
+    } else {
+        assert!(stdout.contains("encryption: none (test build)"), "stdout: {stdout}");
+    }
+}
+
+#[test]
+fn verify_rejects_a_wrong_passphrase() {
+    let dir = TempDir::new().expect("temp dir");
+    let (database, keystore) = run_init(&dir);
+
+    let output = bonk()
+        .args([
+            "verify",
+            "--db",
+            &database,
+            "--keystore",
+            &keystore,
+            "--passphrase",
+            "wrong",
+        ])
+        .output()
+        .expect("binary runs");
+
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("wrong passphrase"));
+}
+
+#[test]
+fn verify_never_creates_a_missing_database() {
+    let dir = TempDir::new().expect("temp dir");
+    let (_, keystore) = run_init(&dir);
+    let missing = dir.path().join("nope.db");
+
+    let output = bonk()
+        .args([
+            "verify",
+            "--db",
+            missing.to_str().expect("temp path is UTF-8"),
+            "--keystore",
+            &keystore,
+            "--passphrase",
+            "correct horse battery staple",
+        ])
+        .output()
+        .expect("binary runs");
+
+    assert!(!output.status.success());
+    assert!(!Path::new(&missing).exists());
+}
+
+#[test]
+fn full_slice_through_the_cli() {
+    let dir = TempDir::new().expect("temp dir");
+    let database = dir.path().join("bonk.db");
+    let keystore = dir.path().join("keystore.bin");
+    let output_dir = dir.path().join("out");
+    let db = database.to_str().expect("utf-8");
+    let key = keystore.to_str().expect("utf-8");
+    let out = output_dir.to_str().expect("utf-8");
+    let common = ["--db", db, "--keystore", key, "--passphrase", "pass"];
+
+    let mut args = vec!["init"];
+    args.extend(common);
+    bonk_ok(&args);
+
+    let mut args = vec![
+        "seller-add",
+        "--name",
+        "Seller BV",
+        "--city",
+        "Amsterdam",
+        "--vat",
+        "NL123456782B01",
+        "--kvk",
+        "12345678",
+    ];
+    args.extend(common);
+    let seller = field(&bonk_ok(&args), "seller:");
+
+    let mut args = vec!["customer-add", "--name", "Customer BV", "--city", "Rotterdam"];
+    args.extend(common);
+    let customer = field(&bonk_ok(&args), "customer:");
+
+    let mut args = vec![
+        "draft-new",
+        "--seller",
+        &seller,
+        "--customer",
+        &customer,
+        "--date",
+        "2026-10-27",
+        "--due",
+        "2026-11-26",
+        "--line",
+        "Consulting|2|50.00|21",
+    ];
+    args.extend(common);
+    let draft_output = bonk_ok(&args);
+    let draft = field(&draft_output, "draft:");
+    assert!(draft_output.contains("gross: 121.00"), "{draft_output}");
+
+    let mut args = vec!["issue", &draft, "--out", out];
+    args.extend(common);
+    let issued_output = bonk_ok(&args);
+    assert!(issued_output.contains("issued: 2026-0001"), "{issued_output}");
+
+    let xml = std::fs::read_to_string(output_dir.join("2026-0001.xml")).expect("ubl file");
+    assert!(xml.contains("<cbc:ID>2026-0001</cbc:ID>"), "{xml}");
+    assert!(
+        xml.contains("<cbc:PayableAmount currencyID=\"EUR\">121.00</cbc:PayableAmount>"),
+        "{xml}"
+    );
+
+    let pdf_path = output_dir.join("2026-0001.pdf");
+    let pdf_expected = typst_available();
+    if pdf_expected {
+        let pdf = std::fs::read(&pdf_path).expect("pdf file");
+        assert!(pdf.starts_with(b"%PDF-"), "not a PDF");
+        assert!(issued_output.contains("pdf:"), "{issued_output}");
+    } else {
+        assert!(!pdf_path.exists(), "PDF written without typst");
+        assert!(issued_output.contains("warning: PDF not rendered"), "{issued_output}");
+    }
+
+    let mut args = vec!["verify"];
+    args.extend(common);
+    let verified = bonk_ok(&args);
+    assert!(verified.contains("audit:    2 events verified"), "{verified}");
+    assert!(verified.contains("hashes verified"), "{verified}");
+    if pdf_expected {
+        assert!(verified.contains("artefacts: 2 hashes verified"), "{verified}");
+    }
+}
+
+#[test]
+fn blocking_findings_stop_issue_creation() {
+    let dir = TempDir::new().expect("temp dir");
+    let database = dir.path().join("bonk.db");
+    let keystore = dir.path().join("keystore.bin");
+    let db = database.to_str().expect("utf-8");
+    let key = keystore.to_str().expect("utf-8");
+    let common = ["--db", db, "--keystore", key, "--passphrase", "pass"];
+
+    let mut args = vec!["init"];
+    args.extend(common);
+    bonk_ok(&args);
+
+    let mut args = vec!["seller-add", "--name", "Seller BV", "--city", "Amsterdam"];
+    args.extend(common);
+    let seller = field(&bonk_ok(&args), "seller:");
+
+    let mut args = vec!["customer-add", "--name", "Customer BV", "--city", "Rotterdam"];
+    args.extend(common);
+    let customer = field(&bonk_ok(&args), "customer:");
+
+    let mut args = vec![
+        "draft-new",
+        "--seller",
+        &seller,
+        "--customer",
+        &customer,
+        "--date",
+        "2026-10-27",
+        "--line",
+        "Bad|0|10.00|21",
+    ];
+    args.extend(common);
+    let output = bonk().args(&args).output().expect("binary runs");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("blocking"), "{stderr}");
+    assert!(stderr.contains("T1-003"), "{stderr}");
+}

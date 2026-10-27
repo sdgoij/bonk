@@ -1,0 +1,13 @@
+[package]
+name = "testkit"
+description = "Fixtures, builders, fake clock, fake connector, golden-file harness"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+crux.workspace = true
+
+[lints]
+workspace = true

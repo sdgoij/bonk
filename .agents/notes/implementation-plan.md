@@ -1,0 +1,645 @@
+# Implementation Plan
+
+**Project:** Bonk (working name; final name TBD) — local-first e-invoicing client
+**Companion to:** `.agents/notes/technical-design.md` (v1.0),
+`.agents/notes/accounting-design.md` (v1.1)
+**Date:** 2026-10-27
+**Assumed capacity:** 1 experienced Rust engineer, full time (adjust linearly)
+
+---
+
+## Contents
+
+1. [Strategy](#1-strategy)
+2. [Milestone overview](#2-milestone-overview)
+3. [Release trains](#3-release-trains)
+4. [Milestone detail](#4-milestone-detail)
+5. [First two weeks, concretely](#5-first-two-weeks-concretely)
+6. [Effort summary](#6-effort-summary)
+7. [Critical path and parallelism](#7-critical-path-and-parallelism)
+8. [Quality gates](#8-quality-gates)
+9. [Test corpus acquisition](#9-test-corpus-acquisition)
+10. [Packaging and release](#10-packaging-and-release)
+11. [Operating rhythm](#11-operating-rhythm)
+
+---
+
+## 1. Strategy
+
+Four principles drive the ordering:
+
+1. **De-risk the things we cannot estimate.** PDF/A-3 conformance, official
+   validation artefacts, and SQLCipher packaging are the three tasks most likely
+   to blow up. Each gets a time-boxed spike in M0, before anything depends on
+   it.
+2. **Ship a thin vertical slice before building breadth.** One invoice type,
+   one tax scenario, one template, end to end — draft, validate, issue, export,
+   archive, verify. Breadth (more VAT schemes, more profiles, more languages)
+   comes after the spine works.
+3. **Never let a "later" feature corrupt the data model.** Multi-device sync,
+   DRR reporting, credit notes, and the ledger are not implemented in v1.0, but
+   their data requirements (immutability, HLC fields, sequence leasing,
+   credit-note doc types, explicit tax codes) are present from the first
+   migration. Retrofitting these is what usually kills local-first products.
+4. **Finish the arc the user can feel.** v1.0 makes invoices provable; v1.1
+   turns that archive into books (general ledger, VAT return preparation, bank
+   reconciliation). This is the committed next step, not an option: it is why
+   v1.0 records tax codes and party snapshots instead of only totals.
+
+v1.1 is committed: the accounting layer, milestone M10, designed in
+`accounting-design.md`. Everything else is deferred, with reasons:
+
+| Deferred | Reason | Earliest |
+|----------|--------|----------|
+| Peppol sending | Requires a provider contract and accreditation; file export covers most Dutch SMEs today | v1.3 |
+| Multi-device sync | Not needed to be useful; needs a relay or P2P stack, and the ledger needs single-writer periods first | v2.0 |
+| DRR/ViDA reporting | Technical contract unpublished | On publication |
+| QES | Requires qualified certificates and a QSCD | Customer-driven |
+| OCR for paper | Separate product surface, different failure modes | After v1.3 |
+
+---
+
+## 2. Milestone overview
+
+| ID | Milestone | Duration | Depends on | Produces |
+|----|-----------|----------|------------|----------|
+| M0 | Foundations and risk spikes | 2 w | — | Workspace, CI, encrypted DB opens, three spike reports, ADRs accepted |
+| M1 | Vertical slice | 4 w | M0 | Draft → validate → issue → UBL + PDF → verify, one tax scenario |
+| M2 | Conformance | 4 w | M1, spike 2 | Official EN 16931 + Peppol profile validation, codelists, findings UX |
+| M3 | Import and payable register | 3 w | M1 | UBL/CII/Factur-X import, dedupe, supplier match, AP list |
+| M4 | PDF/A-3 and Factur-X | 4 w | M0 spike 1, M1 | Conformant hybrid PDF, profiles, templates, veraPDF gate |
+| M5 | Search, templates, polish | 2 w | M1 | FTS, saved views, template editor surface, i18n pass |
+| M6 | Security, keys, audit, backup | 3 w | M1 | Key wrapping, passphrase UX, audit chain, backup/restore, evidence bundle |
+| M7 | Peppol bridge | 3 w | M2, M6 | Connector port, outbox, one provider adapter, inbound poll, receipts |
+| M8 | Sync Phase 2 | 5 w | M6, M10 | HLC/oplog, relay reference server, CRDT merge, period-lock convergence, conflict UX |
+| M9 | DRR adapter skeleton | 1 w | M2 | Evidence packaging contract, null connector, feature flag |
+| M10 | Accounting core (v1.1) | 12 w | M2, M6 | General ledger, periods, VAT return preparation, bank reconciliation, reports |
+
+Durations are engineering time, not calendar time; add 20 % for the unknown.
+Milestone IDs are stable handles, not a schedule: **M10 ships before M4.**
+
+---
+
+## 3. Release trains
+
+```mermaid
+flowchart TB
+    M0["M0 Foundations, 2 w"] --> M1["M1 Slice, 4 w"]
+    M1 --> M2["M2 Conformance, 4 w"]
+    M1 --> M5["M5 Search, 2 w"]
+    M1 --> M6["M6 Security, 3 w"]
+    M2 --> M3["M3 Import, 3 w"]
+    M2 --> M10["M10 Accounting, 12 w"]
+    M6 --> M10
+    M1 --> M4["M4 Factur X, 4 w"]
+    M2 --> M7["M7 Peppol, 3 w"]
+    M10 --> M8["M8 Sync, 5 w"]
+    M6 --> M8
+```
+
+| Release | Contents | Audience | Exit criterion |
+|---------|----------|----------|----------------|
+| **v0.1 internal** | M0 + first half of M1 | Developer | Can create and persist an invoice; DB encrypted |
+| **v0.5 alpha** | M1 | 3–5 friendly users | 20 real invoices issued; UBL accepted by an external validator |
+| **v1.0** | M1, M2, M3, M5, M6, non-hybrid PDF | Dutch SMEs, B2B | 3 pilot companies run a full quarter; zero data-loss incidents; audit chain verifies |
+| **v1.1** | M10 | SMEs doing their own bookkeeping | One pilot quarter reconstructed: VAT return matches the accountant's filing, trial balance accepted without a spreadsheet |
+| **v1.2** | M4 | Users whose customers demand Factur-X/ZUGFeRD | veraPDF pass on all templates × profiles |
+| **v1.3** | M7 | Users with Peppol-mandated counterparties | 100 test messages acked end to end |
+| **v2.0** | M8 (+ M9 when the DRR contract is published) | Multi-device users | Convergence property tests + 2-device soak test |
+
+**MVP cut line: v1.0 = M0, M1, M2, M3, M5, M6 ≈ 18 person-weeks.** That is a
+product a Dutch freelancer or small BV can actually use daily: correct invoices,
+compliant UBL, reliable archive, provable audit trail, no network requirement.
+
+**v1.1 = M10, the accounting layer ≈ 12 person-weeks.** It is the next logical
+step because the invoice archive already contains the facts a ledger needs; see
+`accounting-design.md`.
+
+This ordering deliberately pushes Factur-X (M4) to v1.2 and Peppol (M7) to
+v1.3. Factur-X is needed by a subset of counterparties and depends only on M1, so
+if a pilot customer demands it, M4 can be pulled forward without disturbing M10.
+Peppol is gated by a commercial provider contract, not by engineering.
+
+---
+
+## 4. Milestone detail
+
+Sections are ordered by milestone ID, not by schedule: **M10 (v1.1) ships before
+M4 (v1.2).**
+
+### M0 — Foundations and risk spikes (2 weeks)
+
+**Goal:** the bones are right and the three scary unknowns have answers.
+
+Deliverables:
+
+1. Workspace scaffold: 13 crates per design §5.2, `rust-toolchain.toml`,
+   workspace lints, `cargo deny`, `cargo audit`, CI matrix on Windows/macOS/Linux.
+2. `crux` first pass: `Money`, `Quantity`, `VatRate`, `Currency`,
+   `DocumentId`, `DateTime`/`LocalDate`, error taxonomy, state machine skeleton.
+   ~40 unit tests including proptest rounding invariants.
+3. `store` first pass: SQLCipher open/close with raw key, `keystore.bin`
+   with Argon2id-wrapped DEK, migration runner, smoke migration creating
+   `seller` and `invoice_draft`.
+4. `app` shell: eframe window, passphrase unlock screen, empty dashboard.
+5. ADRs 001–012 recorded in `.agents/notes/adr/` (short form; the table in the design doc
+   is the index).
+6. **Spike 1 — PDF/A-3:** render a Typst document, attach an XML file, inject
+   XMP, validate with veraPDF in a container. Output: yes/no on Typst alone, plus
+   a fallback plan with `lopdf`.
+7. **Spike 2 — official validation:** run the EN 16931 XSLT artefacts via
+   `libxslt` on 5 sample invoices, on all three OSes. Output: packaging cost,
+   build flags, and whether a WASM build is plausible.
+8. **Spike 3 — SQLCipher packaging:** verify bundled SQLCipher builds and passes
+   a torture test (crash during write, WAL recovery, `VACUUM INTO`, key rotation)
+   on each OS. Output: known issues list.
+
+Exit criteria:
+
+- `cargo test` green on all three OSes in CI.
+- Encrypted database opens, rejects a wrong passphrase, survives a kill -9
+  during write, and restores from `VACUUM INTO`.
+- All three spikes have a written conclusion and a go/no-go that either confirms
+  the design or triggers an ADR revision.
+- No `TODO` in the dependency graph: every crate compiles and has at least one
+  test, even if trivial.
+
+Risks to watch: SQLCipher + Windows static OpenSSL is the classic packaging
+tarpit; budget the full day it usually takes.
+
+**Status, 2026-10-27.** Implemented and green locally: workspace, `crux`
+(54 tests), `store` (16 tests, including the plaintext canary, wrong-key
+rejection, and an encrypted `VACUUM INTO` backup), `app`, `cli`, CI, and ADRs
+001–012. Spike 3 is closed (`.agents/notes/spikes/sqlcipher.md`): the Windows
+build needs Strawberry Perl, and `tools/cargo-strawberry.sh` is the documented
+entry point. Spikes 1 and 2 remain open and are scheduled before M4 and M2.
+Still open from the exit criteria: crash-during-write torture, and the CI run
+on three OSes (workflow written, not yet executed).
+
+---
+
+### M1 — Vertical slice (4 weeks)
+
+**Goal:** one complete path through the system, for one tax scenario (NL
+domestic, 21 % VAT), with one template.
+
+Work packages:
+
+| WP | Content | Est. |
+|----|---------|------|
+| M1.1 | Seller/customer CRUD + address model + party snapshots | 4 d |
+| M1.2 | Draft editor: header, line grid, live totals, findings drawer | 6 d |
+| M1.3 | Totals engine per design §6.6 + property tests + BR-CO examples | 4 d |
+| M1.4 | T1 invariant validation with BT-tagged findings (en/nl) | 3 d |
+| M1.5 | Issue transaction: number allocation, snapshot, immutability triggers, audit chain | 4 d |
+| M1.6 | UBL 2.1 writer for the supported subset; golden tests | 5 d |
+| M1.7 | Visual PDF via Typst (no PDF/A yet); template "minimal" | 4 d |
+| M1.8 | Artifact storage + hash manifest + `bonk verify` CLI | 2 d |
+
+Deliberately excluded: credit notes, reverse charge, multiple VAT rates, foreign
+customers, multiple currencies, discounts. They come with M2 because they are
+where the rule complexity lives.
+
+Exit criteria:
+
+- Issue 20 varied invoices through the UI; each produces UBL that passes an
+  external validator (Mustang or KoSIT via Docker) with zero errors.
+- Re-rendering an issued invoice is byte-identical (hash equal).
+- Kill the app mid-render; on restart the invoice exists, and artefacts
+  regenerate correctly.
+- `bonk verify <invoice-id>` recomputes and confirms every hash offline.
+- Editor stays under 16 ms frame time on a 5 000-line database.
+
+**Status, 2026-10-27.** Implementation of the slice is complete end to end.
+Domain model and T1 validation, storage (parties, drafts with upsert, the issue
+transaction with sequence allocation, immutable issued rows, hash-chained audit,
+artefact blobs), a deterministic UBL 2.1 writer, and a Typst-rendered visual PDF
+are in place. The CLI flow (`seller-add` → `customer-add` → `draft-new` →
+`issue` → `verify`) writes both artefacts, and `verify` recomputes every hash
+offline. The desktop editor (seller onboarding, customer creation, line grid
+with live totals and BT-tagged findings, save, issue) shares the UBL renderer,
+renders the same PDF, and can save it from the Issued screen. PDF bytes are
+deterministic for the same input. 132 tests workspace-wide.
+
+External validation: `tools/validate-m1.sh` generates 20 varied invoices and
+runs Mustangproject 2.17.0 against every UBL file. **20/20 pass EN 16931 and
+Peppol BIS 3.0 with zero failed rules.** The corpus is generated through the CLI
+issue path, which shares `app::render_issue` with the GUI; GUI click automation
+is not part of the harness. No Docker is required.
+
+---
+
+### M2 — Conformance (4 weeks)
+
+**Goal:** the validation layer becomes the product's spine, not a checkbox.
+
+Work packages:
+
+| WP | Content | Est. |
+|----|---------|------|
+| M2.1 | `conformance`: EN 16931 semantic model, BT/BG registry, profile definitions | 5 d |
+| M2.2 | Vendored codelists with version manifest and load-time integrity check | 2 d |
+| M2.3 | Official artifact runner behind `official-validation` feature; CI packaging | 5 d |
+| M2.4 | Rust re-implementation of high-frequency BR rules for live feedback | 5 d |
+| M2.5 | Findings model → UI focus mapping, severity policy, suppression with reason | 3 d |
+| M2.6 | Full tax scenario matrix: domestic, reverse charge, intra-EU B2B, export, exempt, zero-rated, multiple rates | 5 d |
+| M2.7 | Credit notes (381) and corrective invoices, with reference rules | 3 d |
+| M2.8 | Peppol BIS 3.0 profile layer (endpoint/party identifiers, extra rules) | 4 d |
+
+Exit criteria:
+
+- Corpus of 60+ invoices with expected finding sets; our output matches the Java
+  oracle on all of them (documented, allowed divergences only where the oracle
+  itself is ambiguous).
+- Every blocking finding in the UI points at a field; no "unknown error" paths.
+- Codelist update procedure documented and rehearsed once (simulated release).
+- Zero network access during the entire milestone's test suite (asserted in CI).
+
+---
+
+### M3 — Import and payable register (3 weeks)
+
+| WP | Content | Est. |
+|----|---------|------|
+| M3.1 | Sniffer + UBL parser + CII parser, DTD/external-entity disabled | 5 d |
+| M3.2 | Factur-X PDF extraction (name tree, XMP cross-check) | 3 d |
+| M3.3 | Dedupe (supplier + number, payload hash fallback) and duplicate UI | 2 d |
+| M3.4 | Supplier matching against customers, confidence scoring, manual override | 3 d |
+| M3.5 | Payable register: list, filters, status transitions, settlement events | 3 d |
+| M3.6 | Folder watcher (`notify`) with debounce and idempotent ingest | 2 d |
+| M3.7 | Fuzz targets for all three parsers | 2 d |
+
+Exit criteria:
+
+- 100 % of the corpus imports or fails with an actionable message.
+- Truncated, zip-bombed, and entity-expansion inputs are rejected without
+  crashing or hanging (fuzz run: 1 h clean).
+- Importing the same file twice never creates two records.
+
+---
+
+### M4 — PDF/A-3 and Factur-X (4 weeks, v1.2)
+
+| WP | Content | Est. |
+|----|---------|------|
+| M4.1 | Font pipeline: bundle, subset, verify `ToUnicode` for CJK/diacritics | 4 d |
+| M4.2 | XMP + OutputIntent + EmbeddedFiles injection, deterministic PDF ID | 5 d |
+| M4.3 | Profile levels MINIMUM, BASIC WL, BASIC, EN 16931, EXTENDED | 5 d |
+| M4.4 | Multi-page layout, page numbering, continuation headers, long descriptions | 4 d |
+| M4.5 | Templates: classic, modern; logo, accent, footer, payment block, EPC QR | 4 d |
+| M4.6 | veraPDF gate on templates × profiles × edge cases in CI | 2 d |
+| M4.7 | Preflight diagnostics surfaced in UI ("what exactly is non-conformant") | 2 d |
+
+Exit criteria:
+
+- veraPDF reports zero failures for every template × profile combination.
+- External tools (at least two: one commercial validator, one open-source)
+  extract the embedded XML and validate it as EN 16931.
+- 40-page invoice with 300 lines renders under 1.5 s and stays conformant.
+- Byte-identical output across two runs on two machines (fonts embedded, no
+  timestamps).
+
+---
+
+### M5 — Search, templates, polish (2 weeks)
+
+FTS5 with the design's ranking, saved filters, CSV/JSON export, keyboard
+shortcuts, empty states, Dutch and English UI, document-language selection,
+`bonk support-bundle`. Exit: 20 000-invoice database, typed queries under 30 ms
+p95, no layout breakage at 125 %/150 % DPI scaling.
+
+---
+
+### M6 — Security, keys, audit, backup (3 weeks, part of v1.0)
+
+| WP | Content | Est. |
+|----|---------|------|
+| M6.1 | Passphrase UX: strength meter, recovery-key export, forced confirmation | 3 d |
+| M6.2 | Key rotation (rewrap), lock on idle, zeroisation tests | 3 d |
+| M6.3 | Audit chain: event coverage, verification CLI, chain-head display | 3 d |
+| M6.4 | Encrypted rotating backups + restore with chain verification | 4 d |
+| M6.5 | Evidence bundle export + offline verifier | 3 d |
+| M6.6 | Log redaction layer + support bundle preview | 2 d |
+| M6.7 | Integrity check screen (`PRAGMA integrity_check`, orphan blobs, hash audit) | 2 d |
+
+Exit criteria:
+
+- Restore from backup on a clean machine yields identical artefacts and a valid
+  chain.
+- Tampering with any audit row is detected by the verifier.
+- Support bundle contains no amounts, names, or identifiers (asserted by a
+  redaction test fixture).
+- Threat-model document published alongside the release.
+
+---
+
+### M7 — Peppol bridge (3 weeks, v1.3)
+
+Connector port + manifest + capability prompt, outbox with idempotency and
+backoff, mock provider for tests, one real provider adapter, inbound polling,
+receipt storage, failure taxonomy in the UI, egress allow-list enforcement.
+Exit: 100 test messages acked, duplicate send returns the same receipt, provider
+outage produces a resumable `pending` state, no silent data loss.
+
+---
+
+### M8 — Sync Phase 2 (5 weeks, v2.0)
+
+HLC implementation and tests, `sync_op` log, Merkle heads, relay reference
+server (~600 lines: auth, append, fetch), group-key sealing, CRDT draft merge,
+posting and period-lock convergence, three-pane conflict UI, lease-based sequence
+blocks, two-device soak test.
+Exit: 10 000 random operations applied in two different orders converge to
+identical state (property test); 72-hour two-device soak with no divergence;
+relay sees only ciphertext (verified by inspecting stored blobs); a posting made
+offline into a period another device locked surfaces for review rather than
+being dropped.
+
+---
+
+### M9 — DRR adapter skeleton (1 week, on demand)
+
+`TaxReportingConnector` port with `contract_version`, evidence package builder,
+null connector, feature flag, documentation of what we retain and why. Not
+shipped until the published specification is available.
+
+---
+
+### M10 — Accounting core (12 weeks, v1.1)
+
+Detailed design: `accounting-design.md`. This is the committed next step after
+v1.0 and ships before M4/M7 despite its higher ID.
+
+**Goal:** turn the issued-invoice archive into correct books, and produce a VAT
+return a Dutch accountant will accept.
+
+| WP | Content | Est. |
+|----|---------|------|
+| A1 | Chart of accounts (RGS-aligned starter), journals, posting engine, reversal | 3 w |
+| A2 | Fiscal periods, period locks, opening balances, trial balance / P&L / balance sheet | 2 w |
+| A3 | Tax-code mapping, VAT return preparation, ICP listing, reconciliation checks | 3 w |
+| A4 | CAMT.053 / MT940 / CSV import, matching ladder, allocations, unmatched queue | 3 w |
+| A5 | Accountant export package, hardening, pilot migration | 1 w |
+
+Exit criteria:
+
+- Posting every issued invoice in a pilot quarter yields a trial balance that nets
+  to zero, and AR/AP control accounts equal their subledger sums.
+- Re-posting is idempotent; posting into a locked period is rejected.
+- The generated VAT return matches the accountant's filed return for the pilot
+  period, with every difference explained and auditable.
+- A bank statement imports without duplicates across overlapping ranges, and the
+  unmatched queue is resolvable with keyboard only.
+- Trial balance over 500k journal lines under 200 ms; 10k bank lines under 2 s.
+- The evidence bundle verifies the ledger and the VAT basis offline.
+
+Prerequisite acknowledged: this milestone assumes the v1.0 hooks from
+technical-design §1.5 (explicit tax codes, party snapshots, business dates,
+`posting_profile_id`). If they were skipped, add a week.
+
+---
+
+## 5. First two weeks, concretely
+
+**Before code:** accept or amend ADRs 001–012; otherwise M0 will re-litigate
+them in code review.
+
+### Days 1–2 — Skeleton
+
+```bash
+cargo new --lib crates/crux
+cargo new --lib crates/store
+cargo new --lib crates/conformance
+cargo new --lib crates/conformance-official
+cargo new --lib crates/syntax
+cargo new --lib crates/render
+cargo new --lib crates/import
+cargo new --lib crates/bridge
+cargo new --lib crates/sync
+cargo new --lib crates/testkit
+cargo new --lib crates/app
+cargo new --bin crates/cli
+cargo new --bin xtask
+```
+
+Then: workspace manifest, `rust-toolchain.toml`, lints, `deny.toml`, CI workflow,
+`README.md` with non-goals, `.agents/notes/adr/` with the 12 records.
+
+### Days 3–5 — Core types
+
+`Money`, `Currency`, `Quantity`, `UnitCode`, `VatRate`, `LocalDate`,
+`DocumentId`, `Hlc` (placeholder), `DomainError`. Property tests:
+
+```
+∀ lines, currency: sum(line_net) == invoice_net
+∀ m, n: format(parse(format(m))) == format(m)
+∀ a, b: a + b - b == a
+```
+
+No serialisation derives on domain types; DTOs live in the adapter crates.
+
+### Days 6–8 — Encrypted store
+
+`keystore.bin` format (magic, version, Argon2 params, salt, nonce, wrapped DEK,
+MAC), `Database::open(passphrase)`, migration runner, first migration, wrong-key
+test, kill-during-write test. Write the key-format spec into the design doc
+appendix before implementing it.
+
+### Days 9–10 — Spikes
+
+Run spikes 1–3, write `.agents/notes/spikes/{pdfa3,validation,sqlcipher}.md` with
+findings, measurements, and a go/no-go. These documents decide whether M4 and
+M2 keep their estimates.
+
+---
+
+## 6. Effort summary
+
+| Milestone | Person-weeks | Confidence | Notes |
+|-----------|--------------|------------|-------|
+| M0 | 2 | Medium | Spikes can expand; cap them at 1.5 days each |
+| M1 | 4 | Medium | UI work dominates |
+| M2 | 4 | Low | Official artefacts + tax matrix are the risk |
+| M3 | 3 | Medium | Parser work is predictable |
+| M4 | 4 | Low | PDF/A-3 conformance is the highest-variance task |
+| M5 | 2 | High | Well-understood work |
+| M6 | 3 | Medium | Key handling + restore testing |
+| M7 | 3 | Low | Depends entirely on provider API quality |
+| M8 | 5 | Low | Distributed-systems correctness |
+| M9 | 1 | Medium | Skeleton only |
+| M10 | 12 | Low | VAT rubriek artefacts and bank format variance are the risks |
+| **v1.0 (M0–M3, M5, M6)** | **18** | | ~4.5 months solo, ~5.5 with buffer |
+| **v1.1 (add M10)** | **30** | | ~7 months solo; the point where it becomes a bookkeeping product |
+| **through v1.3 (add M4, M7)** | **37** | | ~9 months solo |
+| **full vision (add M8, M9)** | **43** | | ~10.5 months solo |
+
+Multiply by 0.6 for two engineers on disjoint workstreams (UI/domain vs
+compliance/render), not by 0.5 — integration costs are real.
+
+---
+
+## 7. Critical path and parallelism
+
+```
+M0 ──► M1 ──► M2 ──► M3
+        │      │
+        │      ├──► M10 ──► M8      (M10 also needs M6)
+        │      ├──► M7
+        │      ├──► M4              (independent of M2 after M1)
+        │      └──► M5
+        └──► M6
+```
+
+The critical path to a sellable v1.0 is `M0 → M1 → M2 → M3` (13 weeks) plus M6
+(3 weeks) which can run in parallel with M2/M3 if a second pair of hands
+exists.
+
+The critical path to v1.1 is `M0 → M1 → M2 → M6 → M10` (2+4+4+3+12 = 25 weeks)
+if M6 and M10 are serialised on one person. With two engineers, M6 runs beside
+M2, and the accounting work can start on `ledger` types as soon as M2's tax-code
+model settles.
+
+Highest-leverage parallelisation with two engineers:
+
+- Engineer A: core, storage, conformance, import, ledger (M2/M3/M10).
+- Engineer B: render/PDF, UI, templates, packaging (M4/M5).
+- Both: M6 security (pair on key handling — it is the place where "looks
+  fine" and "is fine" diverge most).
+
+Do not parallelise M8. Sync correctness needs one owner with a clear head. Do not
+parallelise M10's posting engine and VAT mapping between two people either: the
+rubriek semantics and the account rules must be designed by one head, or the two
+halves will disagree about what a taxable base is.
+
+---
+
+## 8. Quality gates
+
+Applicable at every milestone:
+
+| Gate | Check |
+|------|-------|
+| Build | `cargo build --workspace --all-targets` on 3 OSes |
+| Lint | `cargo clippy -- -D warnings`, `cargo fmt --check` |
+| Tests | `cargo nextest run`, no ignored tests without a linked issue |
+| Offline | test suite passes with networking disabled |
+| Degraded | tests pass on an empty DB and on a 20k-invoice DB |
+| Safety | `cargo deny` (licences), `cargo audit` (advisories), no `unsafe` outside approved crates |
+| Determinism | artefact hashes stable across two runs and two machines |
+| Docs | design doc or ADR updated in the same PR as the behaviour change |
+
+Per-release gates:
+
+| Release | Additional gate |
+|---------|-----------------|
+| v0.5 | External validator accepts every generated UBL |
+| v1.0 | 3 pilot companies, one full quarter, zero data loss; chain verifies after restore |
+| v1.1 | Trial balance nets to zero; VAT return matches the accountant's filing with explained differences; bank import dedupes across overlapping ranges |
+| v1.2 | veraPDF zero failures, two independent extractors agree on embedded XML |
+| v1.3 | Provider ack rate 100 % on test set; duplicate-send idempotency proven |
+| v2.0 | Convergence property test + 72 h soak |
+
+---
+
+## 9. Test corpus acquisition
+
+Start collecting in M0; waiting for fixtures in M2 costs a week.
+
+| Source | Purpose |
+|--------|---------|
+| EN 16931 official test suite / validation artefacts | Rule coverage, expected findings |
+| Peppol BIS Billing 3.0 validation artefacts + sample invoices | Profile rules |
+| Factur-X sample files from the official specification package | Embedding, profiles |
+| Mustang / KoSIT validator (Docker, CI only) | Independent oracle |
+| NL VAT return rubriek tables (versioned artefacts) + filed-return samples | VAT preparation golden tests |
+| CAMT.053 and MT940 samples from several Dutch banks, plus overlapping ranges | Reconciliation parsing and dedupe |
+| CSV bank exports with comma/semicolon decimals, CRLF, Latin-1, BOM | Encoding and locale hardening |
+| Own synthetic matrix: 7 tax scenarios × 3 currencies × 4 line types × edge amounts | Regression |
+| Hostile inputs: truncated XML, billion laughs, zip bomb, 200 MB PDF, invalid UTF-8 | Robustness |
+
+Fixtures live in `crates/testkit/fixtures/<source>/<case>/` with a
+`expected.json` next to each. Reviewers must be able to add a case without
+touching test code.
+
+---
+
+## 10. Packaging and release
+
+| Platform | Format | Notes |
+|----------|--------|-------|
+| Windows | Signed MSI (WiX) | Code-signing certificate is a lead-time item; start procurement in M1 |
+| macOS | Notarised universal DMG | Hardened runtime; entitlements for keychain and file access |
+| Linux | AppImage + `.deb` | AppImage for support simplicity; deb for distro users |
+
+Release mechanics:
+
+- Signed update manifest (minisign or ed25519), updater verifies offline.
+- Update policy: security fixes always; schema migrations forward-only; never
+  auto-downgrade.
+- Release artefacts include SBOM (CycloneDX) and SHA-256 sums.
+- Before shipping a migration, generate a fixture DB with the *previous*
+  release binary and add it to the migration test corpus.
+- Support path: `bonk support-bundle` produces a redacted zip the user can
+  inspect before sending.
+
+Lead-time items to start early: Windows code-signing certificate, Apple
+Developer ID, a company VAT number for the Peppol provider contract, and a
+trademark/name check.
+
+---
+
+## 11. Operating rhythm
+
+- **Weekly:** review the milestone's exit criteria; if a criterion is at risk,
+  cut scope, not quality.
+- **Per merged PR:** design doc or ADR touch if a decision changed; changelog
+  entry.
+- **Monthly:** re-check regulatory sources (OpenPeppol releases, EN 16931
+  amendments, Dutch guidance, ViDA milestones) and update the artifact manifest
+  plan.
+- **Per release:** run the full gate set, tag, publish SBOM, archive the
+  conformance report (it is itself evidence of quality).
+- **Quarterly:** restore-from-backup drill on a clean machine; audit-chain
+  verification of a real database; dependency licence review.
+
+---
+
+## Appendix A — Definition of done (feature)
+
+A feature ships when: it has tests at the appropriate level; it works offline; it
+works on an empty and a large database; findings and errors are localised (en +
+nl) and point at a field; state changes emit audit events; money never touches a
+float; no new `unwrap` in core; and the design doc or an ADR reflects the
+decision.
+
+## Appendix B — Open decisions blocking M0
+
+1. Accept ADR-003 (money representation) — blocks the core types.
+2. Accept ADR-002 (rusqlite + bundled SQLCipher) — blocks the store.
+3. Accept ADR-009 (Typst + post-processing) provisionally — spike 1 confirms.
+4. Accept ADR-010 (egui with documented accessibility limitation) — blocks the
+   UI shell.
+5. Confirm single-seller-per-database for v1 — blocks onboarding UX (schema
+   already allows more).
+6. Confirm the v1.0 hooks in technical-design §1.5 (explicit tax codes,
+   `posting_profile_id`) — cheap now, expensive to retrofit before M10.
+
+## Appendix C — Success metrics to instrument from v0.5
+
+- Time from "new invoice" to "issued" (target median < 4 min for repeat
+  customers).
+- Percentage of issued invoices with zero blocking findings on first attempt
+  (target > 80 %).
+- Import success rate on the corpus (target 100 % with actionable failures).
+- Crash-free sessions (target > 99.5 %).
+- Verification: percentage of pilot databases with a valid audit chain on
+  demand (target 100 %).
+
+## Appendix D — Open decisions blocking M10 (v1.1)
+
+1. Accept ADR-013 through ADR-017 (`accounting-design.md` §14).
+2. Starter chart of accounts: ship an RGS-aligned ~60-account set, or import the
+   user's chart first? (Recommendation: starter set plus CSV import.)
+3. VAT filing route: portal export only, partner API, or accountant handoff.
+4. Whether opening-balance import must support prior-year comparative figures in
+   v1.1 or only a single opening entry.

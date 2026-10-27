@@ -1,0 +1,30 @@
+[package]
+name = "app"
+description = "egui application as a library: views, command dispatch, view models"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[features]
+default = ["cipher"]
+# Production: SQLCipher page encryption.
+cipher = ["store/sqlcipher"]
+# Test-only fallback for hosts without a working OpenSSL/Perl toolchain.
+# The UI shows a permanent warning and the CLI refuses to init silently.
+plain = ["store/plain"]
+
+[dependencies]
+crux.workspace = true
+store = { path = "../store", default-features = false }
+syntax.workspace = true
+render.workspace = true
+time.workspace = true
+eframe.workspace = true
+egui.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

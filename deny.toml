@@ -1,0 +1,46 @@
+# cargo-deny policy.
+#
+# Permissive licences only. AGPL/SSPL are rejected on purpose: the PDF stack
+# must not be MuPDF or iText, and the network layer must stay vendorable.
+
+[graph]
+all-features = true
+
+[advisories]
+version = 2
+yanked = "deny"
+
+[licenses]
+version = 2
+confidence-threshold = 0.9
+allow = [
+    "MIT",
+    "MIT-0",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "0BSD",
+    "CC0-1.0",
+    "Unicode-3.0",
+    "MPL-2.0",
+    "NCSA",
+    "OpenSSL",
+    "BSL-1.0",
+    "Unlicense",
+]
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+deny = [
+    # Copyleft PDF/networking stacks that would poison distribution.
+    { name = "mupdf" },
+    { name = "itext" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

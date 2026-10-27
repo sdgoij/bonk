@@ -1,0 +1,13 @@
+target/
+**/*.rs.bk
+
+# Local databases and keys must never be committed.
+*.db
+*.db-wal
+*.db-shm
+*.key
+keystore.bin
+
+# OS noise
+.DS_Store
+Thumbs.db

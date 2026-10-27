@@ -1,0 +1,13 @@
+[package]
+name = "syntax"
+description = "UBL 2.1 and CII D16B readers, writers, and canonicalisation"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+crux.workspace = true
+
+[lints]
+workspace = true

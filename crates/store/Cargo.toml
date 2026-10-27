@@ -1,0 +1,33 @@
+[package]
+name = "store"
+description = "SQLite/SQLCipher storage, keystore, migrations, repositories"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[features]
+default = ["sqlcipher"]
+# Page-level encryption at rest. Exactly one of `sqlcipher` / `plain` must be on.
+sqlcipher = ["rusqlite/bundled-sqlcipher-vendored-openssl"]
+# Test-only fallback so the crate still builds where OpenSSL tooling is absent.
+# Never ship a binary built with this feature.
+plain = ["rusqlite/bundled"]
+
+[dependencies]
+crux.workspace = true
+rusqlite.workspace = true
+argon2.workspace = true
+aes-gcm.workspace = true
+zeroize.workspace = true
+sha2.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+time.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

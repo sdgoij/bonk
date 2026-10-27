@@ -1,0 +1,18 @@
+[package]
+name = "conformance-official"
+description = "Vendored official Schematron/XSLT artefacts and the isolated native XSLT binding"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[features]
+default = []
+# Enables the native libxslt binding once the M0 spike has settled on a build.
+official-validation = []
+
+[dependencies]
+crux.workspace = true
+
+[lints]
+workspace = true
