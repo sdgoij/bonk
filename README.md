@@ -148,6 +148,20 @@ sh tools/validate-vat-matrix.sh
 It validates standard, zero-rated, exempt, reverse-charge, intra-community,
 export, and outside-scope invoices. Last result: **7/7 invoices valid**.
 
+### Code lists
+
+Validation uses vendored EN 16931 code lists (currency, country, VAT category,
+VATEX, units, EAS, document type) embedded at compile time. They are generated
+from the official codelist Schematron rather than maintained by hand:
+
+```sh
+sh tools/fetch-codelists.sh
+cargo run -p xtask -- codelists --check
+```
+
+The bundle, its manifest, and the update procedure are documented in
+`.agents/notes/codelist-updates.md` (decision: ADR-018).
+
 ### Desktop
 
 `bonk gui` (or no subcommand) opens the same workflow: unlock, create the seller,

@@ -1,0 +1,74 @@
+{
+  "bundle": "en16931-ubl-codes-2026-10",
+  "source": {
+    "url": "https://raw.githubusercontent.com/ConnectingEurope/eInvoicing-EN16931/master/ubl/schematron/codelist/EN16931-UBL-codes.sch",
+    "retrieved": "2026-10-27",
+    "sha256": "933c2ec261f7fc219aa0c7fa9f0b67c7fe156600b6fbb9a0eb045f583d173bd9"
+  },
+  "files": [
+    {
+      "name": "untdid-1001-invoice.txt",
+      "codelist": "UN/TDID 1001 invoice type codes",
+      "rule": "BR-CL-01",
+      "literal": 0,
+      "entries": 50,
+      "sha256": "483672f70d3e9a273c347b76b700a5845842f6bd8fb8c54de86ec82bba2ee274"
+    },
+    {
+      "name": "untdid-1001-credit-note.txt",
+      "codelist": "UN/TDID 1001 credit note type codes",
+      "rule": "BR-CL-01",
+      "literal": 1,
+      "entries": 13,
+      "sha256": "a66dc8643eb96b40210bb766d9fb7c0f804e174c7d9147fd90e44ea7c9d091cc"
+    },
+    {
+      "name": "iso-4217.txt",
+      "codelist": "ISO 4217 alpha-3 currency codes",
+      "rule": "BR-CL-04",
+      "literal": 0,
+      "entries": 178,
+      "sha256": "fb4f5fb74e80a59d37ace3a95b0ad1063db70a6e2fa582772e2c865e0f3610b2"
+    },
+    {
+      "name": "iso-3166-1.txt",
+      "codelist": "ISO 3166-1 country codes",
+      "rule": "BR-CL-14",
+      "literal": 0,
+      "entries": 251,
+      "sha256": "ac4a7044dfb9fc2b374c304a8c2c14cc2b2b9edcb9fea9f0e392560c1add6386"
+    },
+    {
+      "name": "uncl5305.txt",
+      "codelist": "UNCL 5305 VAT category codes",
+      "rule": "BR-CL-17",
+      "literal": 0,
+      "entries": 10,
+      "sha256": "22319b2974d8cbd198952b8aa475aa75573de4cb5ef86afa89652ff98c75f93b"
+    },
+    {
+      "name": "vatex.txt",
+      "codelist": "CEF VATEX exemption reason codes",
+      "rule": "BR-CL-22",
+      "literal": 0,
+      "entries": 106,
+      "sha256": "acaf0429f5099ae896c242aa3f38f384fca36ef912e239d2fbefd1d4c70f109a"
+    },
+    {
+      "name": "un-ece-rec20-21.txt",
+      "codelist": "UN/ECE Recommendation 20 unit codes with Recommendation 21 extensions",
+      "rule": "BR-CL-23",
+      "literal": 0,
+      "entries": 2162,
+      "sha256": "7c0e17fcb432ab2a67f465faebf8d23006e13963df53f084ace6a4ee97697b9e"
+    },
+    {
+      "name": "eas.txt",
+      "codelist": "CEF EAS endpoint scheme identifiers",
+      "rule": "BR-CL-25",
+      "literal": 0,
+      "entries": 103,
+      "sha256": "859ce2b94cf5a4a081dc6dcfe042f1655a6cd86319f330386c92256838f6af68"
+    }
+  ]
+}

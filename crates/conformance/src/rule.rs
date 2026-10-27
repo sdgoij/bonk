@@ -34,6 +34,21 @@ impl Rule {
             message: message.into(),
         }
     }
+
+    /// Builds a finding for the business term at this particular site.
+    ///
+    /// Some rules constrain the same code list at several business terms, for
+    /// example the seller and buyer country; the finding must point at the one
+    /// that failed, not at the rule's default term.
+    pub fn finding_at(&self, bt: Bt, field: impl Into<String>, message: impl Into<String>) -> Finding {
+        Finding {
+            severity: self.severity,
+            code: self.code,
+            bt: Some(bt.code()),
+            field: field.into(),
+            message: message.into(),
+        }
+    }
 }
 
 macro_rules! rule {
@@ -379,6 +394,42 @@ rule!(
     "An invoice with a not-subject-to-VAT line cannot mix other VAT categories."
 );
 
+rule!(
+    BR_CL_04,
+    "BR-CL-04",
+    Some(Bt::Currency),
+    None,
+    "Invoice currency code MUST be coded using ISO code list 4217 alpha-3."
+);
+rule!(
+    BR_CL_14,
+    "BR-CL-14",
+    Some(Bt::SellerCountry),
+    Some(Bg::Seller),
+    "Country codes in an invoice MUST be coded using ISO code list 3166-1."
+);
+rule!(
+    BR_CL_22,
+    "BR-CL-22",
+    Some(Bt::VatExemptionCode),
+    Some(Bg::VatBreakdown),
+    "Tax exemption reason code MUST belong to the CEF VATEX code list."
+);
+rule!(
+    BR_CL_23,
+    "BR-CL-23",
+    Some(Bt::UnitCode),
+    Some(Bg::InvoiceLine),
+    "Unit code MUST be coded according to UN/ECE Recommendation 20 with Recommendation 21 extensions."
+);
+rule!(
+    BR_CL_25,
+    "BR-CL-25",
+    Some(Bt::SellerEndpointId),
+    Some(Bg::Seller),
+    "Endpoint identifier scheme identifier MUST belong to the CEF EAS code list."
+);
+
 /// Rules attached to one VAT category.
 #[derive(Clone, Copy, Debug)]
 pub struct CategoryRules {
@@ -487,7 +538,7 @@ pub static CORE_RULES: &[&Rule] = &[
     &BR_S_08, &BR_S_09, &BR_S_10, &BR_Z_01, &BR_Z_05, &BR_Z_08, &BR_Z_09, &BR_Z_10, &BR_E_01, &BR_E_05, &BR_E_08,
     &BR_E_09, &BR_E_10, &BR_AE_01, &BR_AE_05, &BR_AE_08, &BR_AE_09, &BR_AE_10, &BR_IC_01, &BR_IC_05, &BR_IC_08,
     &BR_IC_09, &BR_IC_10, &BR_IC_11, &BR_G_01, &BR_G_05, &BR_G_08, &BR_G_09, &BR_G_10, &BR_O_01, &BR_O_05, &BR_O_08,
-    &BR_O_09, &BR_O_10, &BR_O_12,
+    &BR_O_09, &BR_O_10, &BR_O_12, &BR_CL_04, &BR_CL_14, &BR_CL_22, &BR_CL_23, &BR_CL_25,
 ];
 
 /// Looks up a rule by code.

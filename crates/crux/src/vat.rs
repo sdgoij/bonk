@@ -212,6 +212,12 @@ impl TaxTreatment {
         self
     }
 
+    /// Attaches a codelist exemption reason (BT-121).
+    pub fn with_exemption_reason_code(mut self, code: impl Into<String>) -> Self {
+        self.exemption_reason_code = Some(code.into());
+        self
+    }
+
     /// True when the standard asks for an exemption reason.
     pub fn needs_exemption_reason(&self) -> bool {
         matches!(self.category, VatCategory::Exempt | VatCategory::ReverseCharge)
@@ -284,5 +290,16 @@ mod tests {
         assert!(validate_treatment(VatCategory::Export, VatRate::ZERO).is_ok());
         assert!(validate_treatment(VatCategory::CanaryIslands, VatRate::ZERO).is_ok());
         assert!(validate_treatment(VatCategory::CanaryIslands, VatRate::REDUCED_NL).is_ok());
+    }
+
+    #[test]
+    fn exemption_reason_builders_attach_both_forms() {
+        let treatment = TaxTreatment::zero(VatCategory::Exempt)
+            .with_exemption_reason("Exempt supply")
+            .with_exemption_reason_code("VATEX-EU-132");
+
+        assert_eq!(treatment.exemption_reason.as_deref(), Some("Exempt supply"));
+        assert_eq!(treatment.exemption_reason_code.as_deref(), Some("VATEX-EU-132"));
+        assert!(treatment.needs_exemption_reason());
     }
 }

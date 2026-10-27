@@ -85,6 +85,10 @@ pub enum Bt {
     SellerVatId,
     /// Seller tax registration identifier (BT-32).
     SellerTaxRegistrationId,
+    /// Seller endpoint identifier (BT-34).
+    SellerEndpointId,
+    /// Seller address country code (BT-40).
+    SellerCountry,
     /// Seller tax representative VAT identifier (BT-63).
     SellerTaxRepresentativeVatId,
     /// Buyer name (BT-44).
@@ -93,6 +97,10 @@ pub enum Bt {
     BuyerLegalRegistrationId,
     /// Buyer VAT identifier (BT-48).
     BuyerVatId,
+    /// Buyer endpoint identifier (BT-49).
+    BuyerEndpointId,
+    /// Buyer address country code (BT-55).
+    BuyerCountry,
     /// Actual delivery date (BT-72).
     ActualDeliveryDate,
     /// Deliver-to country code (BT-80).
@@ -163,10 +171,14 @@ impl Bt {
             Self::SellerName => "BT-27",
             Self::SellerVatId => "BT-31",
             Self::SellerTaxRegistrationId => "BT-32",
+            Self::SellerEndpointId => "BT-34",
+            Self::SellerCountry => "BT-40",
             Self::SellerTaxRepresentativeVatId => "BT-63",
             Self::BuyerName => "BT-44",
             Self::BuyerLegalRegistrationId => "BT-47",
             Self::BuyerVatId => "BT-48",
+            Self::BuyerEndpointId => "BT-49",
+            Self::BuyerCountry => "BT-55",
             Self::ActualDeliveryDate => "BT-72",
             Self::DeliverToCountry => "BT-80",
             Self::SumLineNet => "BT-106",
@@ -211,10 +223,14 @@ impl Bt {
             Self::SellerName => "Seller name",
             Self::SellerVatId => "Seller VAT identifier",
             Self::SellerTaxRegistrationId => "Seller tax registration identifier",
+            Self::SellerEndpointId => "Seller endpoint identifier",
+            Self::SellerCountry => "Seller address country code",
             Self::SellerTaxRepresentativeVatId => "Seller tax representative VAT identifier",
             Self::BuyerName => "Buyer name",
             Self::BuyerLegalRegistrationId => "Buyer legal registration identifier",
             Self::BuyerVatId => "Buyer VAT identifier",
+            Self::BuyerEndpointId => "Buyer endpoint identifier",
+            Self::BuyerCountry => "Buyer address country code",
             Self::ActualDeliveryDate => "Actual delivery date",
             Self::DeliverToCountry => "Deliver-to country code",
             Self::SumLineNet => "Sum of invoice line net amounts",
@@ -250,8 +266,14 @@ impl Bt {
             Self::SellerName
             | Self::SellerVatId
             | Self::SellerTaxRegistrationId
+            | Self::SellerEndpointId
+            | Self::SellerCountry
             | Self::SellerTaxRepresentativeVatId => Some(Bg::Seller),
-            Self::BuyerName | Self::BuyerLegalRegistrationId | Self::BuyerVatId => Some(Bg::Buyer),
+            Self::BuyerName
+            | Self::BuyerLegalRegistrationId
+            | Self::BuyerVatId
+            | Self::BuyerEndpointId
+            | Self::BuyerCountry => Some(Bg::Buyer),
             Self::SumLineNet
             | Self::SumAllowances
             | Self::SumCharges

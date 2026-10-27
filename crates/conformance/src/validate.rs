@@ -1,17 +1,19 @@
 //! Core EN 16931 business rules.
 //!
-//! The engine deliberately covers the high-frequency arithmetic and VAT-category
-//! rules first. Official Schematron/XSLT remains the authority for profiles and
-//! codelists; these checks provide immediate, field-level feedback and a second
-//! line of defence before export.
+//! The engine deliberately covers the high-frequency arithmetic, VAT-category,
+//! and code-list rules first. Official Schematron/XSLT remains the authority
+//! for profiles and the remaining codelists; these checks provide immediate,
+//! field-level feedback and a second line of defence before export.
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crux::{Finding, Money, VatCategory, VatRate, tax_amount};
+use crux::{Finding, Money, Party, VatCategory, VatRate, tax_amount};
 
+use crate::bt::Bt;
+use crate::codelist::Codelist;
 use crate::rule::{
-    BR_02, BR_16, BR_CO_10, BR_CO_13, BR_CO_14, BR_CO_15, BR_CO_16, BR_CO_17, BR_CO_26, BR_IC_11, BR_O_12, Rule,
-    category_rules,
+    BR_02, BR_16, BR_CL_04, BR_CL_14, BR_CL_22, BR_CL_23, BR_CL_25, BR_CO_10, BR_CO_13, BR_CO_14, BR_CO_15, BR_CO_16,
+    BR_CO_17, BR_CO_26, BR_IC_11, BR_O_12, Rule, category_rules,
 };
 use crate::semantic::SemanticInvoice;
 
@@ -32,6 +34,8 @@ pub fn validate(invoice: &SemanticInvoice<'_>) -> Vec<Finding> {
             "the seller needs a VAT identifier or a legal registration identifier",
         ));
     }
+
+    validate_codelists(invoice, &mut findings);
 
     if invoice.delivery_date.is_none()
         && invoice
@@ -61,6 +65,83 @@ pub fn validate(invoice: &SemanticInvoice<'_>) -> Vec<Finding> {
     validate_exemptions(invoice, &mut findings);
 
     findings
+}
+
+/// Checks every free-form code against its vendored code list.
+///
+/// Codes backed by a closed enum (`DocType`, `VatCategory`) cannot be wrong at
+/// this point; their membership is asserted by the tests in `codelist` instead.
+/// The checks here cover the fields a user or an import can fill with anything.
+fn validate_codelists(invoice: &SemanticInvoice<'_>, findings: &mut Vec<Finding>) {
+    let currency = invoice.currency.as_str();
+    if !Codelist::CurrencyCode.contains(currency) {
+        findings.push(BR_CL_04.finding(
+            "currency",
+            format!("{currency} is not an ISO 4217 alpha-3 currency code"),
+        ));
+    }
+
+    party_codelists(
+        invoice.seller,
+        "seller",
+        Bt::SellerCountry,
+        Bt::SellerEndpointId,
+        findings,
+    );
+    party_codelists(invoice.buyer, "buyer", Bt::BuyerCountry, Bt::BuyerEndpointId, findings);
+
+    for (index, line) in invoice.lines.iter().enumerate() {
+        let unit = line.unit.as_str();
+        if !Codelist::UnitCode.contains(unit) {
+            findings.push(BR_CL_23.finding(
+                format!("lines[{index}].unit"),
+                format!("{unit} is not a UN/ECE Recommendation 20 unit code"),
+            ));
+        }
+
+        let reason_code = line
+            .treatment
+            .exemption_reason_code
+            .as_deref()
+            .map(str::trim)
+            .filter(|code| !code.is_empty());
+        if let Some(code) = reason_code
+            && !Codelist::ExemptionReasonCode.contains_uppercase(code)
+        {
+            findings.push(BR_CL_22.finding(
+                format!("lines[{index}].exemption_reason_code"),
+                format!("{code} is not a CEF VATEX exemption reason code"),
+            ));
+        }
+    }
+}
+
+fn party_codelists(party: &Party, role: &str, country_bt: Bt, endpoint_bt: Bt, findings: &mut Vec<Finding>) {
+    let country = party.address.country.as_str();
+    if !Codelist::CountryCode.contains(country) {
+        findings.push(BR_CL_14.finding_at(
+            country_bt,
+            format!("{role}.address.country"),
+            format!("{country} is not an ISO 3166-1 country code"),
+        ));
+    }
+
+    // A Peppol identifier without a scheme is dropped by the UBL writer; the
+    // requirement for a well-formed one belongs to the Peppol profile layer.
+    let scheme = party
+        .peppol_id
+        .as_deref()
+        .and_then(|endpoint| endpoint.split_once(':'))
+        .map(|(scheme, _)| scheme);
+    if let Some(scheme) = scheme
+        && !Codelist::EndpointSchemeCode.contains(scheme)
+    {
+        findings.push(BR_CL_25.finding_at(
+            endpoint_bt,
+            format!("{role}.peppol_id"),
+            format!("{scheme} is not a CEF EAS endpoint scheme"),
+        ));
+    }
 }
 
 fn sum_line_nets(invoice: &SemanticInvoice<'_>, findings: &mut Vec<Finding>) -> Option<Money> {
@@ -421,6 +502,13 @@ mod tests {
         findings.iter().any(|finding| finding.code == code)
     }
 
+    fn finding<'a>(findings: &'a [Finding], code: &str) -> &'a Finding {
+        findings
+            .iter()
+            .find(|finding| finding.code == code)
+            .unwrap_or_else(|| panic!("{code} was not emitted: {findings:?}"))
+    }
+
     #[test]
     fn a_consistent_standard_invoice_is_clean() {
         let seller = seller();
@@ -618,5 +706,98 @@ mod tests {
                 finding.code
             );
         }
+    }
+
+    #[test]
+    fn a_currency_outside_iso_4217_is_br_cl_04() {
+        let seller = seller();
+        let buyer = party("Buyer BV");
+        let currency = Currency::parse("EUX").expect("three uppercase letters are syntactically valid");
+        let mut draft = draft(vec![line(1, 100, TaxTreatment::standard(VatRate::STANDARD_NL))]);
+        draft.currency = currency;
+        draft.lines[0].unit_price = Money::from_major_units(100, currency).expect("price");
+        let invoice = semantic_invoice("2026-0001", &draft, &seller, &buyer);
+
+        let findings = validate(&invoice);
+        let finding = finding(&findings, "BR-CL-04");
+        assert_eq!(finding.field, "currency");
+        assert_eq!(finding.bt, Some("BT-5"));
+    }
+
+    #[test]
+    fn a_country_outside_iso_3166_is_br_cl_14() {
+        let seller = seller();
+        let mut buyer = party("Buyer BV");
+        buyer.address.country = CountryCode::parse("XX").expect("two uppercase letters are syntactically valid");
+        let draft = draft(vec![line(1, 100, TaxTreatment::standard(VatRate::STANDARD_NL))]);
+        let invoice = semantic_invoice("2026-0001", &draft, &seller, &buyer);
+
+        let findings = validate(&invoice);
+        let finding = finding(&findings, "BR-CL-14");
+        assert_eq!(finding.field, "buyer.address.country");
+        assert_eq!(finding.bt, Some("BT-55"));
+    }
+
+    #[test]
+    fn a_unit_outside_recommendation_20_is_br_cl_23() {
+        let seller = seller();
+        let buyer = party("Buyer BV");
+        let mut draft = draft(vec![line(1, 100, TaxTreatment::standard(VatRate::STANDARD_NL))]);
+        draft.lines[0].unit = UnitCode::parse("XXX").expect("three uppercase letters are syntactically valid");
+        let invoice = semantic_invoice("2026-0001", &draft, &seller, &buyer);
+
+        let findings = validate(&invoice);
+        let finding = finding(&findings, "BR-CL-23");
+        assert_eq!(finding.field, "lines[0].unit");
+        assert_eq!(finding.bt, Some("BT-130"));
+    }
+
+    #[test]
+    fn an_unknown_exemption_reason_code_is_br_cl_22() {
+        let seller = seller();
+        let buyer = party("Buyer BV");
+        let treatment = TaxTreatment::zero(VatCategory::Exempt)
+            .with_exemption_reason("Exempt supply")
+            .with_exemption_reason_code("VATEX-XX-1");
+        let draft = draft(vec![line(1, 100, treatment)]);
+        let invoice = semantic_invoice("2026-0001", &draft, &seller, &buyer);
+
+        let findings = validate(&invoice);
+        let finding = finding(&findings, "BR-CL-22");
+        assert_eq!(finding.field, "lines[0].exemption_reason_code");
+        assert_eq!(finding.bt, Some("BT-121"));
+    }
+
+    #[test]
+    fn an_unknown_endpoint_scheme_is_br_cl_25() {
+        let mut seller = seller();
+        seller.peppol_id = Some("9999:12345678".to_owned());
+        let mut buyer = party("Buyer BV");
+        buyer.peppol_id = Some("0106:12345678".to_owned());
+        let draft = draft(vec![line(1, 100, TaxTreatment::standard(VatRate::STANDARD_NL))]);
+        let invoice = semantic_invoice("2026-0001", &draft, &seller, &buyer);
+
+        let findings = validate(&invoice);
+        let finding = finding(&findings, "BR-CL-25");
+        assert_eq!(finding.field, "seller.peppol_id");
+        assert_eq!(finding.bt, Some("BT-34"));
+        assert!(
+            !findings.iter().any(|finding| finding.field == "buyer.peppol_id"),
+            "0106 is a valid EAS scheme: {findings:?}"
+        );
+    }
+
+    #[test]
+    fn a_lowercase_exemption_reason_code_is_accepted() {
+        let seller = seller();
+        let buyer = party("Buyer BV");
+        let treatment = TaxTreatment::zero(VatCategory::Exempt)
+            .with_exemption_reason("Exempt supply")
+            .with_exemption_reason_code("vatex-eu-79-c");
+        let draft = draft(vec![line(1, 100, treatment)]);
+        let invoice = semantic_invoice("2026-0001", &draft, &seller, &buyer);
+
+        let findings = validate(&invoice);
+        assert!(findings.is_empty(), "unexpected findings: {findings:?}");
     }
 }

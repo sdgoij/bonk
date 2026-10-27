@@ -274,11 +274,26 @@ mandatory reason, stored in `validation_suppression`, and recorded on the audit
 chain as `finding_suppressed`; blocking findings are never suppressible. Schema
 version is now 3. Migrations carry optional down SQL: `bonk migrate-down --to 2
 --yes` preflights the chain and rolls back 0003; 0001/0002 are deliberately
-irreversible because they create legal evidence. Remaining: codelist bundles and
-integrity manifests (M2.2), the official artefact runner (M2.3), credit notes
-(M2.7), and the Peppol profile layer beyond the current rule set (M2.8). Explicit
-deliver-to address fields beyond the buyer country remain for a later slice.
-Workspace tests: 161 encrypted, 159 plain.
+irreversible because they create legal evidence.
+
+M2.2 is complete. `conformance::codelist` embeds eight code lists (UNTDID 1001
+invoice and credit-note types, ISO 4217, ISO 3166-1, UNCL 5305, CEF VATEX, UN/ECE
+Rec 20+21, CEF EAS) extracted from the official codelist Schematron by
+`cargo run -p xtask -- codelists`, with a pinned source hash, a per-file
+`manifest.json`, and a test that recomputes every hash and entry count. The rule
+engine now emits BR-CL-04 (currency), BR-CL-14 (seller/buyer country, BT-40 and
+BT-55), BR-CL-22 (VATEX), BR-CL-23 (unit code), and BR-CL-25 (endpoint scheme).
+BR-CL-01/17/18 constrain codes that a closed enum already fixes, so their
+membership is asserted by tests instead of unreachable findings. The update
+procedure in `codelist-updates.md` was rehearsed on 2026-10-27 by injecting a
+synthetic `ZZQ` unit code into a copy of the source: extraction produced exactly
+that one-line diff, and re-running against the pinned source restored the
+bundle.
+
+Remaining: the official artefact runner (M2.3), credit notes (M2.7), and the
+Peppol profile layer beyond the current rule set (M2.8). Explicit deliver-to
+address fields beyond the buyer country remain for a later slice. Workspace
+tests: 181 encrypted, 179 plain.
 
 Exit criteria:
 

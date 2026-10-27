@@ -282,7 +282,7 @@ flowchart TB
 | Layer | What it constrains | Where we enforce it |
 |-------|--------------------|---------------------|
 | EN 16931-1 (semantic) | Which business terms exist, which are mandatory, arithmetic and code-list rules | Domain model + `conformance` |
-| EN 16931-2 (codelists) | Allowed values (VAT categories, units, payment means, countries) | Vendored, versioned code-list bundles |
+| EN 16931-2 (codelists) | Allowed values (VAT categories, units, payment means, countries) | Vendored, versioned code-list bundles generated from the official Schematron (ADR-018) |
 | UBL 2.1 syntax | Element names, cardinality, XSD | `syntax-ubl` |
 | CII D16B syntax | Element names, cardinality, XSD | `syntax-cii` |
 | Peppol BIS Billing 3.0 | Stronger subset, Peppol-specific rules and codelists, participant identifiers | Profile layer over UBL |

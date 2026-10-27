@@ -1,26 +1,31 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 //! Developer automation: artifact fetching, conformance runs, packaging.
 
+mod codelists;
+
 fn tasks() -> &'static [(&'static str, &'static str)] {
     &[
         ("conformance", "run the conformance corpus (M2)"),
+        ("codelists", "regenerate the vendored EN 16931 code lists"),
         ("spikes", "re-run the M0 risk spikes"),
         ("package", "build signed installers (M6/M7)"),
     ]
 }
 
-fn main() {
-    let argument = std::env::args().nth(1);
-    match argument.as_deref() {
+fn main() -> std::process::ExitCode {
+    let arguments: Vec<String> = std::env::args().collect();
+    match arguments.get(1).map(String::as_str) {
         None | Some("help") | Some("--help") => {
             println!("xtask: developer automation");
             for (name, description) in tasks() {
                 println!("  {name:<14} {description}");
             }
+            std::process::ExitCode::SUCCESS
         }
+        Some("codelists") => codelists::run(arguments.get(2..).unwrap_or_default()),
         Some(other) => {
             eprintln!("xtask: unknown task {other:?}");
-            std::process::exit(2);
+            std::process::ExitCode::from(2)
         }
     }
 }
