@@ -268,13 +268,14 @@ VAT breakdown. `tools/validate-vat-matrix.sh` validates standard, zero-rated,
 exempt, reverse-charge, intra-community, export, and outside-scope invoices
 against Mustang: **7/7 valid**.
 
-Number allocation, issue-time conformance, and finding field paths are in place;
-the GUI now offers a Focus action for editable fields. Not yet done: suppression
-with a recorded reason (M2.5), codelist bundles and integrity manifests (M2.2),
-the official artefact runner (M2.3), credit notes (M2.7), and the Peppol profile
-layer beyond the current rule set (M2.8). Explicit deliver-to address fields
-beyond the buyer country remain for a later slice. Workspace tests: 158 encrypted,
-156 plain.
+Number allocation, issue-time conformance, finding paths, and click-to-focus are
+in place. M2.5 is complete: non-blocking warnings can be suppressed with a
+mandatory reason, stored in `validation_suppression`, and recorded on the audit
+chain as `finding_suppressed`; blocking findings are never suppressible. Schema
+version is now 3. Remaining: codelist bundles and integrity manifests (M2.2), the
+official artefact runner (M2.3), credit notes (M2.7), and the Peppol profile layer
+beyond the current rule set (M2.8). Explicit deliver-to address fields beyond the
+buyer country remain for a later slice. Workspace tests: 160 encrypted, 158 plain.
 
 Exit criteria:
 

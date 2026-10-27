@@ -37,6 +37,17 @@ pub struct CustomerRecord {
     pub party: Party,
 }
 
+/// A recorded suppression of a non-blocking validation warning.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Suppression {
+    /// Rule code, e.g. `T1-013`.
+    pub code: String,
+    /// Field path the finding pointed at.
+    pub field: String,
+    /// Why the warning was accepted.
+    pub reason: String,
+}
+
 /// Request to issue a draft.
 pub struct IssueRequest<'a> {
     /// Draft to issue.
@@ -282,6 +293,76 @@ pub fn save_draft(conn: &Connection, draft: &InvoiceDraft, now: &str) -> Result<
 
     transaction.commit()?;
     Ok(())
+}
+
+/// Records a suppression for a non-blocking finding on a draft.
+///
+/// Suppressions are scoped to the draft, rule code, and field path. The reason
+/// is mandatory and is appended to the audit chain.
+pub fn save_suppression(
+    conn: &Connection,
+    draft_id: DocumentId,
+    code: &str,
+    field: &str,
+    reason: &str,
+    actor: &str,
+    now: &str,
+) -> Result<(), StoreError> {
+    let reason = reason.trim();
+    if reason.is_empty() {
+        return Err(StoreError::Data("a suppression reason is required".to_owned()));
+    }
+
+    let transaction = conn.unchecked_transaction()?;
+    transaction.execute(
+        "INSERT INTO validation_suppression
+             (id, draft_id, rule_code, field_path, reason, created_at, actor)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+         ON CONFLICT(draft_id, rule_code, field_path) DO UPDATE SET
+             reason = excluded.reason,
+             created_at = excluded.created_at,
+             actor = excluded.actor",
+        params![
+            DocumentId::new().to_string(),
+            draft_id.to_string(),
+            code,
+            field,
+            reason,
+            now,
+            actor,
+        ],
+    )?;
+    audit::append(
+        &transaction,
+        now,
+        actor,
+        "finding_suppressed",
+        "invoice_draft",
+        &draft_id.to_string(),
+        json!({ "code": code, "field": field, "reason": reason }),
+    )?;
+    transaction.commit()?;
+    Ok(())
+}
+
+/// Lists the recorded suppressions for a draft.
+pub fn list_suppressions(conn: &Connection, draft_id: DocumentId) -> Result<Vec<Suppression>, StoreError> {
+    let mut statement = conn.prepare(
+        "SELECT rule_code, field_path, reason
+         FROM validation_suppression
+         WHERE draft_id = ?1
+         ORDER BY created_at, rule_code, field_path",
+    )?;
+    let mut rows = statement.query([draft_id.to_string()])?;
+    let mut suppressions = Vec::new();
+    while let Some(row) = rows.next()? {
+        suppressions.push(Suppression {
+            code: row.get(0)?,
+            field: row.get(1)?,
+            reason: row.get(2)?,
+        });
+    }
+    Ok(suppressions)
 }
 
 fn insert_line(conn: &Connection, draft_id: DocumentId, line: &DraftLine) -> Result<(), StoreError> {

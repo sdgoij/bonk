@@ -6,8 +6,9 @@ use crux::{
     Quantity, SellerId, TaxTreatment, UnitCode, VatRate,
 };
 use store::{
-    CustomerRecord, Database, IssueRequest, KdfParams, KeyStore, SellerRecord, attach_artefact, insert_customer,
-    insert_draft, insert_seller, issue_draft, load_customer, load_draft, load_seller, verify_artefacts,
+    CustomerRecord, Database, IssueRequest, KdfParams, KeyStore, SellerRecord, Suppression, attach_artefact,
+    insert_customer, insert_draft, insert_seller, issue_draft, list_suppressions, load_customer, load_draft,
+    load_seller, save_suppression, verify_artefacts,
 };
 use tempfile::TempDir;
 
@@ -100,6 +101,59 @@ fn parties_and_drafts_round_trip() {
     assert_eq!(loaded.lines[0].treatment.rate, VatRate::STANDARD_NL);
     assert_eq!(loaded.due_date, draft.due_date);
     assert_eq!(loaded.delivery_date, draft.delivery_date);
+}
+
+#[test]
+fn suppressions_are_recorded_and_updated() {
+    let (_dir, database, seller_id, customer_id) = seeded();
+    let draft = draft_for(seller_id, customer_id);
+    insert_draft(database.connection(), &draft, NOW).unwrap();
+
+    save_suppression(
+        database.connection(),
+        draft.id,
+        "T1-013",
+        "lines[0].exemption_reason",
+        "Known exempt supply",
+        "test",
+        NOW,
+    )
+    .unwrap();
+    assert_eq!(
+        list_suppressions(database.connection(), draft.id).unwrap(),
+        vec![Suppression {
+            code: "T1-013".to_owned(),
+            field: "lines[0].exemption_reason".to_owned(),
+            reason: "Known exempt supply".to_owned(),
+        }]
+    );
+
+    save_suppression(
+        database.connection(),
+        draft.id,
+        "T1-013",
+        "lines[0].exemption_reason",
+        "Updated reason",
+        "test",
+        NOW,
+    )
+    .unwrap();
+    let suppressions = list_suppressions(database.connection(), draft.id).unwrap();
+    assert_eq!(suppressions.len(), 1);
+    assert_eq!(suppressions[0].reason, "Updated reason");
+
+    assert!(
+        save_suppression(
+            database.connection(),
+            draft.id,
+            "T1-013",
+            "lines[0].exemption_reason",
+            "   ",
+            "test",
+            NOW,
+        )
+        .is_err()
+    );
 }
 
 #[test]

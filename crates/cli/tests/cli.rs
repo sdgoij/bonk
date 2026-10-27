@@ -91,7 +91,7 @@ fn init_then_verify() {
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("integrity check passed"), "stdout: {stdout}");
-    assert!(stdout.contains("schema:   2"), "stdout: {stdout}");
+    assert!(stdout.contains("schema:   3"), "stdout: {stdout}");
     if cfg!(feature = "cipher") {
         assert!(stdout.contains("encryption: sqlcipher"), "stdout: {stdout}");
     } else {

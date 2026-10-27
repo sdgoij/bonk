@@ -423,7 +423,7 @@ mod tests {
         {
             let session = Session::create(&database, &keystore, "passphrase").unwrap();
             assert_eq!(session.summary().unwrap().sellers, 0);
-            assert_eq!(session.summary().unwrap().schema_version, 2);
+            assert_eq!(session.summary().unwrap().schema_version, 3);
             assert!(session.database_path().exists());
         }
 

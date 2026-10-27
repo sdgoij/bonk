@@ -9,8 +9,8 @@ use crux::{
     validate_draft,
 };
 use store::{
-    CustomerRecord, IssueRequest, IssuedInvoice, SellerRecord, StoreError, attach_artefact, first_seller,
-    insert_customer, insert_seller, issue_draft, list_customers, save_draft,
+    CustomerRecord, IssueRequest, IssuedInvoice, SellerRecord, StoreError, Suppression, attach_artefact, first_seller,
+    insert_customer, insert_seller, issue_draft, list_customers, list_suppressions, save_draft, save_suppression,
 };
 
 use crate::Session;
@@ -48,8 +48,22 @@ pub struct Workspace {
     pdf: Option<PdfDocument>,
     pdf_path: String,
     conformance_findings: Vec<Finding>,
+    suppressions: Vec<Suppression>,
+    suppress_target: Option<SuppressionTarget>,
+    suppression_reason: String,
     focus_request: Option<String>,
     message: Option<Message>,
+}
+
+#[derive(Clone)]
+struct SuppressionTarget {
+    code: String,
+    field: String,
+}
+
+enum FindingAction {
+    Focus(String),
+    Suppress { code: String, field: String },
 }
 
 struct PdfDocument {
@@ -186,6 +200,9 @@ impl Workspace {
             pdf: None,
             pdf_path: String::new(),
             conformance_findings: Vec::new(),
+            suppressions: Vec::new(),
+            suppress_target: None,
+            suppression_reason: String::new(),
             focus_request: None,
             message: None,
         })
@@ -217,8 +234,8 @@ impl Workspace {
         }
 
         if !self.conformance_findings.is_empty() {
-            if let Some(field) = show_findings(ui, &self.conformance_findings) {
-                self.focus_request = Some(field);
+            if let Some(action) = show_findings(ui, &self.conformance_findings) {
+                self.apply_finding_action(action);
             }
             ui.separator();
         }
@@ -229,10 +246,112 @@ impl Workspace {
             self.unlocked_ui(ui, session, focus.as_deref());
         }
 
+        self.suppression_dialog(ui, session);
+
         if lock {
             WorkspaceAction::Lock
         } else {
             WorkspaceAction::None
+        }
+    }
+
+    fn apply_finding_action(&mut self, action: FindingAction) {
+        match action {
+            FindingAction::Focus(field) => self.focus_request = Some(field),
+            FindingAction::Suppress { code, field } => {
+                self.suppress_target = Some(SuppressionTarget { code, field });
+                self.suppression_reason.clear();
+            }
+        }
+    }
+
+    fn suppression_dialog(&mut self, ui: &mut egui::Ui, session: &Session) {
+        let Some(target) = self.suppress_target.clone() else {
+            return;
+        };
+        let mut open = true;
+        let mut record = false;
+        let mut cancel = false;
+        egui::Window::new("Suppress warning")
+            .collapsible(false)
+            .resizable(false)
+            .open(&mut open)
+            .show(ui.ctx(), |ui| {
+                ui.label(format!("{} at {}", target.code, target.field));
+                ui.label("Reason");
+                ui.add(
+                    egui::TextEdit::multiline(&mut self.suppression_reason)
+                        .desired_width(360.0)
+                        .desired_rows(3),
+                );
+                ui.horizontal(|ui| {
+                    if ui.button("Record suppression").clicked() {
+                        record = true;
+                    }
+                    if ui.button("Cancel").clicked() {
+                        cancel = true;
+                    }
+                });
+            });
+        if record {
+            self.record_suppression(session);
+        }
+        if cancel || !open {
+            self.suppress_target = None;
+            self.suppression_reason.clear();
+        }
+    }
+
+    fn record_suppression(&mut self, session: &Session) {
+        let Some(seller) = self.seller.clone() else {
+            self.message = Some(Message::error("Create the seller before suppressing findings."));
+            return;
+        };
+        let Some(editor) = self.editor.clone() else {
+            self.message = Some(Message::error("Open an invoice before suppressing findings."));
+            return;
+        };
+        let Some(target) = self.suppress_target.clone() else {
+            return;
+        };
+        let reason = self.suppression_reason.trim();
+        if reason.is_empty() {
+            self.message = Some(Message::error("A suppression reason is required."));
+            return;
+        }
+        let draft = match build_draft(&editor, &seller) {
+            Ok(draft) => draft,
+            Err(error) => {
+                self.message = Some(Message::error(error));
+                return;
+            }
+        };
+
+        let now = store::now_rfc3339();
+        let connection = session.database().connection();
+        if let Err(error) = save_draft(connection, &draft, &now) {
+            self.message = Some(Message::error(error.to_string()));
+            return;
+        }
+        match save_suppression(
+            connection,
+            draft.id,
+            &target.code,
+            &target.field,
+            reason,
+            "desktop",
+            &now,
+        ) {
+            Ok(()) => match list_suppressions(connection, draft.id) {
+                Ok(suppressions) => {
+                    self.suppressions = suppressions;
+                    self.suppress_target = None;
+                    self.suppression_reason.clear();
+                    self.message = Some(Message::ok("Warning suppressed with a recorded reason."));
+                }
+                Err(error) => self.message = Some(Message::error(error.to_string())),
+            },
+            Err(error) => self.message = Some(Message::error(error.to_string())),
         }
     }
 
@@ -296,6 +415,9 @@ impl Workspace {
                 self.pdf = None;
                 self.pdf_path.clear();
                 self.conformance_findings.clear();
+                self.suppressions.clear();
+                self.suppress_target = None;
+                self.suppression_reason.clear();
             }
             return;
         }
@@ -308,6 +430,9 @@ impl Workspace {
             if ui.button("New invoice").clicked() {
                 let customer = self.customers.first().map(|customer| customer.id);
                 self.editor = Some(Editor::new(customer));
+                self.suppressions.clear();
+                self.suppress_target = None;
+                self.suppression_reason.clear();
             }
             if ui.button("Add customer").clicked() {
                 self.show_customer_form = !self.show_customer_form;
@@ -459,7 +584,7 @@ impl Workspace {
             issue = ui.button("Issue").clicked();
         }
 
-        let mut focus_request = None;
+        let mut finding_action = None;
         if let Some(editor) = &self.editor {
             match build_draft(editor, &seller) {
                 Ok(draft) => {
@@ -484,8 +609,16 @@ impl Workspace {
                     {
                         Some(customer) => {
                             let findings = validate_draft(&draft, &seller.party, &customer.party);
-                            if let Some(field) = show_findings(ui, &findings) {
-                                focus_request = Some(field);
+                            let suppressed = findings.iter().filter(|finding| self.is_suppressed(finding)).count();
+                            let visible: Vec<Finding> = findings
+                                .into_iter()
+                                .filter(|finding| !self.is_suppressed(finding))
+                                .collect();
+                            if let Some(action) = show_findings(ui, &visible) {
+                                finding_action = Some(action);
+                            }
+                            if suppressed > 0 {
+                                ui.label(format!("{suppressed} warning(s) suppressed with a recorded reason"));
                             }
                         }
                         None => {
@@ -498,8 +631,8 @@ impl Workspace {
                 }
             }
         }
-        if let Some(field) = focus_request {
-            self.focus_request = Some(field);
+        if let Some(action) = finding_action {
+            self.apply_finding_action(action);
         }
 
         if save {
@@ -508,6 +641,10 @@ impl Workspace {
         if issue {
             self.issue(session);
         }
+    }
+
+    fn is_suppressed(&self, finding: &Finding) -> bool {
+        suppressed_by(finding, &self.suppressions)
     }
 
     fn create_seller(&mut self, session: &Session) {
@@ -787,6 +924,13 @@ fn build_draft(editor: &Editor, seller: &SellerRecord) -> Result<InvoiceDraft, S
     Ok(draft)
 }
 
+fn suppressed_by(finding: &Finding, suppressions: &[Suppression]) -> bool {
+    finding.severity == Severity::Warning
+        && suppressions
+            .iter()
+            .any(|suppression| suppression.code == finding.code && suppression.field == finding.field)
+}
+
 fn text_field(ui: &mut egui::Ui, value: &mut String, field: &str, width: f32, focus: Option<&str>) {
     let response = ui.add(
         egui::TextEdit::singleline(value)
@@ -798,8 +942,8 @@ fn text_field(ui: &mut egui::Ui, value: &mut String, field: &str, width: f32, fo
     }
 }
 
-fn show_findings(ui: &mut egui::Ui, findings: &[Finding]) -> Option<String> {
-    let mut focus = None;
+fn show_findings(ui: &mut egui::Ui, findings: &[Finding]) -> Option<FindingAction> {
+    let mut action = None;
     for finding in findings.iter().take(12) {
         let color = match finding.severity {
             Severity::Blocking => ERROR_COLOR,
@@ -808,18 +952,26 @@ fn show_findings(ui: &mut egui::Ui, findings: &[Finding]) -> Option<String> {
         };
         let bt = finding.bt.unwrap_or("-");
         let text = format!("{} [{}] {}: {}", finding.code, bt, finding.field, finding.message);
-        if focusable(&finding.field) {
+        let can_focus = focusable(&finding.field);
+        let can_suppress = finding.severity == Severity::Warning;
+        if can_focus || can_suppress {
             ui.horizontal(|ui| {
                 ui.colored_label(color, text);
-                if ui.small_button("Focus").clicked() {
-                    focus = Some(finding.field.clone());
+                if can_focus && ui.small_button("Focus").clicked() {
+                    action = Some(FindingAction::Focus(finding.field.clone()));
+                }
+                if can_suppress && ui.small_button("Suppress").clicked() {
+                    action = Some(FindingAction::Suppress {
+                        code: finding.code.to_owned(),
+                        field: finding.field.clone(),
+                    });
                 }
             });
         } else {
             ui.colored_label(color, text);
         }
     }
-    focus
+    action
 }
 
 fn focusable(field: &str) -> bool {
@@ -958,5 +1110,30 @@ mod tests {
         ] {
             assert!(!focusable(field), "{field} should not be focusable");
         }
+    }
+
+    #[test]
+    fn only_matching_warnings_are_suppressed() {
+        let suppressions = vec![Suppression {
+            code: "T1-013".to_owned(),
+            field: "lines[0].exemption_reason".to_owned(),
+            reason: "Known exempt supply".to_owned(),
+        }];
+        let warning = Finding::warning(
+            "T1-013",
+            Some("BT-120"),
+            "lines[0].exemption_reason",
+            "an exemption reason is expected",
+        );
+        assert!(suppressed_by(&warning, &suppressions));
+        assert!(!suppressed_by(&warning, &[]));
+
+        let blocking = Finding::blocking(
+            "T1-013",
+            Some("BT-120"),
+            "lines[0].exemption_reason",
+            "an exemption reason is required",
+        );
+        assert!(!suppressed_by(&blocking, &suppressions));
     }
 }
