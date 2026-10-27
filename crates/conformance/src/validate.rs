@@ -1,0 +1,565 @@
+//! Core EN 16931 business rules.
+//!
+//! The engine deliberately covers the high-frequency arithmetic and VAT-category
+//! rules first. Official Schematron/XSLT remains the authority for profiles and
+//! codelists; these checks provide immediate, field-level feedback and a second
+//! line of defence before export.
+
+use std::collections::{BTreeMap, BTreeSet};
+
+use crux::{Finding, Money, VatCategory, VatRate, tax_amount};
+
+use crate::rule::{
+    BR_02, BR_16, BR_CO_10, BR_CO_13, BR_CO_14, BR_CO_15, BR_CO_16, BR_CO_17, BR_O_12, Rule, category_rules,
+};
+use crate::semantic::SemanticInvoice;
+
+/// Runs the implemented EN 16931 rules over a semantic invoice.
+///
+/// Every finding is blocking: the caller should not issue or export while the
+/// result is non-empty.
+pub fn validate(invoice: &SemanticInvoice<'_>) -> Vec<Finding> {
+    let mut findings = Vec::new();
+
+    if invoice.number.trim().is_empty() {
+        findings.push(BR_02.finding("number", "An invoice shall have an invoice number."));
+    }
+
+    if invoice.lines.is_empty() {
+        findings.push(BR_16.finding("lines", "An invoice shall have at least one invoice line."));
+        return findings;
+    }
+
+    let Some(line_nets) = sum_line_nets(invoice, &mut findings) else {
+        return findings;
+    };
+
+    validate_totals(invoice, line_nets, &mut findings);
+    validate_breakdowns(invoice, &mut findings);
+    validate_categories(invoice, &mut findings);
+    validate_exemptions(invoice, &mut findings);
+
+    findings
+}
+
+fn sum_line_nets(invoice: &SemanticInvoice<'_>, findings: &mut Vec<Finding>) -> Option<Money> {
+    let mut sum = Money::zero(invoice.currency);
+    for (index, line) in invoice.lines.iter().enumerate() {
+        let net = match line.net() {
+            Ok(net) => net,
+            Err(error) => {
+                findings.push(BR_CO_10.finding(
+                    format!("lines[{index}].quantity"),
+                    format!("line net cannot be computed: {error}"),
+                ));
+                return None;
+            }
+        };
+        if net.currency() != invoice.currency {
+            findings.push(BR_CO_10.finding(
+                format!("lines[{index}].unit_price"),
+                "line currency does not match the invoice currency",
+            ));
+            return None;
+        }
+        sum = match sum.checked_add(net) {
+            Ok(sum) => sum,
+            Err(error) => {
+                findings.push(BR_CO_10.finding("totals.net", format!("line net amounts cannot be summed: {error}")));
+                return None;
+            }
+        };
+    }
+    Some(sum)
+}
+
+fn validate_totals(invoice: &SemanticInvoice<'_>, line_nets: Money, findings: &mut Vec<Finding>) {
+    if invoice.totals.net != line_nets {
+        findings.push(BR_CO_10.finding(
+            "totals.net",
+            format!(
+                "sum of line net amounts is {}, but BT-106 is {}",
+                money_text(line_nets),
+                money_text(invoice.totals.net)
+            ),
+        ));
+    }
+
+    let expected_exclusive = invoice
+        .totals
+        .net
+        .checked_sub(invoice.allowances)
+        .and_then(|value| value.checked_add(invoice.charges));
+    compare_amount(
+        &BR_CO_13,
+        "totals.tax_exclusive",
+        "invoice total without VAT",
+        invoice.tax_exclusive,
+        expected_exclusive,
+        findings,
+    );
+
+    let mut breakdown_tax = Money::zero(invoice.currency);
+    let mut breakdown_ok = true;
+    for row in &invoice.totals.breakdown {
+        match breakdown_tax.checked_add(row.tax) {
+            Ok(value) => breakdown_tax = value,
+            Err(error) => {
+                findings.push(BR_CO_14.finding(
+                    "tax_breakdown",
+                    format!("VAT category tax amounts cannot be summed: {error}"),
+                ));
+                breakdown_ok = false;
+                break;
+            }
+        }
+    }
+    if breakdown_ok && invoice.totals.tax != breakdown_tax {
+        findings.push(BR_CO_14.finding(
+            "totals.tax",
+            format!(
+                "sum of VAT category tax amounts is {}, but BT-110 is {}",
+                money_text(breakdown_tax),
+                money_text(invoice.totals.tax)
+            ),
+        ));
+    }
+
+    let expected_inclusive = invoice.tax_exclusive.checked_add(invoice.totals.tax);
+    compare_amount(
+        &BR_CO_15,
+        "totals.tax_inclusive",
+        "invoice total with VAT",
+        invoice.tax_inclusive,
+        expected_inclusive,
+        findings,
+    );
+
+    let expected_due = invoice
+        .tax_inclusive
+        .checked_sub(invoice.paid)
+        .and_then(|value| value.checked_add(invoice.rounding));
+    compare_amount(
+        &BR_CO_16,
+        "totals.amount_due",
+        "amount due for payment",
+        invoice.amount_due,
+        expected_due,
+        findings,
+    );
+}
+
+fn validate_breakdowns(invoice: &SemanticInvoice<'_>, findings: &mut Vec<Finding>) {
+    let bases = line_bases(invoice);
+
+    for (index, row) in invoice.totals.breakdown.iter().enumerate() {
+        let rate = match VatRate::from_basis_points(row.rate_bp) {
+            Ok(rate) => rate,
+            Err(error) => {
+                findings.push(BR_CO_17.finding(
+                    format!("tax_breakdown[{index}].rate"),
+                    format!("invalid VAT category rate: {error}"),
+                ));
+                continue;
+            }
+        };
+
+        let expected_tax = tax_amount(row.taxable_base, rate);
+        match expected_tax {
+            Ok(expected) if expected == row.tax => {}
+            Ok(expected) => {
+                let rule = category_rules(row.category).map_or(&BR_CO_17, |rules| rules.tax);
+                findings.push(rule.finding(
+                    format!("tax_breakdown[{index}].tax"),
+                    format!(
+                        "expected VAT category tax {}, found {}",
+                        money_text(expected),
+                        money_text(row.tax)
+                    ),
+                ));
+            }
+            Err(error) => {
+                findings.push(BR_CO_17.finding(
+                    format!("tax_breakdown[{index}].tax"),
+                    format!("VAT category tax cannot be computed: {error}"),
+                ));
+            }
+        }
+
+        if invoice.allowances.is_zero() && invoice.charges.is_zero() {
+            let Some(rules) = category_rules(row.category) else {
+                continue;
+            };
+            let rate_key = if row.category == VatCategory::Standard {
+                row.rate_bp
+            } else {
+                0
+            };
+            let expected = bases
+                .get(&(row.category, rate_key))
+                .copied()
+                .unwrap_or_else(|| Money::zero(invoice.currency));
+            if expected != row.taxable_base {
+                findings.push(rules.base.finding(
+                    format!("tax_breakdown[{index}].taxable_base"),
+                    format!(
+                        "expected taxable amount {}, found {}",
+                        money_text(expected),
+                        money_text(row.taxable_base)
+                    ),
+                ));
+            }
+        }
+    }
+}
+
+fn line_bases(invoice: &SemanticInvoice<'_>) -> BTreeMap<(VatCategory, u16), Money> {
+    let mut bases = BTreeMap::new();
+    for line in invoice.lines {
+        let Ok(net) = line.net() else {
+            continue;
+        };
+        let rate = if line.treatment.category == VatCategory::Standard {
+            line.treatment.rate.basis_points()
+        } else {
+            0
+        };
+        let entry = bases
+            .entry((line.treatment.category, rate))
+            .or_insert_with(|| Money::zero(invoice.currency));
+        if let Ok(sum) = entry.checked_add(net) {
+            *entry = sum;
+        }
+    }
+    bases
+}
+
+fn validate_categories(invoice: &SemanticInvoice<'_>, findings: &mut Vec<Finding>) {
+    let line_categories: BTreeSet<VatCategory> = invoice.lines.iter().map(|line| line.treatment.category).collect();
+    let breakdown_categories: BTreeSet<VatCategory> = invoice.totals.breakdown.iter().map(|row| row.category).collect();
+
+    for category in &line_categories {
+        if let Some(rules) = category_rules(*category)
+            && !breakdown_categories.contains(category)
+        {
+            findings.push(rules.presence.finding(
+                "tax_breakdown",
+                format!("VAT category {} has no VAT breakdown", category.code()),
+            ));
+        }
+    }
+
+    for (index, line) in invoice.lines.iter().enumerate() {
+        let category = line.treatment.category;
+        let Some(rules) = category_rules(category) else {
+            continue;
+        };
+        let invalid = if category == VatCategory::Standard {
+            line.treatment.rate.is_zero()
+        } else {
+            !line.treatment.rate.is_zero()
+        };
+        if invalid {
+            findings.push(rules.rate.finding(
+                format!("lines[{index}].rate"),
+                if category == VatCategory::Standard {
+                    "a standard-rated line must have a VAT rate greater than zero"
+                } else {
+                    "this VAT category requires a zero VAT rate"
+                },
+            ));
+        }
+    }
+
+    if line_categories.contains(&VatCategory::OutsideScope) && line_categories.len() > 1 {
+        findings.push(BR_O_12.finding(
+            "lines",
+            "an invoice with a not-subject-to-VAT line cannot mix other VAT categories",
+        ));
+    }
+}
+
+fn validate_exemptions(invoice: &SemanticInvoice<'_>, findings: &mut Vec<Finding>) {
+    for (index, row) in invoice.totals.breakdown.iter().enumerate() {
+        let Some(rules) = category_rules(row.category) else {
+            continue;
+        };
+        let has_reason = invoice
+            .lines
+            .iter()
+            .filter(|line| line.treatment.category == row.category)
+            .any(|line| {
+                line.treatment
+                    .exemption_reason
+                    .as_deref()
+                    .is_some_and(|reason| !reason.trim().is_empty())
+                    || line
+                        .treatment
+                        .exemption_reason_code
+                        .as_deref()
+                        .is_some_and(|code| !code.trim().is_empty())
+            });
+
+        if rules.exemption_required && !has_reason {
+            findings.push(rules.exemption.finding(
+                format!("tax_breakdown[{index}].exemption_reason"),
+                "this VAT category requires an exemption reason",
+            ));
+        } else if !rules.exemption_required && has_reason {
+            findings.push(rules.exemption.finding(
+                format!("tax_breakdown[{index}].exemption_reason"),
+                "this VAT category must not have an exemption reason",
+            ));
+        }
+    }
+}
+
+fn compare_amount(
+    rule: &Rule,
+    field: &str,
+    description: &str,
+    actual: Money,
+    expected: Result<Money, crux::DomainError>,
+    findings: &mut Vec<Finding>,
+) {
+    match expected {
+        Ok(expected) if expected == actual => {}
+        Ok(expected) => findings.push(rule.finding(
+            field,
+            format!(
+                "{description}: expected {}, found {}",
+                money_text(expected),
+                money_text(actual)
+            ),
+        )),
+        Err(error) => findings.push(rule.finding(field, format!("{description} cannot be computed: {error}"))),
+    }
+}
+
+fn money_text(value: Money) -> String {
+    value.to_fixed_string(2).unwrap_or_else(|_| value.micros().to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use crux::{
+        Address, CountryCode, Currency, CustomerId, DraftLine, InvoiceDraft, InvoiceTotals, LineId, LocalDate, Money,
+        Party, Quantity, SellerId, TaxTreatment, UnitCode, VatCategory, VatRate, calculate_totals,
+    };
+
+    use super::*;
+    use crate::profile::Profile;
+
+    fn party(name: &str) -> Party {
+        Party::new(name, Address::new("Amsterdam", CountryCode::NL))
+    }
+
+    fn line(position: u32, major: i64, treatment: TaxTreatment) -> DraftLine {
+        DraftLine {
+            id: LineId::new(),
+            position,
+            name: format!("Line {position}"),
+            description: None,
+            quantity: Quantity::ONE,
+            unit: UnitCode::PIECE,
+            unit_price: Money::from_major_units(major, Currency::EUR).unwrap(),
+            price_base_quantity: Quantity::ONE,
+            treatment,
+        }
+    }
+
+    fn draft(lines: Vec<DraftLine>) -> InvoiceDraft {
+        let mut draft = InvoiceDraft::new(
+            SellerId::new(),
+            CustomerId::new(),
+            Currency::EUR,
+            LocalDate::parse_iso("2026-10-27").unwrap(),
+        );
+        draft.lines = lines;
+        draft
+    }
+
+    fn semantic_invoice<'a>(
+        number: &'a str,
+        draft: &'a InvoiceDraft,
+        seller: &'a Party,
+        buyer: &'a Party,
+    ) -> SemanticInvoice<'a> {
+        let totals = calculate_totals(&draft.lines).unwrap();
+        SemanticInvoice::from_draft(number, draft, seller, buyer, totals, Profile::En16931)
+    }
+
+    fn has(findings: &[Finding], code: &str) -> bool {
+        findings.iter().any(|finding| finding.code == code)
+    }
+
+    #[test]
+    fn a_consistent_standard_invoice_is_clean() {
+        let seller = party("Seller BV");
+        let buyer = party("Buyer BV");
+        let draft = draft(vec![line(1, 100, TaxTreatment::standard(VatRate::STANDARD_NL))]);
+        let invoice = semantic_invoice("2026-0001", &draft, &seller, &buyer);
+
+        let findings = validate(&invoice);
+        assert!(findings.is_empty(), "unexpected findings: {findings:?}");
+    }
+
+    #[test]
+    fn invoice_number_is_required() {
+        let seller = party("Seller BV");
+        let buyer = party("Buyer BV");
+        let draft = draft(vec![line(1, 100, TaxTreatment::standard(VatRate::STANDARD_NL))]);
+        let invoice = semantic_invoice("", &draft, &seller, &buyer);
+
+        assert!(has(&validate(&invoice), "BR-02"));
+    }
+
+    #[test]
+    fn an_empty_invoice_stops_at_br_16() {
+        let seller = party("Seller BV");
+        let buyer = party("Buyer BV");
+        let draft = draft(Vec::new());
+        let totals = InvoiceTotals {
+            net: Money::zero(Currency::EUR),
+            tax: Money::zero(Currency::EUR),
+            gross: Money::zero(Currency::EUR),
+            breakdown: Vec::new(),
+        };
+        let invoice = SemanticInvoice::from_draft("2026-0001", &draft, &seller, &buyer, totals, Profile::En16931);
+
+        let findings = validate(&invoice);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].code, "BR-16");
+    }
+
+    #[test]
+    fn line_sum_mismatch_is_br_co_10() {
+        let seller = party("Seller BV");
+        let buyer = party("Buyer BV");
+        let draft = draft(vec![line(1, 100, TaxTreatment::standard(VatRate::STANDARD_NL))]);
+        let mut invoice = semantic_invoice("2026-0001", &draft, &seller, &buyer);
+        invoice.totals.net = Money::from_major_units(101, Currency::EUR).unwrap();
+
+        assert!(has(&validate(&invoice), "BR-CO-10"));
+    }
+
+    #[test]
+    fn total_arithmetic_has_specific_codes() {
+        let seller = party("Seller BV");
+        let buyer = party("Buyer BV");
+        let draft = draft(vec![line(1, 100, TaxTreatment::standard(VatRate::STANDARD_NL))]);
+
+        let mut invoice = semantic_invoice("2026-0001", &draft, &seller, &buyer);
+        invoice.tax_exclusive = Money::from_major_units(99, Currency::EUR).unwrap();
+        assert!(has(&validate(&invoice), "BR-CO-13"));
+
+        let mut invoice = semantic_invoice("2026-0001", &draft, &seller, &buyer);
+        invoice.totals.tax = Money::from_major_units(22, Currency::EUR).unwrap();
+        assert!(has(&validate(&invoice), "BR-CO-14"));
+
+        let mut invoice = semantic_invoice("2026-0001", &draft, &seller, &buyer);
+        invoice.tax_inclusive = Money::from_major_units(122, Currency::EUR).unwrap();
+        assert!(has(&validate(&invoice), "BR-CO-15"));
+
+        let mut invoice = semantic_invoice("2026-0001", &draft, &seller, &buyer);
+        invoice.amount_due = Money::from_major_units(120, Currency::EUR).unwrap();
+        assert!(has(&validate(&invoice), "BR-CO-16"));
+    }
+
+    #[test]
+    fn breakdown_tax_and_base_use_category_rules() {
+        let seller = party("Seller BV");
+        let buyer = party("Buyer BV");
+        let draft = draft(vec![line(1, 100, TaxTreatment::standard(VatRate::STANDARD_NL))]);
+
+        let mut invoice = semantic_invoice("2026-0001", &draft, &seller, &buyer);
+        invoice.totals.breakdown[0].tax = Money::from_major_units(22, Currency::EUR).unwrap();
+        assert!(has(&validate(&invoice), "BR-S-09"));
+
+        let mut invoice = semantic_invoice("2026-0001", &draft, &seller, &buyer);
+        invoice.totals.breakdown[0].taxable_base = Money::from_major_units(90, Currency::EUR).unwrap();
+        assert!(has(&validate(&invoice), "BR-S-08"));
+    }
+
+    #[test]
+    fn category_rate_pairing_is_checked() {
+        let seller = party("Seller BV");
+        let buyer = party("Buyer BV");
+        let draft = draft(vec![line(1, 100, TaxTreatment::standard(VatRate::ZERO))]);
+        let invoice = semantic_invoice("2026-0001", &draft, &seller, &buyer);
+
+        assert!(has(&validate(&invoice), "BR-S-05"));
+    }
+
+    #[test]
+    fn exempt_breakdown_needs_an_exemption_reason() {
+        let seller = party("Seller BV");
+        let buyer = party("Buyer BV");
+        let draft = draft(vec![line(1, 100, TaxTreatment::zero(VatCategory::Exempt))]);
+        let invoice = semantic_invoice("2026-0001", &draft, &seller, &buyer);
+
+        assert!(has(&validate(&invoice), "BR-E-10"));
+    }
+
+    #[test]
+    fn exempt_breakdown_with_a_reason_is_clean() {
+        let seller = party("Seller BV");
+        let buyer = party("Buyer BV");
+        let treatment = TaxTreatment::zero(VatCategory::Exempt).with_exemption_reason("Exempt supply");
+        let draft = draft(vec![line(1, 100, treatment)]);
+        let invoice = semantic_invoice("2026-0001", &draft, &seller, &buyer);
+
+        let findings = validate(&invoice);
+        assert!(findings.is_empty(), "unexpected findings: {findings:?}");
+    }
+
+    #[test]
+    fn exempt_line_rejects_a_non_zero_rate() {
+        let seller = party("Seller BV");
+        let buyer = party("Buyer BV");
+        let treatment = TaxTreatment {
+            category: VatCategory::Exempt,
+            rate: VatRate::STANDARD_NL,
+            exemption_reason: Some("Exempt supply".to_owned()),
+            exemption_reason_code: None,
+        };
+        let draft = draft(vec![line(1, 100, treatment)]);
+        let invoice = semantic_invoice("2026-0001", &draft, &seller, &buyer);
+
+        assert!(has(&validate(&invoice), "BR-E-05"));
+    }
+
+    #[test]
+    fn outside_scope_cannot_mix_categories() {
+        let seller = party("Seller BV");
+        let buyer = party("Buyer BV");
+        let draft = draft(vec![
+            line(1, 100, TaxTreatment::zero(VatCategory::OutsideScope)),
+            line(2, 50, TaxTreatment::standard(VatRate::STANDARD_NL)),
+        ]);
+        let invoice = semantic_invoice("2026-0001", &draft, &seller, &buyer);
+
+        assert!(has(&validate(&invoice), "BR-O-12"));
+    }
+
+    #[test]
+    fn every_emitted_code_is_catalogued() {
+        let seller = party("Seller BV");
+        let buyer = party("Buyer BV");
+        let draft = draft(vec![
+            line(1, 100, TaxTreatment::standard(VatRate::ZERO)),
+            line(2, 50, TaxTreatment::zero(VatCategory::Exempt)),
+        ]);
+        let invoice = semantic_invoice("", &draft, &seller, &buyer);
+        let findings = validate(&invoice);
+
+        assert!(!findings.is_empty());
+        for finding in findings {
+            assert!(
+                crate::rule::rule(finding.code).is_some(),
+                "{} is not in the catalogue",
+                finding.code
+            );
+        }
+    }
+}

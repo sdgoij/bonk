@@ -246,6 +246,20 @@ Work packages:
 | M2.7 | Credit notes (381) and corrective invoices, with reference rules | 3 d |
 | M2.8 | Peppol BIS 3.0 profile layer (endpoint/party identifiers, extra rules) | 4 d |
 
+**Status, 2026-10-27.** The conformance foundation is in place. `conformance`
+now exposes EN 16931 and Peppol BIS 3.0 profiles, a BT/BG registry, a rule
+catalogue with official codes, a semantic invoice view, and blocking checks for
+BR-02, BR-16, BR-CO-10/13/14/15/16/17, the S/Z/E/AE/IC/G/O category presence,
+rate, base, tax, and exemption rules, and the not-subject-to-VAT exclusivity
+rule. 18 conformance tests cover clean invoices and each rule family.
+
+Not yet done: codelist bundles and integrity manifests (M2.2), the official
+artefact runner (M2.3), finding-to-field UI integration and suppression (M2.5),
+the full tax scenario matrix (M2.6), credit notes (M2.7), and the Peppol profile
+layer (M2.8). The rule engine is therefore not yet called by the issue pipeline;
+that wiring lands with M2.5 so findings can be shown per field rather than
+collapsed into one error string. Workspace tests: 149 encrypted, 147 plain.
+
 Exit criteria:
 
 - Corpus of 60+ invoices with expected finding sets; our output matches the Java
