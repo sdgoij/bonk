@@ -321,6 +321,16 @@ The workspace **locks itself after 15 minutes without input** — any pointer or
 event resets the clock — and the unlock screen asks for the passphrase again.
 `BONK_IDLE_MINUTES` overrides the limit, clamped to 1–1440.
 
+While a passphrase is being typed the unlock screen shows an estimate under the
+field: length, character variety, and a short list of phrases that are tried
+first, with one sentence of advice. A repeated pattern is worth its period
+rather than its length, so `abcabcabcabc` is not credited as twelve characters.
+Creating an archive asks for the passphrase twice, in the window and at the
+`bonk init` prompt; `--passphrase` and `BONK_PASSPHRASE` are single sources and
+are taken as they stand. A weak passphrase is reported, not refused — the
+estimate is a heuristic, and a gate that blocks the archive someone asked for
+would be worse than saying so once.
+
 ## Layout
 
 | Crate | Role | Milestone |

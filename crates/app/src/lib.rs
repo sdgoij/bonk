@@ -10,6 +10,7 @@
 pub mod export;
 pub mod health;
 pub mod idle;
+pub mod strength;
 mod workspace;
 
 use std::path::{Path, PathBuf};
@@ -264,6 +265,8 @@ fn data_dir() -> PathBuf {
 enum UiState {
     Locked {
         passphrase: String,
+        /// Set while the user is confirming a new archive's passphrase.
+        confirmation: Option<String>,
         error: Option<String>,
     },
     Unlocked {
@@ -288,6 +291,7 @@ impl Default for BonkApp {
             keystore_path: keystore.display().to_string(),
             state: UiState::Locked {
                 passphrase: String::new(),
+                confirmation: None,
                 error: None,
             },
             idle: idle::IdleLock::new(idle::configured_timeout(), std::time::Instant::now()),
@@ -300,7 +304,9 @@ impl Default for BonkApp {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Action {
     Unlock,
+    BeginCreate,
     Create,
+    CancelCreate,
     Lock,
 }
 
@@ -325,9 +331,23 @@ impl BonkApp {
     }
 
     fn create(&mut self) {
-        let UiState::Locked { passphrase, .. } = &self.state else {
+        let UiState::Locked {
+            passphrase,
+            confirmation,
+            ..
+        } = &self.state
+        else {
             return;
         };
+        // Creating is a two-step flow: without a confirmation there is nothing
+        // to compare against, so the action is ignored.
+        let Some(confirmation) = confirmation else {
+            return;
+        };
+        if let Err(reason) = confirm(passphrase, confirmation) {
+            self.set_error(reason.to_owned());
+            return;
+        }
         let passphrase = Zeroizing::new(passphrase.clone());
         let database_path = PathBuf::from(self.database_path.trim());
         let keystore_path = PathBuf::from(self.keystore_path.trim());
@@ -366,8 +386,16 @@ impl BonkApp {
     /// here rather than on drop; dropping it would leave the bytes in the
     /// allocator.
     fn wipe_passphrase_buffer(&mut self) {
-        if let UiState::Locked { passphrase, .. } = &mut self.state {
+        if let UiState::Locked {
+            passphrase,
+            confirmation,
+            ..
+        } = &mut self.state
+        {
             passphrase.zeroize();
+            if let Some(confirmation) = confirmation {
+                confirmation.zeroize();
+            }
         }
     }
 
@@ -380,15 +408,80 @@ impl BonkApp {
     fn apply(&mut self, action: Action) {
         match action {
             Action::Unlock => self.unlock(),
+            Action::BeginCreate => {
+                if let UiState::Locked {
+                    passphrase,
+                    confirmation,
+                    error,
+                } = &mut self.state
+                {
+                    if passphrase.trim().is_empty() {
+                        *error = Some("enter a passphrase first".to_owned());
+                    } else {
+                        *confirmation = Some(String::new());
+                        *error = None;
+                    }
+                }
+            }
             Action::Create => self.create(),
+            Action::CancelCreate => {
+                if let UiState::Locked {
+                    confirmation, error, ..
+                } = &mut self.state
+                {
+                    if let Some(mut abandoned) = confirmation.take() {
+                        abandoned.zeroize();
+                    }
+                    *error = None;
+                }
+            }
             Action::Lock => {
                 self.state = UiState::Locked {
                     passphrase: String::new(),
+                    confirmation: None,
                     error: None,
                 };
             }
         }
     }
+}
+
+/// Whether a new archive's passphrase was entered twice, with the reason when it
+/// was not.
+///
+/// A typo here is unrecoverable: the archive is sealed with whatever was typed,
+/// and nothing else can open it.
+fn confirm(passphrase: &str, confirmation: &str) -> Result<(), &'static str> {
+    if passphrase.trim().is_empty() {
+        return Err("enter a passphrase first");
+    }
+    if passphrase != confirmation {
+        return Err("the passphrases do not match");
+    }
+    Ok(())
+}
+
+/// Draws the strength estimate under a passphrase field.
+fn strength_row(ui: &mut egui::Ui, passphrase: &str) {
+    if passphrase.is_empty() {
+        return;
+    }
+    let assessment = strength::assess(passphrase);
+    let colour = match assessment.strength {
+        strength::Strength::Weak => ui.visuals().error_fg_color,
+        strength::Strength::Fair => ui.visuals().warn_fg_color,
+        strength::Strength::Strong => egui::Color32::from_rgb(76, 175, 80),
+    };
+    ui.add_space(2.0);
+    ui.horizontal(|ui| {
+        ui.label("Strength");
+        ui.colored_label(colour, assessment.strength.label());
+        ui.label(assessment.reason).on_hover_text(format!(
+            "At least {} bits by this estimate. Every guess costs the attacker one \
+             Argon2id run, so length is what makes a copied keystore expensive to open.",
+            assessment.bits
+        ));
+    });
 }
 
 impl eframe::App for BonkApp {
@@ -413,29 +506,63 @@ impl eframe::App for BonkApp {
         egui::CentralPanel::default().show(ui, |ui| {
             let mut action = None;
             match &mut self.state {
-                UiState::Locked { passphrase, error } => {
+                UiState::Locked {
+                    passphrase,
+                    confirmation,
+                    error,
+                } => {
                     ui.heading("Bonk");
-                    ui.label("Local-first invoicing. Nothing leaves this machine unless you send it.");
-                    ui.add_space(12.0);
+                    match confirmation {
+                        Some(confirmation) => {
+                            ui.label(
+                                "A new archive is created empty and sealed with this passphrase. \
+                                 Nothing else can open it, so type it twice.",
+                            );
+                            ui.add_space(12.0);
 
-                    ui.label("Database");
-                    ui.text_edit_singleline(&mut self.database_path);
-                    ui.label("Keystore");
-                    ui.text_edit_singleline(&mut self.keystore_path);
-                    ui.add_space(8.0);
+                            ui.label("New passphrase");
+                            ui.add(egui::TextEdit::singleline(passphrase).password(true));
+                            strength_row(ui, passphrase.as_str());
 
-                    ui.label("Passphrase");
-                    ui.add(egui::TextEdit::singleline(passphrase).password(true));
+                            ui.add_space(8.0);
+                            ui.label("Repeat the passphrase");
+                            ui.add(egui::TextEdit::singleline(confirmation).password(true));
 
-                    ui.add_space(8.0);
-                    ui.horizontal(|ui| {
-                        if ui.button("Unlock").clicked() {
-                            action = Some(Action::Unlock);
+                            ui.add_space(8.0);
+                            ui.horizontal(|ui| {
+                                if ui.button("Create").clicked() {
+                                    action = Some(Action::Create);
+                                }
+                                if ui.button("Back").clicked() {
+                                    action = Some(Action::CancelCreate);
+                                }
+                            });
                         }
-                        if ui.button("Create new database").clicked() {
-                            action = Some(Action::Create);
+                        None => {
+                            ui.label("Local-first invoicing. Nothing leaves this machine unless you send it.");
+                            ui.add_space(12.0);
+
+                            ui.label("Database");
+                            ui.text_edit_singleline(&mut self.database_path);
+                            ui.label("Keystore");
+                            ui.text_edit_singleline(&mut self.keystore_path);
+                            ui.add_space(8.0);
+
+                            ui.label("Passphrase");
+                            ui.add(egui::TextEdit::singleline(passphrase).password(true));
+                            strength_row(ui, passphrase.as_str());
+
+                            ui.add_space(8.0);
+                            ui.horizontal(|ui| {
+                                if ui.button("Unlock").clicked() {
+                                    action = Some(Action::Unlock);
+                                }
+                                if ui.button("Create new database").clicked() {
+                                    action = Some(Action::BeginCreate);
+                                }
+                            });
                         }
-                    });
+                    }
 
                     if let Some(message) = error {
                         ui.add_space(8.0);
@@ -506,6 +633,7 @@ mod tests {
             keystore_path: keystore.display().to_string(),
             state: UiState::Locked {
                 passphrase: "wrong-canary".to_owned(),
+                confirmation: None,
                 error: None,
             },
             ..Default::default()
@@ -514,7 +642,7 @@ mod tests {
         app.apply(Action::Unlock);
 
         {
-            let UiState::Locked { passphrase, error } = &app.state else {
+            let UiState::Locked { passphrase, error, .. } = &app.state else {
                 panic!("a wrong passphrase must not unlock the archive");
             };
             assert_eq!(passphrase, "wrong-canary", "a retry needs the text still there");
@@ -527,6 +655,112 @@ mod tests {
             panic!("wiping the buffer must not change the state");
         };
         assert!(passphrase.is_empty(), "a used buffer must hold no passphrase");
+    }
+
+    #[test]
+    fn creating_needs_the_same_passphrase_twice() {
+        assert_eq!(confirm("", ""), Err("enter a passphrase first"));
+        assert_eq!(confirm("   ", "   "), Err("enter a passphrase first"));
+        assert_eq!(confirm("one", "two"), Err("the passphrases do not match"));
+        assert_eq!(confirm("same", "same"), Ok(()));
+    }
+
+    #[test]
+    fn a_creation_without_a_passphrase_does_not_start() {
+        let mut app = BonkApp {
+            state: UiState::Locked {
+                passphrase: "   ".to_owned(),
+                confirmation: None,
+                error: None,
+            },
+            ..Default::default()
+        };
+
+        app.apply(Action::BeginCreate);
+
+        assert!(matches!(
+            &app.state,
+            UiState::Locked {
+                confirmation: None,
+                error: Some(message),
+                ..
+            } if message.contains("enter a passphrase")
+        ));
+    }
+
+    #[test]
+    fn a_new_archive_is_confirmed_before_it_is_written() {
+        let dir = TempDir::new().unwrap();
+        let database = dir.path().join("bonk.db");
+        let keystore = dir.path().join("keystore.bin");
+
+        let mut app = BonkApp {
+            database_path: database.display().to_string(),
+            keystore_path: keystore.display().to_string(),
+            state: UiState::Locked {
+                passphrase: "first-canary".to_owned(),
+                confirmation: None,
+                error: None,
+            },
+            ..Default::default()
+        };
+
+        app.apply(Action::BeginCreate);
+        assert!(
+            matches!(
+                &app.state,
+                UiState::Locked {
+                    confirmation: Some(entry),
+                    ..
+                } if entry.is_empty()
+            ),
+            "beginning a creation asks for the passphrase again"
+        );
+
+        // A different entry creates nothing and says why.
+        if let UiState::Locked { confirmation, .. } = &mut app.state {
+            *confirmation = Some("second-canary".to_owned());
+        }
+        app.apply(Action::Create);
+        assert!(!database.exists(), "a mismatched confirmation must not write");
+        assert!(matches!(
+            &app.state,
+            UiState::Locked {
+                error: Some(message),
+                ..
+            } if message.contains("do not match")
+        ));
+
+        // The same entry twice writes the archive and unlocks it.
+        if let UiState::Locked { confirmation, .. } = &mut app.state {
+            *confirmation = Some("first-canary".to_owned());
+        }
+        app.apply(Action::Create);
+        assert!(database.exists());
+        assert!(matches!(app.state, UiState::Unlocked { .. }));
+    }
+
+    #[test]
+    fn backing_out_of_a_creation_wipes_the_confirmation() {
+        let mut app = BonkApp {
+            state: UiState::Locked {
+                passphrase: "first-canary".to_owned(),
+                confirmation: Some("first-canary".to_owned()),
+                error: Some("the passphrases do not match".to_owned()),
+            },
+            ..Default::default()
+        };
+
+        app.apply(Action::CancelCreate);
+
+        assert!(matches!(
+            &app.state,
+            UiState::Locked {
+                confirmation: None,
+                error: None,
+                ..
+            }
+        ));
     }
 
     #[test]

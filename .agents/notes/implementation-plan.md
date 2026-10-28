@@ -341,7 +341,7 @@ buyer and order reference from the document they correct, so the copied draft
 still passes R003.
 
 Remaining in M2: nothing blocking. Explicit deliver-to address fields beyond the
-buyer country remain for a later slice. Workspace tests: 322 encrypted, 320 plain.
+buyer country remain for a later slice. Workspace tests: 335 encrypted, 333 plain.
 
 Exit criteria:
 
@@ -568,7 +568,18 @@ same key before writing, and records `recovery_key_added`. A passphrase change
 carries the recovery wrap over without holding the secret. `passphrase-reset`
 uses the key to install a new passphrase when the old one is gone, then rotates
 the key and prints the replacement, because the used key has now been typed
-somewhere. Still open in M6.1: the strength meter and the GUI prompts.
+somewhere. Still open in M6.1: the GUI prompts for adding a recovery key and
+resetting a lost passphrase.
+
+M6.1's strength estimate and confirmation are in. `app::strength` scores a phrase
+on length, character variety, and a short list of common phrases, collapses a
+repeated pattern to its period before counting, and returns a level, a floor on
+the search space in bits, and one sentence of advice; the unlock screen shows it
+under the field and the creation flow asks for the phrase twice. `bonk init` asks
+twice at the prompt as well, while `--passphrase` and `BONK_PASSPHRASE` are single
+sources and are taken as they stand. A weak phrase is reported on stderr rather
+than refused: the estimate is a heuristic, and blocking an archive the user asked
+for would be worse than telling them the truth once.
 
 M6.5 is in. `store::evidence` writes a bundle directory — manifest with a SHA-256
 per file, the stored semantic record, every artefact, the received bytes for an
@@ -631,7 +642,8 @@ indistinguishable from the original without an outside record of a head; an
 unlocked archive is readable by anything running as the user; and a recovery key
 stored beside the archive turns two credentials into one.
 
-Remaining in M6: the passphrase strength meter and the GUI key prompts (M6.1).
+Remaining in M6: the GUI prompts for adding a recovery key and resetting a lost
+passphrase, and the integrity screen's rendering, whose engine already exists.
 The threat model also lists O5–O6 as open: tighter file permissions at creation,
 and a decision on recording chain heads somewhere durable.
 

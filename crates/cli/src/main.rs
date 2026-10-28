@@ -4,7 +4,7 @@
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use app::Session;
+use app::{Session, strength};
 use clap::{Parser, Subcommand};
 use crux::{
     Address, CountryCode, Currency, CustomerId, DocumentId, DraftLine, Finding, InvoiceDraft, LineId, LocalDate, Money,
@@ -428,6 +428,7 @@ fn run(cli: Cli) -> Result<(), CliError> {
         Some(Command::PassphraseChange { new_passphrase }) => {
             let passphrase = resolve_passphrase(passphrase)?;
             let new_passphrase = resolve_new_passphrase(new_passphrase)?;
+            warn_if_weak(&new_passphrase);
 
             // Unlock first: if the database or the current passphrase is wrong,
             // nothing is rewritten.
@@ -457,6 +458,7 @@ fn run(cli: Cli) -> Result<(), CliError> {
         }) => {
             let recovery_key = resolve_recovery_key(recovery_key)?;
             let new_passphrase = resolve_new_passphrase(new_passphrase)?;
+            warn_if_weak(&new_passphrase);
 
             let mut key_store =
                 KeyStore::open_with_recovery(&keystore, &recovery_key).map_err(|error| match error {
@@ -518,7 +520,8 @@ fn run(cli: Cli) -> Result<(), CliError> {
             Ok(())
         }
         Some(Command::Init) => {
-            let passphrase = resolve_passphrase(passphrase.clone())?;
+            let passphrase = resolve_creation_passphrase(passphrase.clone())?;
+            warn_if_weak(&passphrase);
             let session = Session::create(&database, &keystore, &passphrase)?;
             let summary = session.summary()?;
             println!("database: {}", database.display());
@@ -1171,19 +1174,22 @@ fn warn_if_unencrypted() {
 }
 
 fn resolve_passphrase(explicit: Option<String>) -> Result<Zeroizing<String>, CliError> {
-    if let Some(value) = explicit
-        && !value.is_empty()
-    {
-        return Ok(Zeroizing::new(value));
+    if let Some(value) = from_flag_or_environment(explicit) {
+        return Ok(value);
     }
-    if let Ok(value) = std::env::var("BONK_PASSPHRASE")
-        && !value.is_empty()
-    {
-        return Ok(Zeroizing::new(value));
+    prompt("Passphrase: ")
+}
+
+/// The passphrase for a new archive.
+///
+/// A flag or `BONK_PASSPHRASE` is a single source and is taken as it stands. The
+/// interactive prompt asks twice, because the archive is sealed with whatever
+/// was typed and a typo leaves it with no way in.
+fn resolve_creation_passphrase(explicit: Option<String>) -> Result<Zeroizing<String>, CliError> {
+    match from_flag_or_environment(explicit) {
+        Some(value) => non_blank(value),
+        None => non_blank(confirmed_prompt()?),
     }
-    rpassword::prompt_password("Passphrase: ")
-        .map(Zeroizing::new)
-        .map_err(|error| CliError::Input(error.to_string()))
 }
 
 /// The recovery key for `passphrase-reset`.
@@ -1196,33 +1202,68 @@ fn resolve_recovery_key(explicit: Option<String>) -> Result<Zeroizing<String>, C
     {
         return Ok(Zeroizing::new(value));
     }
-    rpassword::prompt_password("Recovery key: ")
-        .map(Zeroizing::new)
-        .map_err(|error| CliError::Input(error.to_string()))
+    prompt("Recovery key: ")
 }
 
 /// The new passphrase for `passphrase-change`, asked for twice when interactive.
 fn resolve_new_passphrase(explicit: Option<String>) -> Result<Zeroizing<String>, CliError> {
     let value = match explicit.filter(|value| !value.is_empty()) {
-        Some(value) => value,
+        Some(value) => Zeroizing::new(value),
         None => match std::env::var("BONK_NEW_PASSPHRASE") {
-            Ok(value) if !value.is_empty() => value,
-            _ => {
-                let first = rpassword::prompt_password("New passphrase: ")
-                    .map_err(|error| CliError::Input(error.to_string()))?;
-                let again = rpassword::prompt_password("Repeat the new passphrase: ")
-                    .map_err(|error| CliError::Input(error.to_string()))?;
-                if first != again {
-                    return Err(CliError::Input("the passphrases do not match".to_owned()));
-                }
-                first
-            }
+            Ok(value) if !value.is_empty() => Zeroizing::new(value),
+            _ => confirmed_prompt()?,
         },
     };
+    non_blank(value)
+}
+
+/// Reads a passphrase from the terminal without echoing it.
+fn prompt(label: &str) -> Result<Zeroizing<String>, CliError> {
+    rpassword::prompt_password(label)
+        .map(Zeroizing::new)
+        .map_err(|error| CliError::Input(error.to_string()))
+}
+
+/// Asks for a passphrase twice and refuses a mismatch.
+fn confirmed_prompt() -> Result<Zeroizing<String>, CliError> {
+    let first = prompt("New passphrase: ")?;
+    let again = prompt("Repeat the new passphrase: ")?;
+    if *first != *again {
+        return Err(CliError::Input("the passphrases do not match".to_owned()));
+    }
+    Ok(first)
+}
+
+fn non_blank(value: Zeroizing<String>) -> Result<Zeroizing<String>, CliError> {
     if value.trim().is_empty() {
         return Err(CliError::Input("an empty passphrase is not accepted".to_owned()));
     }
-    Ok(Zeroizing::new(value))
+    Ok(value)
+}
+
+/// Advises on stderr when a passphrase looks too weak to protect the archive.
+///
+/// This is advice, not a gate: the check is a heuristic, and refusing to create
+/// the archive the user asked for would be worse than telling them the truth
+/// once.
+fn warn_if_weak(passphrase: &str) {
+    let assessment = strength::assess(passphrase);
+    if assessment.strength == strength::Strength::Weak {
+        eprintln!(
+            "warning: this passphrase is weak ({} bits): {}",
+            assessment.bits, assessment.reason
+        );
+    }
+}
+
+fn from_flag_or_environment(explicit: Option<String>) -> Option<Zeroizing<String>> {
+    if let Some(value) = explicit.filter(|value| !value.is_empty()) {
+        return Some(Zeroizing::new(value));
+    }
+    std::env::var("BONK_PASSPHRASE")
+        .ok()
+        .filter(|value| !value.is_empty())
+        .map(Zeroizing::new)
 }
 
 #[cfg(test)]
@@ -1250,6 +1291,14 @@ mod tests {
             !format!("{passphrase:?}").contains("secret"),
             "a resolved passphrase must not print itself"
         );
+    }
+
+    #[test]
+    fn a_creation_passphrase_from_a_flag_is_taken_once_and_must_not_be_blank() {
+        let passphrase = resolve_creation_passphrase(Some("secret-canary".to_owned())).unwrap();
+        assert_eq!(&*passphrase, "secret-canary");
+        assert!(!format!("{passphrase:?}").contains("secret-canary"));
+        assert!(resolve_creation_passphrase(Some("   ".to_owned())).is_err());
     }
 
     #[test]

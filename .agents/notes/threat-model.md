@@ -131,8 +131,10 @@ the machine, not a machine an attacker is already logged into.
 - **R4 — The recovery key is a second key.** Storing it beside the archive turns
   two credentials into one. The command says so; nothing enforces it.
 - **R5 — Passphrase strength is the weak link.** Argon2id makes guessing
-  expensive; it cannot make a guessable phrase safe. The strength meter (M6.1) is
-  not built yet.
+  expensive; it cannot make a guessable phrase safe. The strength estimate (M6.1)
+  shows a level and one sentence of advice under the field, and `bonk init` warns
+  on stderr, but nothing refuses a weak phrase: the archive is as strong as what
+  the user typed.
 - **R6 — The idle lock is a timer, not a guarantee.** The workspace locks after
   a configurable idle period (15 minutes by default), but a hung process locks
   nothing, and the limit can be raised to a day.
@@ -173,11 +175,14 @@ the machine, not a machine an attacker is already logged into.
 | Support bundles leak nothing | `a_bundle_has_counts_and_no_business_facts` |
 | A used passphrase does not print itself | CLI `a_new_passphrase_is_never_empty_or_printable` |
 | A used passphrase is not left in the form | `a_wrong_passphrase_stays_for_a_retry_and_a_used_buffer_is_wiped` |
+| A weak passphrase is reported, not refused | CLI `a_weak_passphrase_is_reported_but_not_refused` |
+| Creating needs the phrase twice | `a_new_archive_is_confirmed_before_it_is_written` |
 | Parsers survive hostile bytes | `arbitrary_bytes_never_panic`, `a_mutated_container_never_panics`, `a_stream_that_inflates_past_the_limit_is_refused` |
 
 ## 8. Open items
 
-- **O1** Passphrase strength meter and the GUI prompts for recovery (M6.1).
+- **O1** GUI prompts for adding a recovery key and resetting a lost passphrase
+  (M6.1); the CLI covers both.
 - **O3** Optional OS-keychain wrap of the same DEK, for “remember me”.
 - **O4** libFuzzer targets once the runner has nightly and `cargo-fuzz`; the
   property tests are the gate until then.

@@ -970,3 +970,58 @@ fn blocking_findings_stop_issue_creation() {
     assert!(stderr.contains("blocking"), "{stderr}");
     assert!(stderr.contains("T1-003"), "{stderr}");
 }
+
+#[test]
+fn a_weak_passphrase_is_reported_but_not_refused() {
+    let dir = TempDir::new().expect("temp dir");
+    let database = dir.path().join("bonk.db");
+    let keystore = dir.path().join("keystore.bin");
+
+    let output = bonk()
+        .args([
+            "init",
+            "--db",
+            database.to_str().expect("utf-8"),
+            "--keystore",
+            keystore.to_str().expect("utf-8"),
+            "--passphrase",
+            "pass",
+        ])
+        .output()
+        .expect("binary runs");
+
+    assert!(
+        output.status.success(),
+        "advice must not stop the archive being created: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("this passphrase is weak"), "{stderr}");
+    assert!(database.exists());
+}
+
+#[test]
+fn a_strong_passphrase_gets_no_warning() {
+    let dir = TempDir::new().expect("temp dir");
+    let database = dir.path().join("bonk.db");
+    let keystore = dir.path().join("keystore.bin");
+
+    let output = bonk()
+        .args([
+            "init",
+            "--db",
+            database.to_str().expect("utf-8"),
+            "--keystore",
+            keystore.to_str().expect("utf-8"),
+            "--passphrase",
+            "correct horse battery staple",
+        ])
+        .output()
+        .expect("binary runs");
+
+    assert!(output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    // The `plain` build prints its own warning about encryption, so the
+    // assertion is about this one message rather than any stderr at all.
+    assert!(!stderr.contains("passphrase is weak"), "{stderr}");
+}
