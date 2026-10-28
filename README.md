@@ -139,6 +139,23 @@ bonk backup --to ./backups --keep 10
 bonk verify-backup ./backups/backup-20261028T120000Z.db
 ```
 
+### A demo archive to explore the window
+
+```sh
+bonk demo-seed
+bonk gui
+```
+
+`demo-seed` writes an encrypted archive at the default location with a seller,
+eighteen customers, a few hundred issued documents (some corrected by credit
+notes), invoices received from suppliers (some parked because the supplier is
+not on file), a handful of drafts, and saved find views. It refuses to replace an
+existing archive unless `--force` is given. The data is deterministic: the same
+`--seed` and day produce the same numbers, dates, and amounts. The passphrase is
+`bonk-demo` unless `--passphrase` says otherwise. Everything is written through
+the same repository functions the rest of the app uses, so `bonk verify` passes
+on it.
+
 Peppol BIS 3.0 requires an endpoint identifier for both parties and a buyer or
 order reference, and a Dutch seller also needs a street, a post code, and a KvK
 number. Omitting them is a blocking finding, not a warning, because the recipient

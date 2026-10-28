@@ -1237,3 +1237,57 @@ fn a_strong_passphrase_gets_no_warning() {
     // assertion is about this one message rather than any stderr at all.
     assert!(!stderr.contains("passphrase is weak"), "{stderr}");
 }
+
+#[test]
+fn demo_seed_fills_an_archive_and_refuses_to_clobber_one() {
+    let dir = TempDir::new().expect("temp dir");
+    let database = dir.path().join("bonk.db");
+    let keystore = dir.path().join("keystore.bin");
+    let database = database.to_str().expect("utf-8");
+    let keystore = keystore.to_str().expect("utf-8");
+    let passphrase = "demo-test-passphrase";
+    let seed = [
+        "demo-seed",
+        "--db",
+        database,
+        "--keystore",
+        keystore,
+        "--passphrase",
+        passphrase,
+        "--customers",
+        "3",
+        "--invoices",
+        "6",
+        "--received",
+        "2",
+        "--seed",
+        "5",
+    ];
+
+    let output = bonk_ok(&seed);
+    assert_eq!(field(&output, "customers:"), "3");
+    assert_eq!(field(&output, "drafts:"), "3");
+    assert_eq!(field(&output, "views:"), "4 saved searches");
+
+    let refused = bonk().args(seed).output().expect("binary runs");
+    assert!(!refused.status.success(), "a second seed must not overwrite silently");
+    assert!(
+        String::from_utf8_lossy(&refused.stderr).contains("--force"),
+        "the refusal must name the way out"
+    );
+
+    let mut forced = seed.to_vec();
+    forced.push("--force");
+    bonk_ok(&forced);
+
+    let verified = bonk_ok(&[
+        "--passphrase",
+        passphrase,
+        "--db",
+        database,
+        "--keystore",
+        keystore,
+        "verify",
+    ]);
+    assert!(verified.contains("integrity check passed"), "{verified}");
+}

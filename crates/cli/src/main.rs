@@ -18,6 +18,8 @@ use store::{
 };
 use zeroize::Zeroizing;
 
+mod demo;
+
 #[derive(Parser)]
 #[command(name = "bonk", version, about = "Local-first e-invoicing client (working name)")]
 struct Cli {
@@ -46,6 +48,30 @@ struct Cli {
 enum Command {
     /// Create an encrypted database and its keystore.
     Init,
+    /// Fill a new archive with demo data for trying the window.
+    ///
+    /// The data is generated deterministically from `--seed`: a seller, a
+    /// catalogue of customers, issued invoices (some corrected by credit
+    /// notes), documents received from suppliers, a few drafts, and saved
+    /// search views. It is ordinary archive data, so `verify` passes on it.
+    #[command(name = "demo-seed")]
+    DemoSeed {
+        /// Customers to create; the catalogue holds 18.
+        #[arg(long, default_value_t = 18)]
+        customers: usize,
+        /// Issued documents, credit notes included.
+        #[arg(long, default_value_t = 320)]
+        invoices: usize,
+        /// Documents received from suppliers.
+        #[arg(long, default_value_t = 45)]
+        received: usize,
+        /// Generator seed; the same seed and day produce the same data.
+        #[arg(long, default_value_t = 2026)]
+        seed: u64,
+        /// Replace an existing archive at the target paths.
+        #[arg(long)]
+        force: bool,
+    },
     /// Remember this device: keep the archive key in the OS credential store.
     ///
     /// Afterwards `--device` opens the archive without a passphrase. While it is
@@ -372,6 +398,8 @@ enum CliError {
     Gui(String),
     #[error("blocking validation findings; nothing was issued")]
     Validation,
+    #[error(transparent)]
+    Demo(#[from] demo::DemoError),
 }
 
 fn main() -> ExitCode {
@@ -634,6 +662,25 @@ fn run(cli: Cli) -> Result<(), CliError> {
             println!("encryption: {}", store::encryption_label());
             Ok(())
         }
+        Some(Command::DemoSeed {
+            customers,
+            invoices,
+            received,
+            seed,
+            force,
+        }) => seed_demo(
+            &database,
+            &keystore,
+            access.passphrase.clone(),
+            demo::Options {
+                customers,
+                invoices,
+                received,
+                seed,
+                today: None,
+            },
+            force,
+        ),
         Some(Command::Verify { anchor }) => {
             let session = access.session(&database, &keystore)?;
             session.integrity_check()?;
@@ -1182,6 +1229,79 @@ impl Access {
         let passphrase = resolve_passphrase(self.passphrase.clone())?;
         Ok(Session::unlock(database, keystore, &passphrase)?)
     }
+}
+
+fn seed_demo(
+    database: &Path,
+    keystore: &Path,
+    passphrase: Option<String>,
+    options: demo::Options,
+    force: bool,
+) -> Result<(), CliError> {
+    let existed = database.exists() || keystore.exists();
+    if existed && !force {
+        return Err(CliError::Input(format!(
+            "an archive already exists at {}; pass --force to replace it",
+            database.display()
+        )));
+    }
+    if existed {
+        remove_archive(database, keystore)?;
+    }
+
+    let passphrase = passphrase.unwrap_or_else(|| demo::DEFAULT_PASSPHRASE.to_owned());
+    let mut session = Session::create(database, keystore, &passphrase)?;
+    let seeded = demo::seed(&mut session, &options)?;
+
+    println!("database:   {}", database.display());
+    println!("keystore:   {}", keystore.display());
+    if passphrase == demo::DEFAULT_PASSPHRASE {
+        println!("passphrase: {}", demo::DEFAULT_PASSPHRASE);
+    } else {
+        println!("passphrase: (the one you gave)");
+    }
+    println!("seller:     Studio Noord B.V.");
+    println!("customers:  {}", seeded.customers);
+    println!(
+        "invoices:   {} issued, {} of them credit notes",
+        seeded.invoices, seeded.credit_notes
+    );
+    println!(
+        "received:   {} ({} matched, {} parked)",
+        seeded.received, seeded.matched, seeded.parked
+    );
+    println!("drafts:     {}", seeded.drafts);
+    println!("views:      {} saved searches", seeded.views);
+    println!();
+    let (default_database, _) = app::default_paths();
+    if default_database.as_path() == database {
+        println!("open the window with: bonk gui");
+    } else {
+        println!(
+            "note: the window opens {}; this archive is at {}",
+            default_database.display(),
+            database.display()
+        );
+    }
+    Ok(())
+}
+
+/// Removes the files an archive owns, including the write-ahead log.
+fn remove_archive(database: &Path, keystore: &Path) -> Result<(), CliError> {
+    let mut paths = vec![database.to_path_buf(), keystore.to_path_buf()];
+    if let Some(name) = database.file_name().and_then(|name| name.to_str()) {
+        for suffix in ["-wal", "-shm"] {
+            paths.push(database.with_file_name(format!("{name}{suffix}")));
+        }
+    }
+    for path in paths {
+        match std::fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(CliError::Io(error)),
+        }
+    }
+    Ok(())
 }
 
 fn paths(cli: &Cli) -> (PathBuf, PathBuf) {
