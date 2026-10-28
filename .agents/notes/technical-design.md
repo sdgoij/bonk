@@ -554,7 +554,7 @@ On issue, the application writes:
 5. Audit events: `issued`, `artefact_rendered`, `sent`, `receipt_received`.
 
 The database enforces write-once with `BEFORE UPDATE`/`BEFORE DELETE` triggers
-on `issued_invoice`, `issued_line`, and `audit_event`, raising on any attempt.
+on `document`, `document_line`, and `audit_event`, raising on any attempt.
 Repository code never issues those statements, so the trigger is a backstop
 against future mistakes, not a workflow.
 
@@ -746,47 +746,65 @@ CREATE TABLE invoice_draft_line (
     hlc                TEXT NOT NULL
 );
 
--- Issued, immutable ---------------------------------------------------------
+-- Documents: outbound (issued by us) and inbound (received) ---------------
 
-CREATE TABLE issued_invoice (
-    id                 TEXT PRIMARY KEY,
-    seller_id          TEXT NOT NULL REFERENCES seller(id),
-    doc_type           TEXT NOT NULL,
-    series             TEXT NOT NULL,
-    number             TEXT NOT NULL,      -- rendered, e.g. 2026-0042
-    sequence_value     INTEGER NOT NULL,
-    currency           TEXT NOT NULL,
-    issue_date_local   TEXT NOT NULL,
-    due_date_local     TEXT,
-    delivery_date_local TEXT,
-    totals_json        TEXT NOT NULL,      -- all BT amounts, canonical decimal
-    tax_breakdown_json TEXT NOT NULL,
-    seller_snapshot_json TEXT NOT NULL,
-    buyer_snapshot_json  TEXT NOT NULL,
-    semantic_json      TEXT NOT NULL,      -- normalised EN 16931 semantic form
-    semantic_hash      TEXT NOT NULL,
-    rounded_at         TEXT NOT NULL,
-    posting_profile_id TEXT,               -- reserved for the v1.1 ledger
-    state              TEXT NOT NULL,
-    issued_at          TEXT NOT NULL,
-    issued_by_device   TEXT NOT NULL,
-    created_at         TEXT NOT NULL,
-    UNIQUE (seller_id, series, number)
+-- One table, two directions. An outbound row was issued by us: the number comes
+-- from `sequence` and the series is ours. An inbound row was received from a
+-- supplier: the number is theirs verbatim and series/sequence_value are null.
+-- `owner_id` is always our own entity (whose books this is); `counterparty_id`
+-- is the buyer for outbound rows and the supplier for inbound ones. Both parties
+-- are also snapshotted, so editing a party later cannot rewrite history.
+
+CREATE TABLE document (
+    id                      TEXT PRIMARY KEY,
+    direction               TEXT NOT NULL CHECK (direction IN ('outbound','inbound')),
+    owner_id                TEXT NOT NULL REFERENCES seller(id),
+    counterparty_id         TEXT REFERENCES customer(id),
+    doc_type                TEXT NOT NULL,
+    series                  TEXT,          -- ours; null for inbound
+    number                  TEXT NOT NULL, -- rendered, e.g. 2026-0042; sender's for inbound
+    sequence_value          INTEGER,       -- null for inbound
+    currency                TEXT NOT NULL,
+    issue_date_local        TEXT NOT NULL,
+    due_date_local          TEXT,
+    delivery_date_local     TEXT,
+    buyer_reference         TEXT,
+    order_reference         TEXT,
+    note                    TEXT,
+    totals_json             TEXT NOT NULL, -- all BT amounts, canonical decimal
+    tax_breakdown_json      TEXT NOT NULL,
+    issuer_snapshot_json    TEXT NOT NULL,
+    recipient_snapshot_json TEXT NOT NULL,
+    semantic_json           TEXT NOT NULL, -- normalised EN 16931 semantic form
+    semantic_hash           TEXT NOT NULL,
+    preceding_invoice_id    TEXT,          -- BG-3, when this is a credit note
+    preceding_number        TEXT,
+    preceding_issue_date    TEXT,
+    state                   TEXT NOT NULL,
+    recorded_at             TEXT NOT NULL,
+    recorded_by_device      TEXT NOT NULL,
+    created_at              TEXT NOT NULL
 );
 
-CREATE TABLE issued_line (
+-- One series for what we issue; the sender's own numbering for what we receive.
+CREATE UNIQUE INDEX document_outbound_number
+    ON document (owner_id, series, number) WHERE direction = 'outbound';
+CREATE UNIQUE INDEX document_inbound_number
+    ON document (owner_id, counterparty_id, number) WHERE direction = 'inbound';
+
+CREATE TABLE document_line (
     id                 TEXT PRIMARY KEY,
-    invoice_id         TEXT NOT NULL REFERENCES issued_invoice(id),
+    document_id        TEXT NOT NULL REFERENCES document(id),
     position           INTEGER NOT NULL,
-    payload_json       TEXT NOT NULL,      -- full line as issued
+    payload_json       TEXT NOT NULL,      -- full line as recorded
     line_net_micros    INTEGER NOT NULL,
     tax_micros         INTEGER NOT NULL,
-    UNIQUE (invoice_id, position)
+    UNIQUE (document_id, position)
 );
 
-CREATE TABLE issued_allowance_charge (
+CREATE TABLE document_allowance_charge (
     id                 TEXT PRIMARY KEY,
-    invoice_id         TEXT NOT NULL REFERENCES issued_invoice(id),
+    document_id        TEXT NOT NULL REFERENCES document(id),
     kind               TEXT NOT NULL CHECK (kind IN ('allowance','charge')),
     level              TEXT NOT NULL CHECK (level IN ('document','line')),
     reason             TEXT,
@@ -807,8 +825,7 @@ CREATE TABLE blob (
 
 CREATE TABLE artefact (
     id                 TEXT PRIMARY KEY,
-    invoice_id         TEXT REFERENCES issued_invoice(id),
-    imported_invoice_id TEXT,
+    document_id        TEXT NOT NULL REFERENCES document(id),
     kind               TEXT NOT NULL,      -- ubl | cii | pdf | pdf_embedded_xml | receipt
     syntax_profile     TEXT,
     bytes_hash         TEXT NOT NULL,
@@ -818,42 +835,36 @@ CREATE TABLE artefact (
     renderer_version   TEXT NOT NULL
 );
 
--- Incoming / accounts payable ----------------------------------------------
+-- Incoming documents need no second model: an imported invoice is a `document`
+-- row with `direction = 'inbound'`. Duplicate detection is the partial unique
+-- index above; `payload_hash` and the import status live in `import_record`.
 
-CREATE TABLE imported_invoice (
+CREATE TABLE import_record (
     id                 TEXT PRIMARY KEY,
+    document_id        TEXT NOT NULL REFERENCES document(id),
     source_kind        TEXT NOT NULL,      -- ubl | cii | pdf_facturx | manual
     source_path        TEXT,
-    supplier_key       TEXT,               -- normalised VAT or KvK
-    customer_id        TEXT REFERENCES customer(id),
-    external_number    TEXT,
-    issue_date_local   TEXT,
-    due_date_local     TEXT,
-    currency           TEXT,
-    total_micros       INTEGER,
-    semantic_json      TEXT NOT NULL,
     payload_hash       TEXT NOT NULL,
-    duplicate_of       TEXT REFERENCES imported_invoice(id),
+    duplicate_of       TEXT REFERENCES document(id),
     match_confidence   REAL,               -- only here; never for money
-    status             TEXT NOT NULL,      -- new | matched | payable | paid | ignored
     imported_at        TEXT NOT NULL
 );
 
 -- Sequences, connectors, sync, audit ---------------------------------------
 
 CREATE TABLE sequence (
-    seller_id          TEXT NOT NULL REFERENCES seller(id),
+    owner_id           TEXT NOT NULL REFERENCES seller(id),
     doc_type           TEXT NOT NULL,
     series             TEXT NOT NULL,
     year               INTEGER NOT NULL,
     next_value         INTEGER NOT NULL,
     lease_end          INTEGER,             -- Phase 2 block leasing
-    PRIMARY KEY (seller_id, doc_type, series, year)
+    PRIMARY KEY (owner_id, doc_type, series, year)
 );
 
 CREATE TABLE outbox (
     id                 TEXT PRIMARY KEY,
-    invoice_id         TEXT NOT NULL REFERENCES issued_invoice(id),
+    document_id        TEXT NOT NULL REFERENCES document(id),
     connector_id       TEXT NOT NULL,
     operation          TEXT NOT NULL,
     idempotency_key    TEXT NOT NULL,
@@ -908,21 +919,23 @@ Notes:
 Immutability is enforced by the database, not by discipline:
 
 ```sql
-CREATE TRIGGER issued_invoice_no_update
-BEFORE UPDATE ON issued_invoice
+CREATE TRIGGER document_no_update
+BEFORE UPDATE ON document
 BEGIN
-    SELECT RAISE(ABORT, 'issued invoices are immutable; issue a credit note');
+    SELECT RAISE(ABORT, 'documents are immutable; corrections are credit notes');
 END;
 
-CREATE TRIGGER issued_invoice_no_delete
-BEFORE DELETE ON issued_invoice
+CREATE TRIGGER document_no_delete
+BEFORE DELETE ON document
 BEGIN
-    SELECT RAISE(ABORT, 'issued invoices cannot be deleted');
+    SELECT RAISE(ABORT, 'documents cannot be deleted');
 END;
 ```
 
-Equivalent triggers guard `issued_line`, `audit_event`, and `artefact`. The
+Equivalent triggers guard `document_line`, `audit_event`, and `artefact`. The
 repositories never issue those statements, so a trigger firing is always a bug.
+Status changes (sent, paid, approved) are append-only events, never updates to
+the document row.
 
 ### 7.4 Search
 

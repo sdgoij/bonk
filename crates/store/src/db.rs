@@ -194,7 +194,7 @@ mod tests {
             let database = Database::create(&path, &keystore).unwrap();
             insert_canary(&database);
             assert_eq!(database.seller_count().unwrap(), 1);
-            assert_eq!(database.schema_version().unwrap(), 4);
+            assert_eq!(database.schema_version().unwrap(), 3);
             database.integrity_check().unwrap();
         }
 
@@ -265,7 +265,7 @@ mod tests {
 
         for _ in 0..3 {
             let database = Database::open(&path, &keystore).unwrap();
-            assert_eq!(database.schema_version().unwrap(), 4);
+            assert_eq!(database.schema_version().unwrap(), 3);
         }
     }
 

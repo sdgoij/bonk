@@ -146,7 +146,7 @@ lives in open items:
 ```
 open_item {
     id, kind: receivable | payable,
-    party_id, source_kind: issued_invoice | imported_invoice | manual,
+    party_id, source_kind: outbound_document | inbound_document | manual,
     source_id, amount, currency, due_date, original_date
 }
 ```
@@ -296,7 +296,7 @@ CREATE TABLE journal_entry (
     number             TEXT NOT NULL,       -- rendered per journal and year, e.g. 2026-0001
     entry_date_local   TEXT NOT NULL,
     description        TEXT NOT NULL,
-    source_kind        TEXT NOT NULL,       -- issued_invoice | imported_invoice | manual | opening | bank
+    source_kind        TEXT NOT NULL,       -- outbound_document | inbound_document | manual | opening | bank
     source_id          TEXT,
     reverses_entry_id  TEXT REFERENCES journal_entry(id),
     posting_profile_id TEXT NOT NULL,

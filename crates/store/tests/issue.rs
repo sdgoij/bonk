@@ -227,7 +227,7 @@ fn attached_artefacts_are_hashed_and_verified() {
 }
 
 #[test]
-fn issued_documents_are_write_once() {
+fn documents_are_write_once() {
     let (_dir, mut database, seller_id, customer_id) = seeded();
     let draft = draft_for(seller_id, customer_id);
     insert_draft(database.connection(), &draft, NOW).unwrap();
@@ -246,11 +246,27 @@ fn issued_documents_are_write_once() {
 
     let update = database
         .connection()
-        .execute("UPDATE issued_invoice SET number = 'tampered'", []);
+        .execute("UPDATE document SET number = 'tampered'", []);
     assert!(update.is_err(), "the trigger must reject updates");
+    assert!(
+        update.unwrap_err().to_string().contains("immutable"),
+        "the trigger must be the reason"
+    );
 
-    let delete = database.connection().execute("DELETE FROM issued_invoice", []);
+    let delete = database.connection().execute("DELETE FROM document", []);
     assert!(delete.is_err(), "the trigger must reject deletes");
+
+    let line_delete = database.connection().execute("DELETE FROM document_line", []);
+    assert!(line_delete.is_err(), "line triggers are installed too");
+}
+
+#[test]
+fn rejected_updates_are_not_silently_ignored_by_a_missing_table() {
+    // Guards the test above: a renamed table would make every UPDATE fail for
+    // the wrong reason, and the write-once assertion would pass by accident.
+    let (_dir, database, _seller, _customer) = seeded();
+    let updated = database.connection().execute("UPDATE document SET number = number", []);
+    assert_eq!(updated, Ok(0), "the table exists and is empty");
 }
 
 #[test]
@@ -283,6 +299,57 @@ fn tampering_with_the_audit_chain_is_detected() {
 }
 
 #[test]
+fn inbound_and_outbound_documents_share_one_table_with_separate_numbering() {
+    let (_dir, mut database, seller_id, customer_id) = seeded();
+    let invoice = issue(&mut database, &draft_for(seller_id, customer_id));
+    assert_eq!(invoice.number, "2026-0001");
+
+    let issued: (String, Option<String>, Option<i64>) = database
+        .connection()
+        .query_row(
+            "SELECT direction, series, sequence_value FROM document
+             WHERE direction = 'outbound' AND number = '2026-0001'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(issued.0, "outbound");
+    assert_eq!(issued.1.as_deref(), Some("A"));
+    assert_eq!(issued.2, Some(1));
+
+    let insert = |number: &str, direction: &str| {
+        database.connection().execute(
+            "INSERT INTO document
+                 (id, direction, owner_id, counterparty_id, doc_type, number, currency,
+                  issue_date_local, totals_json, tax_breakdown_json, issuer_snapshot_json,
+                  recipient_snapshot_json, semantic_json, semantic_hash, state, recorded_at,
+                  recorded_by_device, created_at)
+             VALUES (?1, ?2, ?3, ?4, '380', ?5, 'EUR', '2026-10-27', '{}', '[]', '{}', '{}',
+                     '{}', 'h', 'received', ?6, 'test', ?6)",
+            (
+                DocumentId::new().to_string(),
+                direction,
+                seller_id.to_string(),
+                customer_id.to_string(),
+                number,
+                NOW,
+            ),
+        )
+    };
+
+    // The supplier's own 2026-0001 does not collide with ours: the indexes are
+    // partial on direction.
+    assert_eq!(insert("2026-0001", "inbound"), Ok(1));
+    // The same supplier number twice is rejected by the schema, not by code.
+    assert!(
+        insert("2026-0001", "inbound").is_err(),
+        "inbound dedupe is a constraint"
+    );
+    // A direction the schema does not know is rejected.
+    assert!(insert("2026-0002", "sideways").is_err(), "direction is checked");
+}
+
+#[test]
 fn missing_records_are_reported() {
     let (_dir, database, _seller, _customer) = seeded();
     let missing = SellerId::new();
@@ -290,7 +357,7 @@ fn missing_records_are_reported() {
     assert!(load_draft(database.connection(), DocumentId::new()).unwrap().is_none());
 }
 
-fn issue(database: &mut Database, draft: &InvoiceDraft) -> store::IssuedInvoice {
+fn issue(database: &mut Database, draft: &InvoiceDraft) -> store::DocumentRecord {
     insert_draft(database.connection(), draft, NOW).unwrap();
     issue_draft(
         database.connection_mut(),

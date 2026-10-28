@@ -64,19 +64,19 @@ CREATE TABLE app_setting (
 );
 
 CREATE TABLE sequence (
-    seller_id  TEXT NOT NULL REFERENCES seller(id),
+    owner_id   TEXT NOT NULL REFERENCES seller(id),
     doc_type   TEXT NOT NULL,
     series     TEXT NOT NULL,
     year       INTEGER NOT NULL,
     next_value INTEGER NOT NULL,
     lease_end  INTEGER,
-    PRIMARY KEY (seller_id, doc_type, series, year)
+    PRIMARY KEY (owner_id, doc_type, series, year)
 );
 
 CREATE TABLE invoice_draft (
     id                  TEXT PRIMARY KEY,
-    seller_id           TEXT NOT NULL REFERENCES seller(id),
-    customer_id         TEXT REFERENCES customer(id),
+    owner_id            TEXT NOT NULL REFERENCES seller(id),
+    counterparty_id     TEXT REFERENCES customer(id),
     doc_type            TEXT NOT NULL DEFAULT '380',
     currency            TEXT NOT NULL CHECK (length(currency) = 3),
     issue_date_local    TEXT NOT NULL,
@@ -127,7 +127,7 @@ CREATE TABLE audit_event (
 );
 
 CREATE INDEX customer_display_name_idx ON customer (display_name);
-CREATE INDEX invoice_draft_seller_idx ON invoice_draft (seller_id, issue_date_local);
+CREATE INDEX invoice_draft_owner_idx ON invoice_draft (owner_id, issue_date_local);
 CREATE INDEX invoice_draft_line_draft_idx ON invoice_draft_line (draft_id, position);
 CREATE INDEX tax_code_seller_idx ON tax_code (seller_id, archived);
 CREATE INDEX audit_event_subject_idx ON audit_event (subject_kind, subject_id, seq);

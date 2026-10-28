@@ -298,7 +298,7 @@ re-verifies that the reference is an issued document of the same seller before
 allocating a number, so a stale reference cannot be issued. Credit notes have
 their own counter and a `-C` number prefix (`2026-C0001`). T1-022 (a credit note
 needs a preceding invoice), T1-023 (no due date on a credit note), and T1-024 (an
-invoice must not carry a preceding reference) are blocking. Schema version is 4.
+invoice must not carry a preceding reference) are blocking.
 The CLI gained `bonk credit-note <number>`, and the desktop Issued screen has a
 Credit note action that copies the document into the editor. `validate-m1.sh`
 now validates 20 invoices and one credit note against Mustang: **21/21 valid**.
@@ -341,7 +341,7 @@ buyer and order reference from the document they correct, so the copied draft
 still passes R003.
 
 Remaining in M2: nothing blocking. Explicit deliver-to address fields beyond the
-buyer country remain for a later slice. Workspace tests: 206 encrypted, 204 plain.
+buyer country remain for a later slice. Workspace tests: 217 encrypted, 215 plain.
 
 Exit criteria:
 
@@ -372,10 +372,18 @@ both parties, lines with their VAT treatment, totals, BG-3), rejects DTDs,
 bounds size and depth, and resolves the document's own namespace prefix.
 Round-trip tests prove the reader and the writer agree; error tests cover a
 DTD, a foreign root, a missing number, a malformed date, and excessive nesting.
-CII and Factur-X extraction have not started, and nothing is stored yet: the
-schema reshape (one document table with `direction`, `owner_id`, and
-`counterparty_id`, partial unique indexes per direction) comes next, followed by
-`bonk import` and the payable register.
+
+The schema now has one document model. `issued_invoice`/`issued_line` became
+`document`/`document_line` with a `direction`, an `owner_id` (always our entity),
+and a `counterparty_id` (buyer outbound, supplier inbound); `artefact` lost its
+separate `imported_invoice_id`. Numbering is separated by two partial unique
+indexes, so a supplier's `2026-0001` cannot collide with ours and the same
+supplier number cannot be recorded twice. Because nothing has shipped, the
+migrations were consolidated rather than stacked: 0001 parties and drafts, 0002
+documents, 0003 suppression, schema version 3.
+
+Not started: CII, Factur-X extraction, `bonk import` itself, supplier matching,
+and the payable register.
 
 Exit criteria:
 

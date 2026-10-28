@@ -9,7 +9,7 @@ use crux::{
     VatRate, calculate_totals, has_blocking, validate_draft,
 };
 use store::{
-    CustomerRecord, IssueRequest, IssuedInvoice, SellerRecord, StoreError, Suppression, attach_artefact,
+    CustomerRecord, DocumentRecord, IssueRequest, SellerRecord, StoreError, Suppression, attach_artefact,
     credit_note_for, first_seller, insert_customer, insert_seller, issue_draft, list_customers, list_suppressions,
     save_draft, save_suppression,
 };
@@ -45,7 +45,7 @@ pub struct Workspace {
     customer_form: CustomerForm,
     show_customer_form: bool,
     editor: Option<Editor>,
-    issued: Option<IssuedInvoice>,
+    issued: Option<DocumentRecord>,
     pdf: Option<PdfDocument>,
     pdf_path: String,
     conformance_findings: Vec<Finding>,

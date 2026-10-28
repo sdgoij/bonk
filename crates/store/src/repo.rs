@@ -80,7 +80,7 @@ pub struct IssueView<'a> {
 
 /// Result of issuing.
 #[derive(Clone, PartialEq, Eq, Debug)]
-pub struct IssuedInvoice {
+pub struct DocumentRecord {
     /// Document identity.
     pub id: DocumentId,
     /// Human number.
@@ -250,7 +250,7 @@ pub fn save_draft(conn: &Connection, draft: &InvoiceDraft, now: &str) -> Result<
     let preceding = draft.preceding_invoice.as_ref();
     transaction.execute(
         "INSERT INTO invoice_draft
-             (id, seller_id, customer_id, doc_type, currency, issue_date_local,
+             (id, owner_id, counterparty_id, doc_type, currency, issue_date_local,
               due_date_local, delivery_date_local, buyer_reference, order_reference,
               project_reference, notes_json, payment_terms_days, raw_input_json,
               revision, hlc, created_at, updated_at,
@@ -258,8 +258,8 @@ pub fn save_draft(conn: &Connection, draft: &InvoiceDraft, now: &str) -> Result<
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, NULL, ?11, NULL, NULL, 0, '', ?12, ?12,
                  ?13, ?14, ?15)
          ON CONFLICT(id) DO UPDATE SET
-             seller_id = excluded.seller_id,
-             customer_id = excluded.customer_id,
+             owner_id = excluded.owner_id,
+             counterparty_id = excluded.counterparty_id,
              doc_type = excluded.doc_type,
              currency = excluded.currency,
              issue_date_local = excluded.issue_date_local,
@@ -435,7 +435,7 @@ pub fn load_draft(conn: &Connection, id: DocumentId) -> Result<Option<InvoiceDra
     let key = id.to_string();
     let header = conn
         .query_row(
-            "SELECT seller_id, customer_id, doc_type, currency, issue_date_local,
+            "SELECT owner_id, counterparty_id, doc_type, currency, issue_date_local,
                     due_date_local, delivery_date_local, buyer_reference, order_reference, notes_json,
                     preceding_invoice_id, preceding_number, preceding_issue_date
              FROM invoice_draft WHERE id = ?1",
@@ -573,9 +573,9 @@ pub fn find_issued_reference(
 ) -> Result<Option<IssuedReference>, StoreError> {
     let raw = conn
         .query_row(
-            "SELECT id, number, issue_date_local, doc_type, customer_id, currency,
+            "SELECT id, number, issue_date_local, doc_type, counterparty_id, currency,
                     buyer_reference, order_reference
-             FROM issued_invoice WHERE seller_id = ?1 AND number = ?2",
+             FROM document WHERE owner_id = ?1 AND number = ?2 AND direction = 'outbound'",
             params![seller_id.to_string(), number],
             |row| {
                 Ok((
@@ -638,7 +638,7 @@ pub fn credit_note_for(
 
 fn issued_lines(conn: &Connection, invoice_id: DocumentId, currency: Currency) -> Result<Vec<DraftLine>, StoreError> {
     let mut statement =
-        conn.prepare("SELECT id, position, payload_json FROM issued_line WHERE invoice_id = ?1 ORDER BY position")?;
+        conn.prepare("SELECT id, position, payload_json FROM document_line WHERE document_id = ?1 ORDER BY position")?;
     let mut rows = statement.query([invoice_id.to_string()])?;
     let mut lines = Vec::new();
     while let Some(row) = rows.next()? {
@@ -701,7 +701,8 @@ fn verify_preceding(
 ) -> Result<(), StoreError> {
     let stored = conn
         .query_row(
-            "SELECT number, issue_date_local FROM issued_invoice WHERE id = ?1 AND seller_id = ?2",
+            "SELECT number, issue_date_local FROM document
+             WHERE id = ?1 AND owner_id = ?2 AND direction = 'outbound'",
             params![preceding.id.to_string(), seller_id.to_string()],
             |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
         )
@@ -720,7 +721,7 @@ fn verify_preceding(
 }
 
 /// Issues a draft, invoking `render` inside the transaction.
-pub fn issue_draft<R>(conn: &mut Connection, request: IssueRequest<'_>, render: R) -> Result<IssuedInvoice, StoreError>
+pub fn issue_draft<R>(conn: &mut Connection, request: IssueRequest<'_>, render: R) -> Result<DocumentRecord, StoreError>
 where
     R: FnOnce(&IssueView<'_>) -> Result<Vec<u8>, StoreError>,
 {
@@ -792,19 +793,19 @@ where
     let semantic_hash = audit::sha256_hex(semantic_text.as_bytes());
 
     transaction.execute(
-        "INSERT INTO issued_invoice
-             (id, seller_id, doc_type, series, number, sequence_value, currency,
-              issue_date_local, due_date_local, delivery_date_local, totals_json,
-              tax_breakdown_json, seller_snapshot_json, buyer_snapshot_json,
-              semantic_json, semantic_hash, rounded_at, posting_profile_id, state,
-              issued_at, issued_by_device, created_at,
-              customer_id, buyer_reference, order_reference,
-              preceding_invoice_id, preceding_number, preceding_issue_date)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
-                 ?15, ?16, ?17, NULL, 'issued', ?17, ?18, ?17, ?19, ?20, ?21, ?22, ?23, ?24)",
+        "INSERT INTO document
+             (id, direction, owner_id, counterparty_id, doc_type, series, number,
+              sequence_value, currency, issue_date_local, due_date_local,
+              delivery_date_local, buyer_reference, order_reference, note, totals_json,
+              tax_breakdown_json, issuer_snapshot_json, recipient_snapshot_json,
+              semantic_json, semantic_hash, state, recorded_at, recorded_by_device,
+              created_at, preceding_invoice_id, preceding_number, preceding_issue_date)
+         VALUES (?1, 'outbound', ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
+                 ?14, ?15, ?16, ?17, ?18, ?19, ?20, 'issued', ?21, ?22, ?21, ?23, ?24, ?25)",
         params![
             issued_id.to_string(),
             draft.seller_id.to_string(),
+            draft.customer_id.to_string(),
             draft.doc_type.code(),
             series,
             number,
@@ -813,6 +814,9 @@ where
             draft.issue_date.to_iso_string(),
             draft.due_date.map(LocalDate::to_iso_string),
             draft.delivery_date.map(LocalDate::to_iso_string),
+            draft.buyer_reference,
+            draft.order_reference,
+            draft.note,
             serde_json::to_string(&totals_json)?,
             breakdown_json,
             serde_json::to_string(&dto::party_to_value(&seller.party)?)?,
@@ -821,9 +825,6 @@ where
             semantic_hash,
             request.now,
             request.device,
-            draft.customer_id.to_string(),
-            draft.buyer_reference,
-            draft.order_reference,
             draft.preceding_invoice.as_ref().map(|value| value.id.to_string()),
             draft.preceding_invoice.as_ref().map(|value| value.number.clone()),
             draft
@@ -852,8 +853,8 @@ where
             "exemption_reason_code": line.treatment.exemption_reason_code,
         });
         transaction.execute(
-            "INSERT INTO issued_line
-                 (id, invoice_id, position, payload_json, line_net_micros, tax_micros, currency)
+            "INSERT INTO document_line
+                 (id, document_id, position, payload_json, line_net_micros, tax_micros, currency)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![
                 line.id.to_string(),
@@ -875,9 +876,9 @@ where
     )?;
     transaction.execute(
         "INSERT INTO artefact
-             (id, invoice_id, imported_invoice_id, kind, syntax_profile, bytes_hash,
+             (id, document_id, kind, syntax_profile, bytes_hash,
               size_bytes, blob_id, rendered_at, renderer_version)
-         VALUES (?1, ?2, NULL, 'ubl', 'peppol-bis-3.0', ?3, ?4, ?5, ?6, ?7)",
+         VALUES (?1, ?2, 'ubl', 'peppol-bis-3.0', ?3, ?4, ?5, ?6, ?7)",
         params![
             DocumentId::new().to_string(),
             issued_id.to_string(),
@@ -915,7 +916,7 @@ where
 
     transaction.commit()?;
 
-    Ok(IssuedInvoice {
+    Ok(DocumentRecord {
         id: issued_id,
         number,
         issue_date: draft.issue_date,
@@ -932,7 +933,7 @@ where
 #[allow(clippy::too_many_arguments)]
 pub fn attach_artefact(
     conn: &Connection,
-    invoice_id: DocumentId,
+    document_id: DocumentId,
     kind: &str,
     bytes: &[u8],
     renderer_version: &str,
@@ -948,12 +949,12 @@ pub fn attach_artefact(
     )?;
     transaction.execute(
         "INSERT INTO artefact
-             (id, invoice_id, imported_invoice_id, kind, syntax_profile, bytes_hash,
+             (id, document_id, kind, syntax_profile, bytes_hash,
               size_bytes, blob_id, rendered_at, renderer_version)
-         VALUES (?1, ?2, NULL, ?3, NULL, ?4, ?5, ?6, ?7, ?8)",
+         VALUES (?1, ?2, ?3, NULL, ?4, ?5, ?6, ?7, ?8)",
         params![
             DocumentId::new().to_string(),
-            invoice_id.to_string(),
+            document_id.to_string(),
             kind,
             hash,
             bytes.len() as i64,
@@ -992,14 +993,14 @@ pub fn verify_artefacts(conn: &Connection) -> Result<usize, StoreError> {
 
 fn next_number(conn: &Connection, seller: SellerId, doc_type: &str, year: i32) -> Result<i64, StoreError> {
     conn.execute(
-        "INSERT INTO sequence (seller_id, doc_type, series, year, next_value)
+        "INSERT INTO sequence (owner_id, doc_type, series, year, next_value)
          VALUES (?1, ?2, 'A', ?3, 1)
          ON CONFLICT DO NOTHING",
         params![seller.to_string(), doc_type, year],
     )?;
     let allocated: i64 = conn.query_row(
         "UPDATE sequence SET next_value = next_value + 1
-         WHERE seller_id = ?1 AND doc_type = ?2 AND series = 'A' AND year = ?3
+         WHERE owner_id = ?1 AND doc_type = ?2 AND series = 'A' AND year = ?3
          RETURNING next_value - 1",
         params![seller.to_string(), doc_type, year],
         |row| row.get(0),

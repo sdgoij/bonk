@@ -36,8 +36,8 @@ pub const MIGRATIONS: &[Migration] = &[
     },
     Migration {
         version: 2,
-        name: "0002_issued",
-        sql: include_str!("../migrations/0002_issued.sql"),
+        name: "0002_documents",
+        sql: include_str!("../migrations/0002_documents.sql"),
         down: None,
     },
     Migration {
@@ -45,12 +45,6 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "0003_suppression",
         sql: include_str!("../migrations/0003_suppression.sql"),
         down: Some(include_str!("../migrations/0003_suppression_down.sql")),
-    },
-    Migration {
-        version: 4,
-        name: "0004_credit_note",
-        sql: include_str!("../migrations/0004_credit_note.sql"),
-        down: Some(include_str!("../migrations/0004_credit_note_down.sql")),
     },
 ];
 
@@ -191,12 +185,12 @@ mod tests {
     fn rollback_is_preflighted_and_refuses_irreversible_migrations() {
         let mut conn = Connection::open_in_memory().unwrap();
         apply(&mut conn).unwrap();
-        assert_eq!(current_version(&conn), 4);
+        assert_eq!(current_version(&conn), 3);
 
         assert!(rollback_to(&mut conn, 1).is_err());
-        assert_eq!(current_version(&conn), 4, "a refused rollback must not partially apply");
+        assert_eq!(current_version(&conn), 3, "a refused rollback must not partially apply");
 
-        assert_eq!(rollback_to(&mut conn, 2).unwrap(), 2);
+        assert_eq!(rollback_to(&mut conn, 2).unwrap(), 1);
         assert_eq!(current_version(&conn), 2);
     }
 
