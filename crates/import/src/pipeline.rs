@@ -1,0 +1,514 @@
+//! Importing a received UBL document into the archive.
+
+use std::path::Path;
+
+use crux::{CustomerId, DocumentId, Party, SellerId};
+use rusqlite::Connection;
+use store::{CustomerRecord, ImportSource, ReceivedDocument, ReceivedLine, StoreError};
+
+/// What happened to one file.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct ImportOutcome {
+    /// File the document came from.
+    pub path: String,
+    /// The document in the archive (the existing one, when this was a repeat).
+    pub document_id: DocumentId,
+    /// Number as the sender wrote it.
+    pub number: String,
+    /// Supplier, when the party table matched one.
+    pub supplier: Option<CustomerId>,
+    /// True when nothing new was written because this document was already here.
+    pub duplicate: bool,
+}
+
+/// Why a file was not imported.
+#[derive(Debug, thiserror::Error)]
+pub enum ImportError {
+    /// The file could not be read.
+    #[error("cannot read {path}: {detail}")]
+    Read {
+        /// Path that failed.
+        path: String,
+        /// Operating-system detail.
+        detail: String,
+    },
+    /// The file is not UTF-8 text.
+    #[error("the document is not UTF-8: {0}")]
+    NotUtf8(String),
+    /// The document is not a UBL invoice or credit note we can represent.
+    #[error(transparent)]
+    Parse(#[from] syntax::ImportError),
+    /// Storage failed.
+    #[error(transparent)]
+    Store(#[from] StoreError),
+    /// The database has no seller to own the document.
+    #[error("this database has no seller to own the document")]
+    NoSeller,
+}
+
+/// Reads and imports one file.
+pub fn import_file(
+    conn: &Connection,
+    owner_id: SellerId,
+    path: &Path,
+    now: &str,
+) -> Result<ImportOutcome, ImportError> {
+    let display = path.display().to_string();
+    let bytes = std::fs::read(path).map_err(|error| ImportError::Read {
+        path: display.clone(),
+        detail: error.to_string(),
+    })?;
+    import_bytes(conn, owner_id, Some(&display), &bytes, now)
+}
+
+/// Imports a document already in memory.
+///
+/// `path` is provenance only; pass `None` when the bytes did not come from a
+/// file. The same bytes are never recorded twice, and the same supplier number
+/// is never recorded twice.
+pub fn import_bytes(
+    conn: &Connection,
+    owner_id: SellerId,
+    path: Option<&str>,
+    bytes: &[u8],
+    now: &str,
+) -> Result<ImportOutcome, ImportError> {
+    let text = std::str::from_utf8(bytes).map_err(|error| ImportError::NotUtf8(error.to_string()))?;
+    let invoice = syntax::read_invoice(text)?;
+    let payload_hash = store::audit::sha256_hex(bytes);
+    let display = path.unwrap_or("(memory)").to_owned();
+    let supplier = match_supplier(conn, &invoice.seller)?;
+
+    if let Some(existing) = store::find_import_by_payload(conn, &payload_hash)? {
+        return Ok(ImportOutcome {
+            path: display,
+            document_id: existing,
+            number: invoice.number,
+            supplier: supplier.map(|(customer_id, _)| customer_id),
+            duplicate: true,
+        });
+    }
+
+    if let Some((customer_id, _)) = supplier
+        && let Some(existing) = store::find_inbound_number(conn, owner_id, customer_id, &invoice.number)?
+    {
+        return Ok(ImportOutcome {
+            path: display,
+            document_id: existing,
+            number: invoice.number,
+            supplier: Some(customer_id),
+            duplicate: true,
+        });
+    }
+
+    let seller = store::load_seller(conn, owner_id)?;
+    let lines: Vec<ReceivedLine> = invoice
+        .lines
+        .iter()
+        .map(|line| ReceivedLine {
+            position: line.position,
+            name: line.name.clone(),
+            description: line.description.clone(),
+            quantity: line.quantity,
+            unit: line.unit,
+            unit_price: line.unit_price,
+            price_base_quantity: line.base_quantity,
+            line_net: line.line_net,
+            treatment: line.treatment.clone(),
+        })
+        .collect();
+
+    let document = ReceivedDocument {
+        number: &invoice.number,
+        doc_type: invoice.doc_type,
+        currency: invoice.currency,
+        issue_date: invoice.issue_date,
+        due_date: invoice.due_date,
+        delivery_date: invoice.delivery_date,
+        buyer_reference: invoice.buyer_reference.as_deref(),
+        order_reference: invoice.order_reference.as_deref(),
+        note: invoice.note.as_deref(),
+        issuer: &invoice.seller,
+        recipient: &seller.party,
+        lines: &lines,
+        totals: &invoice.totals,
+        preceding_number: invoice.preceding.as_ref().map(|preceding| preceding.number.as_str()),
+        preceding_issue_date: invoice.preceding.as_ref().and_then(|preceding| preceding.issue_date),
+    };
+
+    let source = ImportSource {
+        kind: "ubl",
+        path,
+        payload_hash: &payload_hash,
+        payload: bytes,
+    };
+
+    let id = store::record_received(
+        conn,
+        owner_id,
+        supplier.map(|(customer_id, _)| customer_id),
+        &document,
+        &source,
+        supplier.map(|(_, confidence)| confidence),
+        now,
+    )?;
+
+    Ok(ImportOutcome {
+        path: display,
+        document_id: id,
+        number: invoice.number,
+        supplier: supplier.map(|(customer_id, _)| customer_id),
+        duplicate: false,
+    })
+}
+
+/// Matches a supplier against the parties on file.
+///
+/// Suppliers are customers: there is one party table, and a party can be on
+/// either side of a document.
+pub fn match_supplier(conn: &Connection, supplier: &Party) -> Result<Option<(CustomerId, f64)>, StoreError> {
+    let customers = store::list_customers(conn)?;
+    Ok(best_match(&customers, supplier))
+}
+
+/// Picks the best match from `customers`, or `None` when nothing matches.
+///
+/// Confidence is coarse and honest: 1.0 for an identical VAT identifier, 2/3 for
+/// an identical Peppol endpoint, 1/3 for the same legal name and city. Ties keep
+/// the first candidate in listing order, which is deterministic.
+///
+/// A float is allowed here because a confidence never touches money; the
+/// workspace lint against float arithmetic exists to protect amounts.
+#[allow(clippy::float_arithmetic)]
+pub fn best_match(customers: &[CustomerRecord], supplier: &Party) -> Option<(CustomerId, f64)> {
+    let mut best: Option<(CustomerId, u8)> = None;
+    for customer in customers {
+        let score = score(&customer.party, supplier);
+        if score == 0 {
+            continue;
+        }
+        match best {
+            Some((_, top)) if score <= top => {}
+            _ => best = Some((customer.id, score)),
+        }
+    }
+    best.map(|(id, score)| (id, f64::from(score) / 3.0))
+}
+
+fn score(customer: &Party, supplier: &Party) -> u8 {
+    if same(customer.vat_id.as_deref(), supplier.vat_id.as_deref()) {
+        return 3;
+    }
+    if same(customer.peppol_id.as_deref(), supplier.peppol_id.as_deref()) {
+        return 2;
+    }
+    let same_name = same(Some(&customer.legal_name), Some(&supplier.legal_name));
+    let same_city = same(Some(&customer.address.city), Some(&supplier.address.city));
+    if same_name && same_city { 1 } else { 0 }
+}
+
+fn same(left: Option<&str>, right: Option<&str>) -> bool {
+    match (left, right) {
+        (Some(left), Some(right)) => {
+            let left = normalise(left);
+            !left.is_empty() && left == normalise(right)
+        }
+        _ => false,
+    }
+}
+
+fn normalise(value: &str) -> String {
+    value
+        .chars()
+        .filter(|character| character.is_alphanumeric())
+        .flat_map(char::to_uppercase)
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use crux::{Address, CountryCode, Currency};
+    use store::{CustomerRecord, Database, KdfParams, KeyStore, SellerRecord, StoreError};
+
+    use super::*;
+
+    fn party(name: &str, vat: Option<&str>, peppol: Option<&str>) -> Party {
+        let mut party = Party::new(name, Address::new("Amsterdam", CountryCode::NL));
+        party.vat_id = vat.map(str::to_owned);
+        party.peppol_id = peppol.map(str::to_owned);
+        party
+    }
+
+    fn customer(name: &str, vat: Option<&str>, peppol: Option<&str>) -> CustomerRecord {
+        CustomerRecord {
+            id: CustomerId::new(),
+            party: party(name, vat, peppol),
+        }
+    }
+
+    fn ubl(seller: &str, vat: Option<&str>, number: &str) -> Vec<u8> {
+        use crux::{
+            InvoiceTotals, LocalDate, Money, Quantity, TaxBreakdown, TaxTreatment, UnitCode, VatCategory, VatRate,
+        };
+        use syntax::{UblInvoice, UblLine, write_invoice};
+
+        let treatment = TaxTreatment::standard(VatRate::STANDARD_NL);
+        let line = UblLine {
+            id: 1,
+            name: "Consulting",
+            description: None,
+            quantity: Quantity::ONE,
+            unit: UnitCode::PIECE,
+            unit_price: Money::from_major_units(100, Currency::EUR).unwrap(),
+            base_quantity: Quantity::ONE,
+            line_net: Money::from_major_units(100, Currency::EUR).unwrap(),
+            treatment: &treatment,
+        };
+        let net = Money::from_major_units(100, Currency::EUR).unwrap();
+        let tax = Money::from_major_units(21, Currency::EUR).unwrap();
+        let totals = InvoiceTotals {
+            net,
+            tax,
+            gross: Money::from_major_units(121, Currency::EUR).unwrap(),
+            breakdown: vec![TaxBreakdown {
+                category: VatCategory::Standard,
+                rate_bp: 2100,
+                taxable_base: net,
+                tax,
+            }],
+        };
+        let lines = [line];
+        let issuer = party(seller, vat, Some("0106:99999999"));
+        let recipient = party("Us BV", Some("NL123456782B01"), None);
+        let invoice = UblInvoice {
+            number,
+            issue_date: LocalDate::parse_iso("2026-10-27").unwrap(),
+            due_date: Some(LocalDate::parse_iso("2026-11-26").unwrap()),
+            delivery_date: None,
+            doc_type: crux::DocType::Invoice,
+            currency: Currency::EUR,
+            buyer_reference: Some("PO-1"),
+            order_reference: None,
+            note: None,
+            preceding_invoice: None,
+            seller: &issuer,
+            customer: &recipient,
+            lines: &lines,
+            totals: &totals,
+        };
+        write_invoice(&invoice).unwrap().into_bytes()
+    }
+
+    fn database() -> (tempfile::TempDir, Database, SellerId) {
+        let dir = tempfile::TempDir::new().unwrap();
+        let keystore = KeyStore::create(dir.path().join("keystore.bin"), "pass", KdfParams::TEST).unwrap();
+        let database = Database::create(dir.path().join("bonk.db"), &keystore).unwrap();
+        let seller_id = SellerId::new();
+        store::insert_seller(
+            database.connection(),
+            &SellerRecord {
+                id: seller_id,
+                party: party("Us BV", Some("NL123456782B01"), None),
+                default_currency: Currency::EUR,
+                default_locale: "nl-NL".to_owned(),
+            },
+            "2026-10-27T00:00:00Z",
+        )
+        .unwrap();
+        (dir, database, seller_id)
+    }
+
+    #[test]
+    fn matches_by_vat_then_endpoint_then_name_and_city() {
+        let customers = vec![
+            customer("Acme BV", Some("NL111111110B01"), None),
+            customer("Other BV", None, Some("0106:22222222")),
+            customer("Third BV", None, None),
+        ];
+
+        let by_vat = party("Acme BV", Some("nl111111110b01"), None);
+        assert_eq!(best_match(&customers, &by_vat).map(|(id, _)| id), Some(customers[0].id));
+
+        let by_endpoint = party("Irrelevant", None, Some("0106:22222222"));
+        assert_eq!(
+            best_match(&customers, &by_endpoint).map(|(id, _)| id),
+            Some(customers[1].id)
+        );
+
+        let by_name = party("Third BV", None, None);
+        let matched = best_match(&customers, &by_name).expect("name and city match");
+        assert_eq!(matched.0, customers[2].id);
+        assert!((0.33..0.34).contains(&matched.1), "confidence: {}", matched.1);
+    }
+
+    #[test]
+    fn an_unknown_supplier_does_not_match() {
+        let customers = vec![customer("Acme BV", Some("NL111111110B01"), None)];
+        assert!(best_match(&customers, &party("Stranger BV", None, None)).is_none());
+    }
+
+    #[test]
+    fn importing_stores_the_document_and_matches_the_supplier() {
+        let (_dir, database, seller_id) = database();
+        let supplier = customer("Acme BV", Some("NL111111110B01"), None);
+        store::insert_customer(database.connection(), &supplier, "2026-10-27T00:00:00Z").unwrap();
+
+        let bytes = ubl("Acme BV", Some("NL111111110B01"), "SUP-1001");
+        let outcome = import_bytes(
+            database.connection(),
+            seller_id,
+            Some("in/1.xml"),
+            &bytes,
+            "2026-10-27T00:00:00Z",
+        )
+        .expect("import");
+
+        assert!(!outcome.duplicate);
+        assert_eq!(outcome.number, "SUP-1001");
+        assert_eq!(outcome.supplier, Some(supplier.id));
+
+        let (direction, number, counterparty, series): (String, String, Option<String>, Option<String>) = database
+            .connection()
+            .query_row(
+                "SELECT direction, number, counterparty_id, series FROM document WHERE id = ?1",
+                [outcome.document_id.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(direction, "inbound");
+        assert_eq!(number, "SUP-1001");
+        assert_eq!(counterparty.as_deref(), Some(supplier.id.to_string().as_str()));
+        assert_eq!(series, None, "an inbound document has no series of ours");
+
+        let lines: i64 = database
+            .connection()
+            .query_row(
+                "SELECT count(*) FROM document_line WHERE document_id = ?1",
+                [outcome.document_id.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(lines, 1);
+
+        let status: String = database
+            .connection()
+            .query_row(
+                "SELECT match_status FROM import_record WHERE document_id = ?1",
+                [outcome.document_id.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(status, "matched");
+
+        // The audit chain still verifies with an imported document in it.
+        assert_eq!(store::audit::verify_chain(database.connection()).unwrap(), 1);
+    }
+
+    #[test]
+    fn an_unmatched_supplier_is_kept_not_invented() {
+        let (_dir, database, seller_id) = database();
+        let bytes = ubl("Stranger BV", None, "X-1");
+        let outcome =
+            import_bytes(database.connection(), seller_id, None, &bytes, "2026-10-27T00:00:00Z").expect("import");
+
+        assert_eq!(outcome.supplier, None);
+        let counterparty: Option<String> = database
+            .connection()
+            .query_row(
+                "SELECT counterparty_id FROM document WHERE id = ?1",
+                [outcome.document_id.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(counterparty, None);
+
+        let (status, confidence): (String, Option<f64>) = database
+            .connection()
+            .query_row(
+                "SELECT match_status, match_confidence FROM import_record WHERE document_id = ?1",
+                [outcome.document_id.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(status, "unmatched");
+        assert_eq!(confidence, None);
+
+        let customers: i64 = database
+            .connection()
+            .query_row("SELECT count(*) FROM customer", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(customers, 0, "no party is invented");
+    }
+
+    #[test]
+    fn importing_the_same_bytes_twice_writes_one_document() {
+        let (_dir, database, seller_id) = database();
+        let bytes = ubl("Stranger BV", None, "X-1");
+        let first = import_bytes(database.connection(), seller_id, None, &bytes, "2026-10-27T00:00:00Z").unwrap();
+        let again = import_bytes(database.connection(), seller_id, None, &bytes, "2026-10-27T00:00:01Z").unwrap();
+
+        assert!(again.duplicate);
+        assert_eq!(again.document_id, first.document_id);
+        let documents: i64 = database
+            .connection()
+            .query_row("SELECT count(*) FROM document", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(documents, 1);
+    }
+
+    #[test]
+    fn the_same_supplier_number_twice_is_a_duplicate() {
+        let (_dir, database, seller_id) = database();
+        let supplier = customer("Acme BV", Some("NL111111110B01"), None);
+        store::insert_customer(database.connection(), &supplier, "2026-10-27T00:00:00Z").unwrap();
+
+        let first = import_bytes(
+            database.connection(),
+            seller_id,
+            None,
+            &ubl("Acme BV", Some("NL111111110B01"), "SUP-1"),
+            "2026-10-27T00:00:00Z",
+        )
+        .unwrap();
+        // Same number, different bytes: a re-send that changed the line name.
+        let re_send = String::from_utf8(ubl("Acme BV", Some("NL111111110B01"), "SUP-1"))
+            .unwrap()
+            .replace("Consulting", "Consultancy")
+            .into_bytes();
+        let again = import_bytes(database.connection(), seller_id, None, &re_send, "2026-10-27T00:00:01Z").unwrap();
+
+        assert!(again.duplicate, "the supplier number is the identity, not the bytes");
+        assert_eq!(again.document_id, first.document_id);
+        assert_eq!(again.supplier, Some(supplier.id));
+    }
+
+    #[test]
+    fn a_non_ubl_file_is_reported_with_its_reason() {
+        let (_dir, database, seller_id) = database();
+        let error = import_bytes(
+            database.connection(),
+            seller_id,
+            Some("notes.csv"),
+            b"a,b,c",
+            "2026-10-27T00:00:00Z",
+        )
+        .unwrap_err();
+        assert!(matches!(error, ImportError::Parse(_)), "{error}");
+    }
+
+    #[test]
+    fn an_import_without_a_seller_is_reported() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let keystore = KeyStore::create(dir.path().join("keystore.bin"), "pass", KdfParams::TEST).unwrap();
+        let database = Database::create(dir.path().join("bonk.db"), &keystore).unwrap();
+        let error = import_bytes(
+            database.connection(),
+            SellerId::new(),
+            None,
+            &ubl("Acme BV", None, "X-1"),
+            "2026-10-27T00:00:00Z",
+        )
+        .unwrap_err();
+        assert!(matches!(error, ImportError::Store(StoreError::NotFound(_))), "{error}");
+    }
+}

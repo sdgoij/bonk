@@ -720,6 +720,284 @@ fn verify_preceding(
     }
 }
 
+/// One line of a document received from a counterparty.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct ReceivedLine {
+    /// 1-based position.
+    pub position: u32,
+    /// Item name.
+    pub name: String,
+    /// Item description.
+    pub description: Option<String>,
+    /// Quantity.
+    pub quantity: Quantity,
+    /// Unit of measure.
+    pub unit: UnitCode,
+    /// Unit price.
+    pub unit_price: Money,
+    /// Price base quantity.
+    pub price_base_quantity: Quantity,
+    /// Line net amount as sent.
+    pub line_net: Money,
+    /// VAT treatment.
+    pub treatment: TaxTreatment,
+}
+
+/// A document received from a counterparty, ready to be recorded.
+pub struct ReceivedDocument<'a> {
+    /// Number as the sender wrote it.
+    pub number: &'a str,
+    /// Invoice or credit note.
+    pub doc_type: DocType,
+    /// Document currency.
+    pub currency: Currency,
+    /// Issue date.
+    pub issue_date: LocalDate,
+    /// Due date.
+    pub due_date: Option<LocalDate>,
+    /// Actual delivery date.
+    pub delivery_date: Option<LocalDate>,
+    /// Buyer reference.
+    pub buyer_reference: Option<&'a str>,
+    /// Order reference.
+    pub order_reference: Option<&'a str>,
+    /// Free-text note.
+    pub note: Option<&'a str>,
+    /// Who sent it.
+    pub issuer: &'a Party,
+    /// Who received it (us).
+    pub recipient: &'a Party,
+    /// Lines as sent.
+    pub lines: &'a [ReceivedLine],
+    /// Totals as sent.
+    pub totals: &'a InvoiceTotals,
+    /// Preceding invoice number, for a credit note.
+    pub preceding_number: Option<&'a str>,
+    /// Preceding invoice date, for a credit note.
+    pub preceding_issue_date: Option<LocalDate>,
+}
+
+/// Where the bytes came from.
+pub struct ImportSource<'a> {
+    /// `ubl`, `cii`, `pdf_facturx`, or `manual`.
+    pub kind: &'a str,
+    /// File the bytes were read from, when there was one.
+    pub path: Option<&'a str>,
+    /// SHA-256 of the bytes as received.
+    pub payload_hash: &'a str,
+    /// The bytes themselves.
+    pub payload: &'a [u8],
+}
+
+/// Records a document received from `counterparty_id`, or without one when the
+/// supplier could not be matched.
+///
+/// The document is written once, exactly like an issued one: the raw bytes are
+/// kept in `blob`, the parsed values in `document`/`document_line`, and the
+/// provenance in `import_record`. An unmatched supplier leaves
+/// `counterparty_id` null and is visible as `match_status = 'unmatched'` rather
+/// than being invented as a customer.
+pub fn record_received(
+    conn: &Connection,
+    owner_id: SellerId,
+    counterparty_id: Option<CustomerId>,
+    document: &ReceivedDocument<'_>,
+    source: &ImportSource<'_>,
+    confidence: Option<f64>,
+    now: &str,
+) -> Result<DocumentId, StoreError> {
+    let transaction = conn.unchecked_transaction()?;
+    let id = DocumentId::new();
+    let id_text = id.to_string();
+
+    let totals_json = totals_to_json(document.totals)?;
+    let breakdown_json = serde_json::to_string(&totals_json["breakdown"])?;
+    let semantic = json!({
+        "document": {
+            "id": id_text,
+            "direction": "inbound",
+            "number": document.number,
+            "type": document.doc_type.code(),
+            "currency": document.currency.as_str(),
+            "issue_date": document.issue_date.to_iso_string(),
+            "due_date": document.due_date.map(LocalDate::to_iso_string),
+            "delivery_date": document.delivery_date.map(LocalDate::to_iso_string),
+        },
+        "issuer": dto::party_to_value(document.issuer)?,
+        "recipient": dto::party_to_value(document.recipient)?,
+        "lines": document.lines.iter().map(|line| json!({
+            "position": line.position,
+            "name": line.name,
+            "description": line.description,
+            "quantity": line.quantity.to_trimmed_string(),
+            "unit": line.unit.as_str(),
+            "unit_price": line.unit_price.to_trimmed_string(),
+            "price_base_quantity": line.price_base_quantity.to_trimmed_string(),
+            "line_net": line.line_net.to_trimmed_string(),
+            "vat_category": line.treatment.category.code(),
+            "vat_rate_bp": line.treatment.rate.basis_points(),
+        })).collect::<Vec<_>>(),
+        "totals": totals_json,
+    });
+    let semantic_text = serde_json::to_string(&semantic)?;
+    let semantic_hash = audit::sha256_hex(semantic_text.as_bytes());
+
+    let blob_id = DocumentId::new().to_string();
+    transaction.execute(
+        "INSERT INTO blob (id, sha256, size_bytes, compression, payload, created_at)
+         VALUES (?1, ?2, ?3, NULL, ?4, ?5)",
+        params![
+            blob_id,
+            source.payload_hash,
+            source.payload.len() as i64,
+            source.payload,
+            now
+        ],
+    )?;
+
+    transaction.execute(
+        "INSERT INTO document
+             (id, direction, owner_id, counterparty_id, doc_type, series, number,
+              sequence_value, currency, issue_date_local, due_date_local,
+              delivery_date_local, buyer_reference, order_reference, note, totals_json,
+              tax_breakdown_json, issuer_snapshot_json, recipient_snapshot_json,
+              semantic_json, semantic_hash, state, recorded_at, recorded_by_device,
+              created_at, preceding_invoice_id, preceding_number, preceding_issue_date)
+         VALUES (?1, 'inbound', ?2, ?3, ?4, NULL, ?5, NULL, ?6, ?7, ?8, ?9, ?10, ?11,
+                 ?12, ?13, ?14, ?15, ?16, ?17, ?18, 'received', ?19, 'import', ?19,
+                 NULL, ?20, ?21)",
+        params![
+            id_text,
+            owner_id.to_string(),
+            counterparty_id.map(|value| value.to_string()),
+            document.doc_type.code(),
+            document.number,
+            document.currency.as_str(),
+            document.issue_date.to_iso_string(),
+            document.due_date.map(LocalDate::to_iso_string),
+            document.delivery_date.map(LocalDate::to_iso_string),
+            document.buyer_reference,
+            document.order_reference,
+            document.note,
+            serde_json::to_string(&totals_json)?,
+            breakdown_json,
+            serde_json::to_string(&dto::party_to_value(document.issuer)?)?,
+            serde_json::to_string(&dto::party_to_value(document.recipient)?)?,
+            semantic_text,
+            semantic_hash,
+            now,
+            document.preceding_number,
+            document.preceding_issue_date.map(LocalDate::to_iso_string),
+        ],
+    )?;
+
+    for line in document.lines {
+        let tax = crux::tax_amount(line.line_net, line.treatment.rate)
+            .map_err(|error| StoreError::Data(error.to_string()))?;
+        let payload = json!({
+            "position": line.position,
+            "name": line.name,
+            "description": line.description,
+            "quantity_micros": line.quantity.micros(),
+            "unit": line.unit.as_str(),
+            "unit_price_micros": line.unit_price.micros(),
+            "price_base_quantity_micros": line.price_base_quantity.micros(),
+            "line_net_micros": line.line_net.micros(),
+            "vat_category": line.treatment.category.code(),
+            "vat_rate_bp": line.treatment.rate.basis_points(),
+            "exemption_reason": line.treatment.exemption_reason,
+            "exemption_reason_code": line.treatment.exemption_reason_code,
+        });
+        transaction.execute(
+            "INSERT INTO document_line
+                 (id, document_id, position, payload_json, line_net_micros, tax_micros, currency)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                LineId::new().to_string(),
+                id_text,
+                line.position,
+                serde_json::to_string(&payload)?,
+                line.line_net.micros(),
+                tax.micros(),
+                document.currency.as_str(),
+            ],
+        )?;
+    }
+
+    transaction.execute(
+        "INSERT INTO import_record
+             (id, document_id, source_kind, source_path, payload_hash, match_status,
+              match_confidence, imported_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        params![
+            DocumentId::new().to_string(),
+            id_text,
+            source.kind,
+            source.path,
+            source.payload_hash,
+            if counterparty_id.is_some() {
+                "matched"
+            } else {
+                "unmatched"
+            },
+            confidence,
+            now,
+        ],
+    )?;
+
+    audit::append(
+        &transaction,
+        now,
+        "import",
+        "imported",
+        "document",
+        &id_text,
+        json!({
+            "number": document.number,
+            "direction": "inbound",
+            "payload_hash": source.payload_hash,
+            "matched": counterparty_id.is_some(),
+        }),
+    )?;
+
+    transaction.commit()?;
+    Ok(id)
+}
+
+/// Looks up an inbound document of `counterparty_id` by the sender's number.
+pub fn find_inbound_number(
+    conn: &Connection,
+    owner_id: SellerId,
+    counterparty_id: CustomerId,
+    number: &str,
+) -> Result<Option<DocumentId>, StoreError> {
+    let found: Option<String> = conn
+        .query_row(
+            "SELECT id FROM document
+             WHERE direction = 'inbound' AND owner_id = ?1 AND counterparty_id = ?2 AND number = ?3",
+            params![owner_id.to_string(), counterparty_id.to_string(), number],
+            |row| row.get(0),
+        )
+        .optional()?;
+    found
+        .map(|id| DocumentId::parse_str(&id).map_err(|error| StoreError::Data(error.to_string())))
+        .transpose()
+}
+
+/// Looks up an import by the hash of the bytes that produced it.
+pub fn find_import_by_payload(conn: &Connection, payload_hash: &str) -> Result<Option<DocumentId>, StoreError> {
+    let found: Option<String> = conn
+        .query_row(
+            "SELECT document_id FROM import_record WHERE payload_hash = ?1 LIMIT 1",
+            [payload_hash],
+            |row| row.get(0),
+        )
+        .optional()?;
+    found
+        .map(|id| DocumentId::parse_str(&id).map_err(|error| StoreError::Data(error.to_string())))
+        .transpose()
+}
+
 /// Issues a draft, invoking `render` inside the transaction.
 pub fn issue_draft<R>(conn: &mut Connection, request: IssueRequest<'_>, render: R) -> Result<DocumentRecord, StoreError>
 where

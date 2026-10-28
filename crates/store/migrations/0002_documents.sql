@@ -81,6 +81,20 @@ CREATE TABLE artefact (
     renderer_version TEXT NOT NULL
 );
 
+CREATE TABLE import_record (
+    id               TEXT PRIMARY KEY,
+    document_id      TEXT NOT NULL REFERENCES document(id),
+    source_kind      TEXT NOT NULL,          -- ubl | cii | pdf_facturx | manual
+    source_path      TEXT,
+    payload_hash     TEXT NOT NULL,          -- SHA-256 of the bytes as received
+    match_status     TEXT NOT NULL CHECK (match_status IN ('matched', 'unmatched')),
+    match_confidence REAL,
+    imported_at      TEXT NOT NULL
+);
+
+CREATE INDEX import_record_payload ON import_record (payload_hash);
+CREATE INDEX import_record_document ON import_record (document_id);
+
 -- One series for what we issue; the sender's own numbering for what we receive.
 CREATE UNIQUE INDEX document_outbound_number
     ON document (owner_id, series, number) WHERE direction = 'outbound';

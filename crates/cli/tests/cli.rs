@@ -124,6 +124,7 @@ fn migrate_down_is_guarded_and_respects_irreversible_migrations() {
     assert!(output.contains("rolled back: 1 migration(s)"), "{output}");
     assert!(output.contains("schema:   2"), "{output}");
 
+    // 0002 creates the document tables; it has no safe inverse.
     let mut args = vec!["migrate-down", "--to", "1", "--yes"];
     args.extend(common);
     let output = bonk().args(&args).output().expect("binary runs");
@@ -308,6 +309,27 @@ fn full_slice_through_the_cli() {
     if pdf_expected {
         assert!(verified.contains("artefacts: 4 hashes verified"), "{verified}");
     }
+
+    // Importing our own file back proves the inbound path end to end: it lands in
+    // the same table with the same number and does not collide with the outbound
+    // document.
+    let invoice_file = output_dir.join("2026-0001.xml");
+    let invoice_path = invoice_file.to_str().expect("utf-8");
+    let mut args = vec!["import", invoice_path];
+    args.extend(common);
+    let imported = bonk_ok(&args);
+    assert!(imported.contains("imported: 2026-0001"), "{imported}");
+    assert!(imported.contains("supplier: unmatched"), "{imported}");
+
+    let mut args = vec!["import", invoice_path];
+    args.extend(common);
+    let again = bonk_ok(&args);
+    assert!(again.contains("duplicate: 2026-0001"), "{again}");
+
+    let mut args = vec!["verify"];
+    args.extend(common);
+    let verified = bonk_ok(&args);
+    assert!(verified.contains("audit:    5 events verified"), "{verified}");
 }
 
 #[test]

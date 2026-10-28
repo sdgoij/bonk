@@ -856,6 +856,7 @@ dependencies = [
  "app",
  "clap",
  "crux",
+ "import",
  "rpassword",
  "store",
  "tempfile",
@@ -2035,6 +2036,11 @@ name = "import"
 version = "0.0.0"
 dependencies = [
  "crux",
+ "rusqlite",
+ "store",
+ "syntax",
+ "tempfile",
+ "thiserror 2.0.21",
 ]
 
 [[package]]

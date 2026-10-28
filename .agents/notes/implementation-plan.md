@@ -341,7 +341,7 @@ buyer and order reference from the document they correct, so the copied draft
 still passes R003.
 
 Remaining in M2: nothing blocking. Explicit deliver-to address fields beyond the
-buyer country remain for a later slice. Workspace tests: 217 encrypted, 215 plain.
+buyer country remain for a later slice. Workspace tests: 225 encrypted, 223 plain.
 
 Exit criteria:
 
@@ -382,8 +382,18 @@ supplier number cannot be recorded twice. Because nothing has shipped, the
 migrations were consolidated rather than stacked: 0001 parties and drafts, 0002
 documents, 0003 suppression, schema version 3.
 
-Not started: CII, Factur-X extraction, `bonk import` itself, supplier matching,
-and the payable register.
+Not started: CII, Factur-X extraction, and the payable register UI.
+
+The inbound path is wired end to end. `bonk import <files…>` reads a UBL
+document, matches the issuer against the party table (identical VAT identifier,
+then identical Peppol endpoint, then legal name plus city), and records it as a
+`document` row with `direction = 'inbound'`: the bytes in `blob`, the parsed
+values in `document`/`document_line`, and the provenance in `import_record`
+(source kind and path, payload hash, match status and confidence). An unmatched
+supplier leaves `counterparty_id` null and `match_status = 'unmatched'`; no party
+is invented. The same bytes, or the same supplier number, are reported as a
+duplicate and write nothing. The parser's guarantees (no DTD, bounded size and
+depth, UBL root) apply before anything is stored.
 
 Exit criteria:
 

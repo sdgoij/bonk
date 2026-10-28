@@ -111,6 +111,7 @@ bonk draft-new --seller <seller-id> --customer <customer-id> \
 bonk issue <draft-id> --out ./out
 bonk credit-note 2026-0001
 bonk issue <credit-note-draft-id> --out ./out
+bonk import ./received/*.xml
 bonk verify
 ```
 
@@ -118,6 +119,13 @@ Peppol BIS 3.0 requires an endpoint identifier for both parties and a buyer or
 order reference, and a Dutch seller also needs a street, a post code, and a KvK
 number. Omitting them is a blocking finding, not a warning, because the recipient
 cannot route the document without them.
+
+`import` records invoices received from suppliers in the same table as the ones
+you issue, distinguished by direction. The issuer is matched against your
+customers by VAT identifier, then Peppol identifier, then legal name and city;
+an unmatched supplier is kept and flagged rather than invented. Importing the
+same file (or the same supplier number) twice writes nothing and reports a
+duplicate.
 
 `credit-note` copies an issued invoice into a credit-note draft: same customer,
 currency, and lines, with BG-3 naming the invoice it corrects. Credit notes use

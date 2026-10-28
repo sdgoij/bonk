@@ -130,7 +130,10 @@ fn canonical_event(
 }
 
 /// SHA-256 as lowercase hex.
-pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
+///
+/// Shared with callers that need to hash provenance (import payloads, artefact
+/// bytes) with the same function the chain uses.
+pub fn sha256_hex(bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(bytes);
     hex(hasher.finalize().as_slice())

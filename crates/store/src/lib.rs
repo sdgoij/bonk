@@ -25,10 +25,11 @@ pub use db::Database;
 pub use error::StoreError;
 pub use keystore::{KdfParams, KeyStore};
 pub use repo::{
-    CustomerRecord, DocumentRecord, IssueRequest, IssueView, IssuedReference, SellerRecord, Suppression,
-    attach_artefact, credit_note_for, find_issued_reference, first_seller, insert_customer, insert_draft,
-    insert_seller, issue_draft, list_customers, list_suppressions, load_customer, load_draft, load_seller, now_rfc3339,
-    save_draft, save_suppression, verify_artefacts,
+    CustomerRecord, DocumentRecord, ImportSource, IssueRequest, IssueView, IssuedReference, ReceivedDocument,
+    ReceivedLine, SellerRecord, Suppression, attach_artefact, credit_note_for, find_import_by_payload,
+    find_inbound_number, find_issued_reference, first_seller, insert_customer, insert_draft, insert_seller,
+    issue_draft, list_customers, list_suppressions, load_customer, load_draft, load_seller, now_rfc3339,
+    record_received, save_draft, save_suppression, verify_artefacts,
 };
 
 /// True when the database file is actually encrypted.

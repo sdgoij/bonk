@@ -845,7 +845,7 @@ CREATE TABLE import_record (
     source_kind        TEXT NOT NULL,      -- ubl | cii | pdf_facturx | manual
     source_path        TEXT,
     payload_hash       TEXT NOT NULL,
-    duplicate_of       TEXT REFERENCES document(id),
+    match_status       TEXT NOT NULL,      -- matched | unmatched
     match_confidence   REAL,               -- only here; never for money
     imported_at        TEXT NOT NULL
 );

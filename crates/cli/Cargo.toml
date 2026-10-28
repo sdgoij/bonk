@@ -18,6 +18,7 @@ plain = ["app/plain", "store/plain"]
 [dependencies]
 app = { path = "../app", default-features = false }
 crux.workspace = true
+import.workspace = true
 store = { path = "../store", default-features = false }
 
 clap.workspace = true

@@ -1,8 +1,16 @@
-#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 //! Import pipeline: sniffing, extraction, dedupe, supplier matching.
 //!
-//! M3 implements the parsers. The entry point is deliberately a total function
-//! over bytes, so the fuzz targets have one thing to call.
+//! The pipeline records what arrived; it does not decide what it means. A
+//! received document becomes a `document` row with `direction = 'inbound'`, the
+//! supplier is matched against the party table, and anything unmatched is kept
+//! with `match_status = 'unmatched'` rather than invented as a customer.
+
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
+#![forbid(unsafe_code)]
+
+mod pipeline;
+
+pub use pipeline::{ImportError, ImportOutcome, best_match, import_bytes, import_file, match_supplier};
 
 /// Crate identity, used by diagnostics and support bundles.
 pub const CRATE_NAME: &str = "import";

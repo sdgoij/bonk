@@ -148,6 +148,15 @@ enum Command {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Import invoices received from suppliers. Each argument is a UBL file.
+    Import {
+        /// Files to import.
+        #[arg(required = true)]
+        files: Vec<PathBuf>,
+        /// Owner; defaults to the first seller.
+        #[arg(long)]
+        seller: Option<String>,
+    },
     /// Validate and issue a draft; writes the UBL artefact to `--out`.
     Issue {
         /// Draft identifier.
@@ -381,6 +390,50 @@ fn run(cli: Cli) -> Result<(), CliError> {
 
             if !dry_run {
                 insert_draft(connection, &draft, &store::now_rfc3339())?;
+            }
+            Ok(())
+        }
+        Some(Command::Import { files, seller }) => {
+            let session = open(&database, &keystore, passphrase.clone())?;
+            let connection = session.database().connection();
+            let owner = match seller {
+                Some(value) => SellerId::parse_str(&value)?,
+                None => {
+                    first_seller(connection)?
+                        .ok_or_else(|| CliError::Input("no seller in this database".to_owned()))?
+                        .id
+                }
+            };
+            let now = store::now_rfc3339();
+            let mut failed = 0_usize;
+            for file in &files {
+                match import::import_file(connection, owner, file, &now) {
+                    Ok(outcome) if outcome.duplicate => {
+                        println!("duplicate: {}", outcome.number);
+                        println!("  document: {}", outcome.document_id);
+                        println!("  file:     {}", outcome.path);
+                    }
+                    Ok(outcome) => {
+                        let supplier = outcome
+                            .supplier
+                            .map(|id| id.to_string())
+                            .unwrap_or_else(|| "unmatched".to_owned());
+                        println!("imported: {}", outcome.number);
+                        println!("  document: {}", outcome.document_id);
+                        println!("  supplier: {supplier}");
+                        println!("  file:     {}", outcome.path);
+                    }
+                    Err(error) => {
+                        eprintln!("error: {}: {error}", file.display());
+                        failed += 1;
+                    }
+                }
+            }
+            if failed > 0 {
+                return Err(CliError::Input(format!(
+                    "{failed} of {} file(s) could not be imported",
+                    files.len()
+                )));
             }
             Ok(())
         }

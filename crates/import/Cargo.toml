@@ -8,6 +8,13 @@ publish = false
 
 [dependencies]
 crux.workspace = true
+syntax.workspace = true
+store = { path = "../store", default-features = false }
+thiserror.workspace = true
+rusqlite.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
 
 [lints]
 workspace = true
