@@ -554,8 +554,8 @@ checks each artefact's hash against its blob, confirms every import record still
 has its payload, runs `PRAGMA foreign_key_check`, and counts blobs nothing refers
 to. `bonk verify` reports all four; an orphan is wasted space, a mismatch or a
 missing payload is corruption. `blob` now has the same write-once triggers as the
-other evidence tables, since every recorded hash points at those bytes. The GUI
-integrity screen is still open; the engine behind it exists.
+other evidence tables, since every recorded hash points at those bytes. The panel
+that renders this arrived with M6.7's other half and is described below.
 
 M6.2's rewrap is in as well. `bonk passphrase-change` opens the keystore and the
 database with the current passphrase, seals the same data key under the new one,
@@ -660,10 +660,9 @@ indistinguishable from the original without an outside record of a head; an
 unlocked archive is readable by anything running as the user; and a recovery key
 stored beside the archive turns two credentials into one.
 
-Remaining in M6: the integrity screen's rendering, whose engine already exists.
-The threat model also lists O3–O6 as open: an optional keychain wrap, fuzz
-targets, tighter file permissions at creation, and a decision on recording chain
-heads somewhere durable.
+Remaining in M6: nothing. The threat model still lists O3–O6 as open: an optional
+keychain wrap, fuzz targets, tighter file permissions at creation, and a decision
+on recording chain heads somewhere durable.
 
 Exit criteria:
 
