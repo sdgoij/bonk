@@ -341,7 +341,7 @@ buyer and order reference from the document they correct, so the copied draft
 still passes R003.
 
 Remaining in M2: nothing blocking. Explicit deliver-to address fields beyond the
-buyer country remain for a later slice. Workspace tests: 239 encrypted, 237 plain.
+buyer country remain for a later slice. Workspace tests: 252 encrypted, 250 plain.
 
 Exit criteria:
 
@@ -403,6 +403,19 @@ syntax is recorded as `source_kind` (`ubl` or `cii`). Dates, type codes, parties
 lines, and totals map from the same BT/BG numbers; `format="102"` is the only
 CII date format accepted, and 380/384 read as an invoice while 381 reads as a
 credit note.
+
+M3.2 is in. A hybrid PDF/XML file is sniffed by its `%PDF-` header, the embedded
+document is recovered through the catalog name tree (with a scan of
+`/EmbeddedFile` streams as a fallback), and the bytes go through the same CII or
+UBL reader as a bare XML file. The XMP packet is cross-checked: a
+`fx:DocumentFileName` that disagrees with the attachment, or a
+`fx:DocumentType` that is not `INVOICE`, is an error rather than a preference.
+Encrypted containers, files over the size limit, and containers whose
+attachments are not XML are refused with a precise reason. Bounds cover the
+input, the attachment count, the name-tree depth, and every decoded stream; the
+page content is never read. The blob keeps the PDF as received and the
+provenance records `source_kind = 'pdf'`, so the same invoice arriving as XML and
+as PDF is one record by supplier number.
 
 M3.5 is in as well. `bonk received` lists inbound documents with supplier, dates,
 amount, and status; `bonk approve` and `bonk mark-paid` move a document forward.

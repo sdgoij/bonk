@@ -18,9 +18,11 @@ crux.workspace = true
 syntax.workspace = true
 store = { path = "../store", default-features = false }
 thiserror.workspace = true
+lopdf.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+flate2 = "1"
 
 [lints]
 workspace = true

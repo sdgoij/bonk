@@ -1078,6 +1078,14 @@ and are rejected, not guessed, otherwise. `read_document` picks the reader from
 the root element and reports the syntax, which is recorded as the import's
 `source_kind`.
 
+PDF extraction follows the same rule of not inventing anything (ADR-019). The
+attachment is found through the catalog's `/EmbeddedFiles` name tree, or by
+scanning `/Type /EmbeddedFile` streams when a producer omits the tree; the stream
+is decoded under a fixed bound; and the XMP packet's `fx:DocumentFileName` and
+`fx:DocumentType` must agree with the attachment. Encrypted containers are
+refused. Page content is never read — it is a rendering, not the invoice. The
+blob keeps the PDF as received and the provenance kind is `pdf`.
+
 Deduplication key: `(supplier_key, external_number)` plus a payload hash
 fallback for suppliers that reuse numbers. Duplicates are flagged, never
 silently dropped.

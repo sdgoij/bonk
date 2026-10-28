@@ -35,6 +35,9 @@ pub enum ImportError {
     /// The file is not UTF-8 text.
     #[error("the document is not UTF-8: {0}")]
     NotUtf8(String),
+    /// The PDF did not contain an invoice we can read.
+    #[error(transparent)]
+    Pdf(#[from] super::PdfError),
     /// The document is not a UBL invoice or credit note we can represent.
     #[error(transparent)]
     Parse(#[from] syntax::ImportError),
@@ -73,8 +76,17 @@ pub fn import_bytes(
     bytes: &[u8],
     now: &str,
 ) -> Result<ImportOutcome, ImportError> {
-    let text = std::str::from_utf8(bytes).map_err(|error| ImportError::NotUtf8(error.to_string()))?;
-    let read = syntax::read_document(text)?;
+    let text = match super::sniff(bytes) {
+        super::SniffedKind::Pdf => {
+            let extracted = super::pdf::extract_invoice(bytes)?;
+            String::from_utf8(extracted.xml).map_err(|error| ImportError::NotUtf8(error.to_string()))?
+        }
+        _ => {
+            let text = std::str::from_utf8(bytes).map_err(|error| ImportError::NotUtf8(error.to_string()))?;
+            text.to_owned()
+        }
+    };
+    let read = syntax::read_document(&text)?;
     let invoice = read.invoice;
     let payload_hash = store::audit::sha256_hex(bytes);
     let display = path.unwrap_or("(memory)").to_owned();
@@ -139,9 +151,10 @@ pub fn import_bytes(
     };
 
     let source = ImportSource {
-        kind: match read.syntax {
-            syntax::Syntax::Ubl21 => "ubl",
-            syntax::Syntax::CiiD16B => "cii",
+        kind: match (super::sniff(bytes), read.syntax) {
+            (super::SniffedKind::Pdf, _) => "pdf",
+            (_, syntax::Syntax::Ubl21) => "ubl",
+            (_, syntax::Syntax::CiiD16B) => "cii",
         },
         path,
         payload_hash: &payload_hash,
@@ -518,6 +531,58 @@ mod tests {
         assert_eq!(listed[0].number, "SUP-2001");
         assert_eq!(listed[0].supplier, "Acme BV");
         assert!(listed[0].matched);
+    }
+
+    #[test]
+    fn imports_a_factur_x_pdf_as_the_same_record() {
+        let (_dir, database, seller_id) = database();
+        let supplier = customer("Acme BV", Some("NL111111110B01"), None);
+        store::insert_customer(database.connection(), &supplier, "2026-10-27T00:00:00Z").unwrap();
+
+        let xml = String::from_utf8(ubl("Acme BV", Some("NL111111110B01"), "SUP-3001")).unwrap();
+        let pdf = crate::pdf::fixtures::container(&xml, None);
+        let outcome =
+            import_bytes(&database, seller_id, Some("in/3.pdf"), &pdf, "2026-10-27T00:00:00Z").expect("import");
+
+        assert_eq!(outcome.number, "SUP-3001");
+        assert_eq!(outcome.supplier, Some(supplier.id));
+
+        let (direction, kind, size): (String, String, i64) = database
+            .connection()
+            .query_row(
+                "SELECT d.direction, i.source_kind, b.size_bytes FROM document d
+                 JOIN import_record i ON i.document_id = d.id
+                 JOIN blob b ON b.sha256 = i.payload_hash
+                 WHERE d.id = ?1",
+                [outcome.document_id.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(direction, "inbound");
+        assert_eq!(kind, "pdf");
+        assert_eq!(size as usize, pdf.len(), "the blob keeps the file as received");
+
+        let listed = store::list_received(database.connection(), seller_id).unwrap();
+        assert_eq!(listed[0].number, "SUP-3001");
+        assert_eq!(listed[0].supplier, "Acme BV");
+    }
+
+    #[test]
+    fn the_same_invoice_as_xml_and_as_pdf_is_one_record() {
+        let (_dir, database, seller_id) = database();
+        let supplier = customer("Acme BV", Some("NL111111110B01"), None);
+        store::insert_customer(database.connection(), &supplier, "2026-10-27T00:00:00Z").unwrap();
+
+        let xml = ubl("Acme BV", Some("NL111111110B01"), "SUP-3002");
+        let first = import_bytes(&database, seller_id, None, &xml, "2026-10-27T00:00:00Z").unwrap();
+        let pdf = crate::pdf::fixtures::container(&String::from_utf8(xml).unwrap(), None);
+        let second = import_bytes(&database, seller_id, None, &pdf, "2026-10-27T00:00:01Z").unwrap();
+
+        assert!(
+            second.duplicate,
+            "the supplier number is the identity, not the container"
+        );
+        assert_eq!(second.document_id, first.document_id);
     }
 
     #[test]

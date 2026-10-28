@@ -19,6 +19,7 @@ captures the decision, its context, and what it costs.
 | [011](011-key-wrapping.md) | DEK/KEK key wrapping with Argon2id; SQLCipher raw key |
 | [012](012-audit-chain.md) | Hash-chained audit log with optional AdES anchor |
 | [018](018-generated-codelists.md) | Code lists generated from the official Schematron, not hand-maintained |
+| [019](019-pdf-extraction.md) | Factur-X extraction with `lopdf`; the visual layer is never read |
 
 Adding or changing a decision means adding an ADR; editing history is not how
 this directory works.

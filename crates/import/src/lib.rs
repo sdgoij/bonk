@@ -8,8 +8,10 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 #![forbid(unsafe_code)]
 
+mod pdf;
 mod pipeline;
 
+pub use pdf::{ExtractedInvoice, PdfError, extract_invoice};
 pub use pipeline::{ImportError, ImportOutcome, best_match, import_bytes, import_file, match_supplier};
 
 /// Crate identity, used by diagnostics and support bundles.

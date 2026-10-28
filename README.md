@@ -127,7 +127,9 @@ cannot route the document without them.
 `import` records invoices received from suppliers in the same table as the ones
 you issue, distinguished by direction. Both UBL 2.1 and UN/CEFACT CII (the syntax
 inside Factur-X) are read; the syntax only changes the element names, not the
-record. The issuer is matched against your customers by VAT identifier, then
+record. A Factur-X PDF is read as a container: the embedded document is
+extracted and cross-checked against its XMP metadata, and the PDF is kept as
+received. The issuer is matched against your customers by VAT identifier, then
 Peppol identifier, then legal name and city; an unmatched supplier is kept and
 flagged rather than invented. Importing the same file (or the same supplier
 number) twice writes nothing and reports a duplicate.
