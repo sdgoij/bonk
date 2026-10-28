@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 
 use rusqlite::{Connection, OpenFlags};
 
-use crate::audit;
+use crate::audit::{self, ChainHead};
 use crate::db::{Database, apply_key};
 use crate::error::StoreError;
 use crate::keystore::KeyStore;
@@ -54,10 +54,26 @@ pub fn backup(
     Ok(BackupReport { path, bytes, removed })
 }
 
+/// What a verified copy holds.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct BackupSummary {
+    /// Audit events in the copy, verified end to end.
+    pub events: usize,
+    /// Schema version the copy was written with.
+    pub schema_version: i64,
+    /// Newest link in its chain, when it has one.
+    pub head: Option<ChainHead>,
+}
+
 /// Checks that a backup opens with this key, is intact, and has a valid chain.
 ///
 /// Read-only on purpose: verifying a backup must not be able to change it.
 pub fn verify(path: impl AsRef<Path>, dek: &[u8; 32]) -> Result<usize, StoreError> {
+    Ok(inspect(path, dek)?.events)
+}
+
+/// Verifies a copy and reports what it holds, for comparing two archives.
+pub fn inspect(path: impl AsRef<Path>, dek: &[u8; 32]) -> Result<BackupSummary, StoreError> {
     let path = path.as_ref();
     if !path.exists() {
         return Err(StoreError::Io(io::Error::new(
@@ -76,7 +92,15 @@ pub fn verify(path: impl AsRef<Path>, dek: &[u8; 32]) -> Result<usize, StoreErro
         return Err(StoreError::Integrity(integrity));
     }
 
-    audit::verify_chain(&conn)
+    let events = audit::verify_chain(&conn)?;
+    let schema_version: Option<i64> =
+        conn.query_row("SELECT max(version) FROM schema_migration", [], |row| row.get(0))?;
+
+    Ok(BackupSummary {
+        events,
+        schema_version: schema_version.unwrap_or(0),
+        head: audit::head(&conn)?,
+    })
 }
 
 /// Turns a timestamp into a file name that sorts chronologically.

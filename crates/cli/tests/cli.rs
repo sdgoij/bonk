@@ -429,6 +429,7 @@ fn full_slice_through_the_cli() {
     args.extend(common);
     let verified = bonk_ok(&args);
     assert!(verified.contains("audit:    8 events verified"), "{verified}");
+    assert!(verified.contains("head:"), "{verified}");
 
     // A backup must verify and be restorable with the same keystore.
     let backups = dir.path().join("backups");
@@ -448,6 +449,7 @@ fn full_slice_through_the_cli() {
     let said = bonk_ok(&args);
     assert!(said.contains("backup verified"), "{said}");
     assert!(said.contains("events verified"), "{said}");
+    assert!(said.contains("head:"), "{said}");
 }
 
 #[test]

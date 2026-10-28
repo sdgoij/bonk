@@ -341,7 +341,7 @@ buyer and order reference from the document they correct, so the copied draft
 still passes R003.
 
 Remaining in M2: nothing blocking. Explicit deliver-to address fields beyond the
-buyer country remain for a later slice. Workspace tests: 278 encrypted, 276 plain.
+buyer country remain for a later slice. Workspace tests: 279 encrypted, 277 plain.
 
 Exit criteria:
 
@@ -522,8 +522,14 @@ verification is left in place and reported. `bonk backup` uses it (default
 directory `backups` beside the database, `--keep` for retention) and
 `bonk verify-backup` checks a copy without opening the live database. Tests cover
 encryption, rotation, refusal before pruning, damage detection, and a restore on
-a fresh path. Remaining in M6: passphrase UX and recovery keys (M6.1), key
-rotation and idle lock (M6.2), chain-head display (M6.3), evidence bundles
+a fresh path.
+
+M6.3's chain-head display is in as well: `audit::head` returns the newest link,
+and both `bonk verify` and `bonk verify-backup` print it, so comparing two copies
+of an archive is a diff of sequence number, hash, and time rather than a guess.
+Event coverage is unchanged and already tested (issue, import, status changes,
+supplier decisions). Remaining in M6: passphrase UX and recovery keys (M6.1), key
+rotation and idle lock (M6.2), evidence bundles
 (M6.5), log redaction and support bundles (M6.6), the integrity screen (M6.7), and
 the threat-model write-up.
 

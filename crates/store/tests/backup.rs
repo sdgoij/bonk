@@ -152,6 +152,38 @@ fn a_damaged_backup_is_detected() {
 }
 
 #[test]
+fn the_copy_holds_the_same_head_as_the_original() {
+    let (dir, database, keystore) = fixture();
+    let hash = store::audit::append(
+        database.connection(),
+        NOW,
+        "test",
+        "noted",
+        "document",
+        "d1",
+        serde_json::json!({ "note": "canary" }),
+    )
+    .unwrap();
+
+    let live = store::audit::head(database.connection()).unwrap().expect("a head");
+    assert_eq!(live.hash, hash);
+    assert_eq!(live.seq, 1);
+
+    let report = backup::backup(
+        &database,
+        &keystore,
+        dir.path().join("backups"),
+        "2026-10-28T12:00:00Z",
+        RETENTION,
+    )
+    .unwrap();
+    let summary = backup::inspect(&report.path, keystore.dek()).unwrap();
+    assert_eq!(summary.head.as_ref(), Some(&live), "two copies must agree on the head");
+    assert_eq!(summary.events, 1);
+    assert_eq!(summary.schema_version, database.schema_version().unwrap());
+}
+
+#[test]
 fn a_missing_backup_is_reported() {
     let (dir, _database, keystore) = fixture();
     let error = backup::verify(dir.path().join("nothing.db"), keystore.dek()).unwrap_err();

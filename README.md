@@ -166,6 +166,10 @@ without opening the live database. Restoring is a file copy onto the clean
 machine plus the same keystore — stop the application first, replace the database
 file, then run `bonk verify`.
 
+`verify` prints the audit chain head — sequence number, hash, and time. Two
+copies of the same archive must agree on that triple; `verify-backup` prints the
+same line for a copy, so the comparison is a diff rather than a guess.
+
 `credit-note` copies an issued invoice into a credit-note draft: same customer,
 currency, and lines, with BG-3 naming the invoice it corrects. Credit notes use
 their own number series (`2026-C0001`) so they never consume an invoice number.

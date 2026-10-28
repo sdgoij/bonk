@@ -22,7 +22,8 @@ pub mod keystore;
 pub mod migrations;
 pub mod repo;
 
-pub use backup::{BackupReport, RETENTION};
+pub use audit::ChainHead;
+pub use backup::{BackupReport, BackupSummary, RETENTION};
 pub use db::Database;
 pub use error::StoreError;
 pub use keystore::{KdfParams, KeyStore};

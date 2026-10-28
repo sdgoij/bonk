@@ -14,6 +14,37 @@ use crate::error::StoreError;
 
 const GENESIS: &str = "0000000000000000000000000000000000000000000000000000000000000000";
 
+/// The newest link in the chain.
+///
+/// Two copies of the same archive should agree on this pair; a different head
+/// for the same history is the first sign that they do not.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct ChainHead {
+    /// Sequence number of the newest event.
+    pub seq: i64,
+    /// Hash of the newest event.
+    pub hash: String,
+    /// When that event was recorded.
+    pub at: String,
+}
+
+/// Returns the newest link, or `None` when nothing has been recorded yet.
+pub fn head(conn: &Connection) -> Result<Option<ChainHead>, StoreError> {
+    conn.query_row(
+        "SELECT seq, hash, at FROM audit_event ORDER BY seq DESC LIMIT 1",
+        [],
+        |row| {
+            Ok(ChainHead {
+                seq: row.get(0)?,
+                hash: row.get(1)?,
+                at: row.get(2)?,
+            })
+        },
+    )
+    .optional()
+    .map_err(StoreError::from)
+}
+
 /// Appends one event and returns its hash (the new chain head).
 #[allow(clippy::too_many_arguments)]
 pub fn append(

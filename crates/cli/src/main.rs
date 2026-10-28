@@ -310,9 +310,14 @@ fn run(cli: Cli) -> Result<(), CliError> {
         Some(Command::VerifyBackup { path }) => {
             let passphrase = resolve_passphrase(passphrase)?;
             let key_store = KeyStore::open(&keystore, &passphrase)?;
-            let events = store::backup::verify(&path, key_store.dek())?;
+            let summary = store::backup::inspect(&path, key_store.dek())?;
             println!("backup verified: {}", path.display());
-            println!("audit:           {events} events verified");
+            println!("schema:          {}", summary.schema_version);
+            println!("audit:           {} events verified", summary.events);
+            match &summary.head {
+                Some(head) => println!("head:            {} {} ({})", head.seq, head.hash, head.at),
+                None => println!("head:            empty chain"),
+            }
             Ok(())
         }
         Some(Command::Init) => {
@@ -338,6 +343,10 @@ fn run(cli: Cli) -> Result<(), CliError> {
             println!("sellers:  {}", summary.sellers);
             println!("drafts:   {}", summary.drafts);
             println!("audit:    {audit_events} events verified");
+            match store::audit::head(session.database().connection())? {
+                Some(head) => println!("head:     {} {} ({})", head.seq, head.hash, head.at),
+                None => println!("head:     empty chain"),
+            }
             println!("artefacts: {artefacts} hashes verified");
             Ok(())
         }
