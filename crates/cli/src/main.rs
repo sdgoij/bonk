@@ -14,7 +14,7 @@ use crux::{
 use store::{
     CustomerRecord, DocumentStatus, IssueRequest, SellerRecord, StoreError, advance_status, credit_note_for,
     first_seller, insert_customer, insert_draft, insert_seller, issue_draft, list_received, load_customer, load_draft,
-    load_seller, resolve_received, verify_artefacts,
+    load_seller, resolve_customer, resolve_received, set_supplier_match, verify_artefacts,
 };
 
 #[derive(Parser)]
@@ -164,6 +164,14 @@ enum Command {
         /// Only show documents in this status.
         #[arg(long)]
         status: Option<String>,
+    },
+    /// Match a received document to a customer (supplier).
+    #[command(name = "match")]
+    Match {
+        /// Document number or identifier.
+        document: String,
+        /// Customer identifier or display name.
+        customer: String,
     },
     /// Approve a received document for payment.
     Approve {
@@ -493,6 +501,18 @@ fn run(cli: Cli) -> Result<(), CliError> {
             if shown == 0 {
                 println!("no received documents");
             }
+            Ok(())
+        }
+        Some(Command::Match { document, customer }) => {
+            let session = open(&database, &keystore, passphrase.clone())?;
+            let connection = session.database().connection();
+            let owner = owner_of(session.database(), None)?;
+            let id = resolve_received(connection, owner, &document)?
+                .ok_or_else(|| CliError::Input(format!("no received document matching {document:?}")))?;
+            let customer_id = resolve_customer(connection, &customer)?
+                .ok_or_else(|| CliError::Input(format!("no customer matching {customer:?}")))?;
+            set_supplier_match(connection, id, customer_id, "cli", &store::now_rfc3339())?;
+            println!("matched: {document} -> {customer}");
             Ok(())
         }
         Some(Command::Approve { document }) => {

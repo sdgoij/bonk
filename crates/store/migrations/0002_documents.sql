@@ -95,6 +95,16 @@ CREATE TABLE import_record (
 CREATE INDEX import_record_payload ON import_record (payload_hash);
 CREATE INDEX import_record_document ON import_record (document_id);
 
+-- A human decision about who a received document came from. The document keeps
+-- the import-time match in `counterparty_id`; this table overrides it without
+-- rewriting the document, and records who decided and when.
+CREATE TABLE supplier_match (
+    document_id TEXT PRIMARY KEY REFERENCES document(id),
+    customer_id TEXT NOT NULL REFERENCES customer(id),
+    decided_by  TEXT NOT NULL,
+    decided_at  TEXT NOT NULL
+);
+
 -- Status transitions are append-only events. The document row never changes, so
 -- "approved" or "paid" is a fact about what we decided, recorded when we
 -- decided it, not a field someone can overwrite.

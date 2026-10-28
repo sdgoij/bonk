@@ -341,7 +341,7 @@ buyer and order reference from the document they correct, so the copied draft
 still passes R003.
 
 Remaining in M2: nothing blocking. Explicit deliver-to address fields beyond the
-buyer country remain for a later slice. Workspace tests: 227 encrypted, 225 plain.
+buyer country remain for a later slice. Workspace tests: 228 encrypted, 226 plain.
 
 Exit criteria:
 
@@ -403,6 +403,14 @@ readable. Transitions only move forward and a repeat is refused with a clear
 message; `document_event` has triggers blocking updates and deletes. Outbound
 documents are not part of the register, and asking to settle one is an error
 rather than a silent no-op.
+
+M3.4 closes with the manual override. `bonk match <document> <customer>` resolves
+the document in the register and the party by identifier or display name, then
+writes one `supplier_match` row and one `supplier_matched` audit event. The
+document keeps the import-time `counterparty_id` and the issuer snapshot; the
+register prefers the matched party's display name, so a human decision corrects
+the view without rewriting history. Only inbound documents can be matched, and
+the decision records who made it and when.
 
 Exit criteria:
 

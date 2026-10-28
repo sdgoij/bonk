@@ -1077,8 +1077,11 @@ pub fn list_received(conn: &Connection, owner_id: SellerId) -> Result<Vec<Receiv
                 d.issuer_snapshot_json, d.currency, d.counterparty_id,
                 (SELECT e.kind FROM document_event e
                  WHERE e.document_id = d.id
-                 ORDER BY e.seq DESC LIMIT 1) AS status
+                 ORDER BY e.seq DESC LIMIT 1) AS status,
+                c.display_name
          FROM document d
+         LEFT JOIN supplier_match m ON m.document_id = d.id
+         LEFT JOIN customer c ON c.id = m.customer_id
          WHERE d.direction = 'inbound' AND d.owner_id = ?1
          ORDER BY d.issue_date_local DESC, d.number DESC",
     )?;
@@ -1095,15 +1098,20 @@ pub fn list_received(conn: &Connection, owner_id: SellerId) -> Result<Vec<Receiv
             .ok_or_else(|| StoreError::Data("stored totals have no gross".to_owned()))?;
         let issuer: serde_json::Value = serde_json::from_str(&row.get::<_, String>(5)?)?;
         let status: Option<String> = row.get(8)?;
+        let matched_name: Option<String> = row.get(9)?;
+        let import_matched = row.get::<_, Option<String>>(7)?.is_some();
+        let matched = import_matched || matched_name.is_some();
 
         received.push(ReceivedSummary {
             id: DocumentId::parse_str(&id).map_err(|error| StoreError::Data(error.to_string()))?,
             number: row.get(1)?,
-            supplier: issuer
-                .get("legal_name")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("unknown supplier")
-                .to_owned(),
+            supplier: matched_name.unwrap_or_else(|| {
+                issuer
+                    .get("legal_name")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("unknown supplier")
+                    .to_owned()
+            }),
             issue_date: parse_date(&row.get::<_, String>(2)?)?,
             due_date: row
                 .get::<_, Option<String>>(3)?
@@ -1115,10 +1123,95 @@ pub fn list_received(conn: &Connection, owner_id: SellerId) -> Result<Vec<Receiv
                 .as_deref()
                 .and_then(DocumentStatus::from_event)
                 .unwrap_or(DocumentStatus::Received),
-            matched: row.get::<_, Option<String>>(7)?.is_some(),
+            matched,
         });
     }
     Ok(received)
+}
+
+/// Records who a received document came from, overriding the import-time match.
+///
+/// The document itself is not touched: the decision is a separate fact with an
+/// author and a time, which is what an accountant needs to see.
+pub fn set_supplier_match(
+    conn: &Connection,
+    document_id: DocumentId,
+    customer_id: CustomerId,
+    actor: &str,
+    now: &str,
+) -> Result<(), StoreError> {
+    let transaction = conn.unchecked_transaction()?;
+    let direction: String = transaction
+        .query_row(
+            "SELECT direction FROM document WHERE id = ?1",
+            [document_id.to_string()],
+            |row| row.get(0),
+        )
+        .optional()?
+        .ok_or_else(|| StoreError::NotFound(format!("document {document_id}")))?;
+    if direction != "inbound" {
+        return Err(StoreError::Rejected(
+            "only received documents have a supplier to match".to_owned(),
+        ));
+    }
+
+    let exists: Option<String> = transaction
+        .query_row(
+            "SELECT id FROM customer WHERE id = ?1",
+            [customer_id.to_string()],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if exists.is_none() {
+        return Err(StoreError::NotFound(format!("customer {customer_id}")));
+    }
+
+    transaction.execute(
+        "INSERT INTO supplier_match (document_id, customer_id, decided_by, decided_at)
+         VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT(document_id) DO UPDATE SET
+             customer_id = excluded.customer_id,
+             decided_by = excluded.decided_by,
+             decided_at = excluded.decided_at",
+        params![document_id.to_string(), customer_id.to_string(), actor, now],
+    )?;
+    audit::append(
+        &transaction,
+        now,
+        actor,
+        "supplier_matched",
+        "document",
+        &document_id.to_string(),
+        json!({ "customer": customer_id.to_string() }),
+    )?;
+    transaction.commit()?;
+    Ok(())
+}
+
+/// Finds a party by identity or by display name.
+pub fn resolve_customer(conn: &Connection, needle: &str) -> Result<Option<CustomerId>, StoreError> {
+    if let Ok(id) = CustomerId::parse_str(needle)
+        && conn
+            .query_row("SELECT id FROM customer WHERE id = ?1", [id.to_string()], |row| {
+                row.get::<_, String>(0)
+            })
+            .optional()?
+            .is_some()
+    {
+        return Ok(Some(id));
+    }
+
+    let found: Option<String> = conn
+        .query_row(
+            "SELECT id FROM customer WHERE lower(display_name) = lower(?1)
+             ORDER BY created_at LIMIT 1",
+            [needle.trim()],
+            |row| row.get(0),
+        )
+        .optional()?;
+    found
+        .map(|id| CustomerId::parse_str(&id).map_err(|error| StoreError::Data(error.to_string())))
+        .transpose()
 }
 
 /// Current status of one document, from its latest event.

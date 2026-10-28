@@ -333,6 +333,17 @@ fn full_slice_through_the_cli() {
     assert!(listed.contains("received"), "{listed}");
     assert!(listed.contains("supplier not matched"), "{listed}");
 
+    let mut args = vec!["match", "2026-0001", "Customer BV"];
+    args.extend(common);
+    let matched = bonk_ok(&args);
+    assert!(matched.contains("matched: 2026-0001 -> Customer BV"), "{matched}");
+
+    let mut args = vec!["received"];
+    args.extend(common);
+    let listed = bonk_ok(&args);
+    assert!(listed.contains("Customer BV"), "{listed}");
+    assert!(!listed.contains("supplier not matched"), "{listed}");
+
     let mut args = vec!["approve", "2026-0001"];
     args.extend(common);
     let approved = bonk_ok(&args);
@@ -364,7 +375,7 @@ fn full_slice_through_the_cli() {
     let mut args = vec!["verify"];
     args.extend(common);
     let verified = bonk_ok(&args);
-    assert!(verified.contains("audit:    7 events verified"), "{verified}");
+    assert!(verified.contains("audit:    8 events verified"), "{verified}");
 }
 
 #[test]

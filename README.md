@@ -113,6 +113,7 @@ bonk credit-note 2026-0001
 bonk issue <credit-note-draft-id> --out ./out
 bonk import ./received/*.xml
 bonk received
+bonk match 2026-0001 "Customer BV"
 bonk approve 2026-0001
 bonk mark-paid 2026-0001
 bonk verify
@@ -131,6 +132,11 @@ same file (or the same supplier number) twice writes nothing and reports a
 duplicate.
 
 `received` is the payable register: number, supplier, dates, amount, and status.
+When the import-time match picked the wrong party, `match <document> <customer>`
+records the right one by identifier or display name. The override is its own row
+with an author and a timestamp, so the register shows the party on file while the
+document keeps the name the supplier sent.
+
 `approve` and `mark-paid` move a document forward, and each step is appended as
 evidence — the document row itself never changes, because what you decided and
 when is part of the record.

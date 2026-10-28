@@ -570,6 +570,11 @@ mod tests {
                 .is_empty()
         );
         assert!(
+            store::list_received(database.connection(), seller_id)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
             store::advance_status(
                 database.connection(),
                 issued.id,
@@ -580,6 +585,55 @@ mod tests {
             .is_err(),
             "an issued document is not in the payable register"
         );
+        assert!(
+            store::set_supplier_match(
+                database.connection(),
+                issued.id,
+                customer.id,
+                "test",
+                "2026-10-28T00:00:00Z"
+            )
+            .is_err(),
+            "an issued document has no supplier to match"
+        );
+    }
+
+    #[test]
+    fn a_supplier_can_be_matched_after_import() {
+        let (_dir, database, seller_id) = database();
+        let outcome = import_bytes(
+            &database,
+            seller_id,
+            None,
+            &ubl("Stranger BV", None, "X-9"),
+            "2026-10-27T00:00:00Z",
+        )
+        .unwrap();
+        let customer = customer("Stranger Holding BV", None, None);
+        store::insert_customer(database.connection(), &customer, "2026-10-27T00:00:00Z").unwrap();
+
+        let before = store::list_received(database.connection(), seller_id).unwrap();
+        assert!(!before[0].matched);
+        assert_eq!(before[0].supplier, "Stranger BV", "the name as sent");
+
+        store::set_supplier_match(
+            database.connection(),
+            outcome.document_id,
+            customer.id,
+            "test",
+            "2026-10-27T00:00:01Z",
+        )
+        .unwrap();
+
+        let after = store::list_received(database.connection(), seller_id).unwrap();
+        assert!(after[0].matched);
+        assert_eq!(
+            after[0].supplier, "Stranger Holding BV",
+            "the party on file, not the sender's spelling"
+        );
+
+        // The decision is recorded as an event on the chain.
+        assert_eq!(store::audit::verify_chain(database.connection()).unwrap(), 2);
     }
 
     #[test]
