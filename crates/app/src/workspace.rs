@@ -18,7 +18,8 @@ use zeroize::Zeroize;
 
 use crate::Session;
 use crate::health::Health;
-use crate::text::Language;
+use crate::text::find::Fact;
+use crate::text::{self, Language};
 
 const ERROR_COLOR: egui::Color32 = egui::Color32::from_rgb(200, 60, 60);
 const WARN_COLOR: egui::Color32 = egui::Color32::from_rgb(190, 140, 40);
@@ -437,16 +438,19 @@ impl Workspace {
         }
 
         ui.horizontal(|ui| {
-            ui.heading("Bonk");
+            ui.heading(text::shell::PRODUCT);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button("Lock").clicked() {
+                if ui.button(text::workspace::lock_action(self.language)).clicked() {
                     lock = true;
                 }
             });
         });
-        ui.label(format!("Database: {}", session.database_path().display()));
+        ui.label(text::workspace::database_line(
+            self.language,
+            &session.database_path().display().to_string(),
+        ));
         if !store::cipher_enabled() {
-            ui.colored_label(ERROR_COLOR, "UNENCRYPTED BUILD - test only, never store real data");
+            ui.colored_label(ERROR_COLOR, text::workspace::unencrypted_warning(self.language));
         }
         ui.separator();
 
@@ -493,6 +497,7 @@ impl Workspace {
     /// press per character would be work the user did not ask for. Enter or the
     /// button runs it, and an empty query lists what the filters allow.
     fn search_ui(&mut self, ui: &mut egui::Ui, session: &Session, focus: Option<&str>) {
+        let language = self.language;
         let mut run = false;
         let mut clear = false;
         let mut opened = None;
@@ -501,27 +506,31 @@ impl Workspace {
         let mut delete_saved = false;
         ui.group(|ui| {
             ui.horizontal(|ui| {
-                ui.strong("Find documents");
-                ui.weak("Ctrl+F");
+                ui.strong(text::find::title(language));
+                ui.weak(text::find::shortcut(language));
             });
             ui.horizontal(|ui| {
                 let response = text_field(ui, &mut self.search.query, "search.query", 300.0, focus);
                 if response.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter)) {
                     run = true;
                 }
-                direction_combo(ui, &mut self.search.direction);
-                status_combo(ui, &mut self.search.status);
-                if ui.button("Search").clicked() {
+                direction_combo(ui, language, &mut self.search.direction);
+                status_combo(ui, language, &mut self.search.status);
+                if ui.button(text::find::search_action(language)).clicked() {
                     run = true;
                 }
-                if ui.button("Clear").clicked() {
+                if ui.button(text::find::clear_action(language)).clicked() {
                     clear = true;
                 }
             });
 
             ui.horizontal(|ui| {
-                ui.label("Saved");
-                let selected = self.search.applied.clone().unwrap_or_else(|| "none".to_owned());
+                ui.label(text::find::saved_label(language));
+                let selected = self
+                    .search
+                    .applied
+                    .clone()
+                    .unwrap_or_else(|| text::find::no_saved(language).to_owned());
                 egui::ComboBox::from_id_salt("search.saved")
                     .selected_text(selected)
                     .show_ui(ui, |ui| {
@@ -534,14 +543,17 @@ impl Workspace {
                     });
                 ui.add(
                     egui::TextEdit::singleline(&mut self.search.save_name)
-                        .hint_text("name")
+                        .hint_text(text::find::save_name_hint(language))
                         .desired_width(140.0),
                 );
-                if ui.button("Save current").clicked() {
+                if ui.button(text::find::save_current_action(language)).clicked() {
                     save_current = true;
                 }
                 let deletable = self.search.applied.is_some();
-                if ui.add_enabled(deletable, egui::Button::new("Delete")).clicked() {
+                if ui
+                    .add_enabled(deletable, egui::Button::new(text::find::delete_action(language)))
+                    .clicked()
+                {
                     delete_saved = true;
                 }
             });
@@ -553,18 +565,18 @@ impl Workspace {
             if self.search.ran {
                 if self.search.results.is_empty() {
                     ui.label(if self.search.query.trim().is_empty() {
-                        "No documents in this archive yet."
+                        text::find::empty_archive(language)
                     } else {
-                        "No documents match. Words are combined, so every word has to appear."
+                        text::find::no_matches(language)
                     });
                 } else {
                     let selected = self.search.opened.as_ref().map(|view| view.id);
-                    if let Some(id) = search_results_ui(ui, &self.search.results, selected) {
+                    if let Some(id) = search_results_ui(ui, language, &self.search.results, selected) {
                         opened = Some(id);
                     }
                 }
             } else {
-                ui.label("Search by number, party, reference, or note. Leave it blank to list everything.");
+                ui.label(text::find::prompt(language));
             }
 
             if let Some(message) = &self.search.open_error {
@@ -578,7 +590,7 @@ impl Workspace {
                     .max_height(360.0)
                     .id_salt("opened-document")
                     .show(ui, |ui| {
-                        ui.group(|ui| close = document_panel(ui, view));
+                        ui.group(|ui| close = document_panel(ui, language, view));
                     });
             }
             if close {
@@ -1608,29 +1620,35 @@ fn text_field(ui: &mut egui::Ui, value: &mut String, field: &str, width: f32, fo
     response
 }
 
-fn direction_combo(ui: &mut egui::Ui, value: &mut Option<Direction>) {
-    let label = match value {
-        None => "any side",
-        Some(Direction::Outbound) => "issued",
-        Some(Direction::Inbound) => "received",
-    };
+fn direction_combo(ui: &mut egui::Ui, language: Language, value: &mut Option<Direction>) {
+    let label = value
+        .map(|direction| text::find::direction(language, direction))
+        .unwrap_or_else(|| text::find::any_side(language));
     egui::ComboBox::from_id_salt("search.direction")
         .selected_text(label)
         .show_ui(ui, |ui| {
-            ui.selectable_value(value, None, "any side");
-            ui.selectable_value(value, Some(Direction::Outbound), "issued");
-            ui.selectable_value(value, Some(Direction::Inbound), "received");
+            ui.selectable_value(value, None, text::find::any_side(language));
+            ui.selectable_value(
+                value,
+                Some(Direction::Outbound),
+                text::find::direction(language, Direction::Outbound),
+            );
+            ui.selectable_value(
+                value,
+                Some(Direction::Inbound),
+                text::find::direction(language, Direction::Inbound),
+            );
         });
 }
 
-fn status_combo(ui: &mut egui::Ui, value: &mut Option<DocumentStatus>) {
+fn status_combo(ui: &mut egui::Ui, language: Language, value: &mut Option<DocumentStatus>) {
     let label = value
-        .map(|status| status.to_string())
-        .unwrap_or_else(|| "any status".to_owned());
+        .map(|status| text::find::status(language, status))
+        .unwrap_or_else(|| text::find::any_status(language));
     egui::ComboBox::from_id_salt("search.status")
         .selected_text(label)
         .show_ui(ui, |ui| {
-            ui.selectable_value(value, None, "any status");
+            ui.selectable_value(value, None, text::find::any_status(language));
             for status in [
                 DocumentStatus::Issued,
                 DocumentStatus::Received,
@@ -1638,19 +1656,24 @@ fn status_combo(ui: &mut egui::Ui, value: &mut Option<DocumentStatus>) {
                 DocumentStatus::Paid,
                 DocumentStatus::Archived,
             ] {
-                ui.selectable_value(value, Some(status), status.to_string());
+                ui.selectable_value(value, Some(status), text::find::status(language, status));
             }
         });
 }
 
-fn search_results_ui(ui: &mut egui::Ui, results: &[SearchHit], selected: Option<DocumentId>) -> Option<DocumentId> {
+fn search_results_ui(
+    ui: &mut egui::Ui,
+    language: Language,
+    results: &[SearchHit],
+    selected: Option<DocumentId>,
+) -> Option<DocumentId> {
     let mut open = None;
     egui::ScrollArea::vertical().max_height(220.0).show(ui, |ui| {
         egui::Grid::new("search-results")
             .num_columns(6)
             .striped(true)
             .show(ui, |ui| {
-                for heading in ["Number", "Side", "Party", "Issued", "Gross", "Status"] {
+                for heading in text::find::columns(language) {
                     ui.strong(heading);
                 }
                 ui.end_row();
@@ -1663,65 +1686,65 @@ fn search_results_ui(ui: &mut egui::Ui, results: &[SearchHit], selected: Option<
                     {
                         open = Some(hit.id);
                     }
-                    ui.label(hit.direction.to_string());
+                    ui.label(text::find::direction(language, hit.direction));
                     ui.label(hit.party.as_str());
                     ui.label(hit.issue_date.to_iso_string());
                     ui.label(format!("{} {}", money_text(hit.gross), hit.currency.as_str()));
-                    ui.label(hit.status.to_string());
+                    ui.label(text::find::status(language, hit.status));
                     ui.end_row();
                 }
             });
     });
-    ui.weak(format!(
-        "{} document(s), best match or newest first, at most {}. Click a number to read it.",
-        results.len(),
-        store::SEARCH_LIMIT
-    ));
+    ui.weak(text::find::footer(language, results.len(), store::SEARCH_LIMIT));
     open
 }
 
 /// Draws a stored document read-only. Returns true when the user closes it.
-fn document_panel(ui: &mut egui::Ui, view: &DocumentView) -> bool {
-    let kind = if view.doc_type.is_credit_note() {
-        "credit note"
-    } else {
-        "invoice"
-    };
+fn document_panel(ui: &mut egui::Ui, language: Language, view: &DocumentView) -> bool {
     let mut close = false;
     ui.horizontal(|ui| {
-        ui.heading(format!("{} · {kind}", view.number));
-        if ui.button("Close").clicked() {
+        ui.heading(text::find::document_title(
+            language,
+            &view.number,
+            view.doc_type.is_credit_note(),
+        ));
+        if ui.button(text::find::close_action(language)).clicked() {
             close = true;
         }
     });
-    ui.weak("Stored as it was issued. Nothing here can be edited; a correction is a credit note.");
+    ui.weak(text::find::stored_note(language));
 
     egui::Grid::new("document-facts")
         .num_columns(2)
         .striped(true)
         .show(ui, |ui| {
-            fact(ui, "Side", &view.direction.to_string());
-            fact(ui, "Status", &view.status.to_string());
-            fact(ui, "Issued", &view.issue_date.to_iso_string());
+            fact(
+                ui,
+                language,
+                Fact::Side,
+                text::find::direction(language, view.direction),
+            );
+            fact(ui, language, Fact::Status, text::find::status(language, view.status));
+            fact(ui, language, Fact::Issued, &view.issue_date.to_iso_string());
             if let Some(due) = view.due_date {
-                fact(ui, "Due", &due.to_iso_string());
+                fact(ui, language, Fact::Due, &due.to_iso_string());
             }
             if let Some(delivery) = view.delivery_date {
-                fact(ui, "Delivered", &delivery.to_iso_string());
+                fact(ui, language, Fact::Delivered, &delivery.to_iso_string());
             }
             if let Some(reference) = &view.buyer_reference {
-                fact(ui, "Buyer reference", reference);
+                fact(ui, language, Fact::BuyerReference, reference);
             }
             if let Some(reference) = &view.order_reference {
-                fact(ui, "Order reference", reference);
+                fact(ui, language, Fact::OrderReference, reference);
             }
-            fact(ui, "Seller", &view.seller.legal_name);
-            fact(ui, "Buyer", &view.buyer.legal_name);
+            fact(ui, language, Fact::Seller, &view.seller.legal_name);
+            fact(ui, language, Fact::Buyer, &view.buyer.legal_name);
             if let Some(note) = &view.note {
-                fact(ui, "Note", note);
+                fact(ui, language, Fact::Note, note);
             }
-            fact(ui, "Recorded", &view.recorded_at);
-            fact(ui, "Semantic SHA-256", &view.semantic_hash);
+            fact(ui, language, Fact::Recorded, &view.recorded_at);
+            fact(ui, language, Fact::SemanticHash, &view.semantic_hash);
         });
 
     ui.add_space(6.0);
@@ -1729,7 +1752,7 @@ fn document_panel(ui: &mut egui::Ui, view: &DocumentView) -> bool {
         .num_columns(6)
         .striped(true)
         .show(ui, |ui| {
-            for heading in ["#", "Item", "Qty", "Unit price", "VAT", "Net"] {
+            for heading in text::find::line_columns(language) {
                 ui.strong(heading);
             }
             ui.end_row();
@@ -1745,16 +1768,16 @@ fn document_panel(ui: &mut egui::Ui, view: &DocumentView) -> bool {
         });
 
     ui.add_space(6.0);
-    ui.label(format!(
-        "Net {} · VAT {} · Payable {}",
-        money_text(view.totals.net),
-        money_text(view.totals.tax),
-        money_text(view.totals.gross)
+    ui.label(text::find::totals(
+        language,
+        &money_text(view.totals.net),
+        &money_text(view.totals.tax),
+        &money_text(view.totals.gross),
     ));
 
     if !view.events.is_empty() {
         ui.add_space(6.0);
-        ui.strong("History");
+        ui.strong(text::find::history_label(language));
         for event in &view.events {
             ui.label(format!("{} · {} · {}", event.at, event.kind, event.actor));
         }
@@ -1762,11 +1785,13 @@ fn document_panel(ui: &mut egui::Ui, view: &DocumentView) -> bool {
 
     if !view.artefacts.is_empty() {
         ui.add_space(6.0);
-        ui.strong("Artefacts");
+        ui.strong(text::find::artefacts_label(language));
         for artefact in &view.artefacts {
-            ui.label(format!(
-                "{} · {} bytes · {}",
-                artefact.kind, artefact.size_bytes, artefact.bytes_hash
+            ui.label(text::find::artefact_line(
+                language,
+                &artefact.kind,
+                artefact.size_bytes,
+                &artefact.bytes_hash,
             ));
         }
     }
@@ -1774,8 +1799,8 @@ fn document_panel(ui: &mut egui::Ui, view: &DocumentView) -> bool {
     close
 }
 
-fn fact(ui: &mut egui::Ui, label: &str, value: &str) {
-    ui.weak(label);
+fn fact(ui: &mut egui::Ui, language: Language, fact: Fact, value: &str) {
+    ui.weak(text::find::fact(language, fact));
     ui.label(value);
     ui.end_row();
 }
