@@ -23,6 +23,16 @@ when a required gate cannot be run.
 
 ## Verification gates
 
+Enable the pre-commit gate once per clone; it is a convenience, not a
+replacement for the gates below:
+
+```sh
+git config core.hooksPath .githooks
+```
+
+The hook runs formatting and clippy through the Strawberry wrapper and blocks
+the commit on failure. `BONK_PRECOMMIT_TESTS=1` adds the workspace tests.
+
 Use the Strawberry Perl wrapper for Cargo on Windows:
 
 ```sh

@@ -1,0 +1,43 @@
+#!/bin/sh
+# Pre-commit gate: refuse commits that fail formatting and lints.
+#
+# Installed once per clone with:
+#     git config core.hooksPath .githooks
+# Bypass once with `git commit --no-verify` when you really mean it.
+#
+# Windows builds need Strawberry Perl for the vendored OpenSSL, so the checks go
+# through tools/cargo-strawberry.sh, the same wrapper the gates use. Git starts
+# hooks in the repository root, and the wrapper path is resolved from there.
+#
+# The hook checks the working tree, not the index: this repository commits after
+# the gates pass, and splitting staged from unstaged content would need a stash.
+# Set BONK_PRECOMMIT_TESTS=1 to run the workspace tests as well.
+
+set -eu
+
+root=$(git rev-parse --show-toplevel)
+cd "$root"
+
+if [ -f tools/cargo-strawberry.sh ]; then
+    run_cargo() { sh tools/cargo-strawberry.sh "$@"; }
+else
+    if ! command -v cargo >/dev/null 2>&1; then
+        echo "pre-commit: no cargo and no tools/cargo-strawberry.sh; skipping the gate" >&2
+        exit 0
+    fi
+    echo "pre-commit: tools/cargo-strawberry.sh is missing; using cargo from PATH" >&2
+    run_cargo() { cargo "$@"; }
+fi
+
+echo "pre-commit: cargo fmt --all --check"
+run_cargo fmt --all --check
+
+echo "pre-commit: clippy --workspace --all-targets -- -D warnings"
+run_cargo clippy --workspace --all-targets -- -D warnings
+
+if [ "${BONK_PRECOMMIT_TESTS:-0}" = "1" ]; then
+    echo "pre-commit: test --workspace"
+    run_cargo test --workspace
+fi
+
+echo "pre-commit: ok"

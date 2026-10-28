@@ -63,6 +63,21 @@ the GUI shows a permanent red warning, and the CLI prints
 `encryption: none (test build)`. Never ship or use it for real data. See
 [`.agents/notes/spikes/sqlcipher.md`](.agents/notes/spikes/sqlcipher.md).
 
+## Repository setup
+
+Install the pre-commit gate once per clone:
+
+```sh
+git config core.hooksPath .githooks
+```
+
+The hook runs `cargo fmt --all --check` and
+`clippy --workspace --all-targets -- -D warnings` through
+`tools/cargo-strawberry.sh`, and refuses the commit when either fails. Set
+`BONK_PRECOMMIT_TESTS=1` to include `cargo test --workspace`, and use
+`git commit --no-verify` to skip the gate once. It checks the working tree, not
+the index, so a partially staged change needs its own care.
+
 ## Run
 
 ```sh
