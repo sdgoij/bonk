@@ -1864,7 +1864,7 @@ fn parse_date(raw: &str) -> Result<LocalDate, StoreError> {
     LocalDate::parse_iso(raw).map_err(|error| StoreError::Data(error.to_string()))
 }
 
-fn parse_doc_type(raw: &str) -> Result<DocType, StoreError> {
+pub(crate) fn parse_doc_type(raw: &str) -> Result<DocType, StoreError> {
     match raw {
         "380" => Ok(DocType::Invoice),
         "381" => Ok(DocType::CreditNote),

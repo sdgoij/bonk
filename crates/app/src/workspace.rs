@@ -10,8 +10,8 @@ use crux::{
 };
 use store::{
     CustomerRecord, Direction, DocumentRecord, DocumentStatus, IssueRequest, SearchHit, SearchRequest, SellerRecord,
-    StoreError, Suppression, attach_artefact, credit_note_for, first_seller, insert_customer, insert_seller,
-    issue_draft, list_customers, list_suppressions, save_draft, save_suppression, search,
+    StoreError, Suppression, archive::DocumentView, attach_artefact, credit_note_for, first_seller, insert_customer,
+    insert_seller, issue_draft, list_customers, list_suppressions, save_draft, save_suppression, search,
 };
 
 use crate::Session;
@@ -69,6 +69,10 @@ struct SearchView {
     /// True once a query has run, which is what separates "nothing found" from
     /// "nothing asked yet".
     ran: bool,
+    /// The result the user opened, read back from the archive.
+    opened: Option<DocumentView>,
+    /// Why the last attempt to open a result failed, if it did.
+    open_error: Option<String>,
 }
 
 impl SearchView {
@@ -85,6 +89,24 @@ impl SearchView {
         self.results = search(database.connection(), owner, &request)?;
         self.ran = true;
         Ok(())
+    }
+
+    /// Reads a result back from the archive and shows it.
+    fn open(&mut self, database: &store::Database, id: DocumentId) {
+        match store::archive::load(database.connection(), id) {
+            Ok(Some(view)) => {
+                self.opened = Some(view);
+                self.open_error = None;
+            }
+            Ok(None) => {
+                self.opened = None;
+                self.open_error = Some("that document is no longer in this archive; run the search again".to_owned());
+            }
+            Err(error) => {
+                self.opened = None;
+                self.open_error = Some(error.to_string());
+            }
+        }
     }
 }
 
@@ -351,6 +373,7 @@ impl Workspace {
     fn search_ui(&mut self, ui: &mut egui::Ui, session: &Session, focus: Option<&str>) {
         let mut run = false;
         let mut clear = false;
+        let mut opened = None;
         ui.group(|ui| {
             ui.horizontal(|ui| {
                 ui.strong("Find documents");
@@ -379,13 +402,37 @@ impl Workspace {
                         "No documents match. Words are combined, so every word has to appear."
                     });
                 } else {
-                    search_results_ui(ui, &self.search.results);
+                    let selected = self.search.opened.as_ref().map(|view| view.id);
+                    if let Some(id) = search_results_ui(ui, &self.search.results, selected) {
+                        opened = Some(id);
+                    }
                 }
             } else {
                 ui.label("Search by number, party, reference, or note. Leave it blank to list everything.");
             }
+
+            if let Some(message) = &self.search.open_error {
+                ui.colored_label(ERROR_COLOR, message.as_str());
+            }
+
+            let mut close = false;
+            if let Some(view) = &self.search.opened {
+                ui.add_space(8.0);
+                egui::ScrollArea::vertical()
+                    .max_height(360.0)
+                    .id_salt("opened-document")
+                    .show(ui, |ui| {
+                        ui.group(|ui| close = document_panel(ui, view));
+                    });
+            }
+            if close {
+                self.search.opened = None;
+            }
         });
 
+        if let Some(id) = opened {
+            self.search.open(session.database(), id);
+        }
         if clear {
             self.search = SearchView::default();
         }
@@ -1307,7 +1354,8 @@ fn status_combo(ui: &mut egui::Ui, value: &mut Option<DocumentStatus>) {
         });
 }
 
-fn search_results_ui(ui: &mut egui::Ui, results: &[SearchHit]) {
+fn search_results_ui(ui: &mut egui::Ui, results: &[SearchHit], selected: Option<DocumentId>) -> Option<DocumentId> {
+    let mut open = None;
     egui::ScrollArea::vertical().max_height(220.0).show(ui, |ui| {
         egui::Grid::new("search-results")
             .num_columns(6)
@@ -1318,7 +1366,14 @@ fn search_results_ui(ui: &mut egui::Ui, results: &[SearchHit]) {
                 }
                 ui.end_row();
                 for hit in results {
-                    ui.label(hit.number.as_str());
+                    // The number is the handle: a whole row of labels cannot be
+                    // clicked, and a separate button would need a column.
+                    if ui
+                        .selectable_label(selected == Some(hit.id), hit.number.as_str())
+                        .clicked()
+                    {
+                        open = Some(hit.id);
+                    }
                     ui.label(hit.direction.to_string());
                     ui.label(hit.party.as_str());
                     ui.label(hit.issue_date.to_iso_string());
@@ -1329,10 +1384,111 @@ fn search_results_ui(ui: &mut egui::Ui, results: &[SearchHit]) {
             });
     });
     ui.weak(format!(
-        "{} document(s), best match or newest first, at most {}.",
+        "{} document(s), best match or newest first, at most {}. Click a number to read it.",
         results.len(),
         store::SEARCH_LIMIT
     ));
+    open
+}
+
+/// Draws a stored document read-only. Returns true when the user closes it.
+fn document_panel(ui: &mut egui::Ui, view: &DocumentView) -> bool {
+    let kind = if view.doc_type.is_credit_note() {
+        "credit note"
+    } else {
+        "invoice"
+    };
+    let mut close = false;
+    ui.horizontal(|ui| {
+        ui.heading(format!("{} · {kind}", view.number));
+        if ui.button("Close").clicked() {
+            close = true;
+        }
+    });
+    ui.weak("Stored as it was issued. Nothing here can be edited; a correction is a credit note.");
+
+    egui::Grid::new("document-facts")
+        .num_columns(2)
+        .striped(true)
+        .show(ui, |ui| {
+            fact(ui, "Side", &view.direction.to_string());
+            fact(ui, "Status", &view.status.to_string());
+            fact(ui, "Issued", &view.issue_date.to_iso_string());
+            if let Some(due) = view.due_date {
+                fact(ui, "Due", &due.to_iso_string());
+            }
+            if let Some(delivery) = view.delivery_date {
+                fact(ui, "Delivered", &delivery.to_iso_string());
+            }
+            if let Some(reference) = &view.buyer_reference {
+                fact(ui, "Buyer reference", reference);
+            }
+            if let Some(reference) = &view.order_reference {
+                fact(ui, "Order reference", reference);
+            }
+            fact(ui, "Seller", &view.seller.legal_name);
+            fact(ui, "Buyer", &view.buyer.legal_name);
+            if let Some(note) = &view.note {
+                fact(ui, "Note", note);
+            }
+            fact(ui, "Recorded", &view.recorded_at);
+            fact(ui, "Semantic SHA-256", &view.semantic_hash);
+        });
+
+    ui.add_space(6.0);
+    egui::Grid::new("document-lines")
+        .num_columns(6)
+        .striped(true)
+        .show(ui, |ui| {
+            for heading in ["#", "Item", "Qty", "Unit price", "VAT", "Net"] {
+                ui.strong(heading);
+            }
+            ui.end_row();
+            for line in &view.lines {
+                ui.label(line.position.to_string());
+                ui.label(line.name.as_str());
+                ui.label(format!("{} {}", line.quantity.to_trimmed_string(), line.unit.as_str()));
+                ui.label(money_text(line.unit_price));
+                ui.label(line.vat_rate.percent_string());
+                ui.label(money_text(line.line_net));
+                ui.end_row();
+            }
+        });
+
+    ui.add_space(6.0);
+    ui.label(format!(
+        "Net {} · VAT {} · Payable {}",
+        money_text(view.totals.net),
+        money_text(view.totals.tax),
+        money_text(view.totals.gross)
+    ));
+
+    if !view.events.is_empty() {
+        ui.add_space(6.0);
+        ui.strong("History");
+        for event in &view.events {
+            ui.label(format!("{} · {} · {}", event.at, event.kind, event.actor));
+        }
+    }
+
+    if !view.artefacts.is_empty() {
+        ui.add_space(6.0);
+        ui.strong("Artefacts");
+        for artefact in &view.artefacts {
+            ui.label(format!(
+                "{} · {} bytes · {}",
+                artefact.kind, artefact.size_bytes, artefact.bytes_hash
+            ));
+        }
+    }
+
+    close
+}
+
+fn fact(ui: &mut egui::Ui, label: &str, value: &str) {
+    ui.weak(label);
+    ui.label(value);
+    ui.end_row();
 }
 
 fn show_findings(ui: &mut egui::Ui, findings: &[Finding]) -> Option<FindingAction> {
@@ -1515,6 +1671,43 @@ mod tests {
     }
 
     #[test]
+    fn a_result_opens_read_only_with_its_lines_and_totals() {
+        let (_dir, database, seller_id) = seeded_archive();
+
+        let mut view = SearchView::default();
+        view.run(&database, seller_id).unwrap();
+        let hit = view.results[0].clone();
+
+        view.open(&database, hit.id);
+
+        let opened = view.opened.as_ref().expect("the result must open");
+        assert!(view.open_error.is_none());
+        assert_eq!(opened.id, hit.id);
+        assert_eq!(opened.number, hit.number);
+        assert_eq!(opened.buyer.legal_name, "Acme BV");
+        assert_eq!(opened.lines.len(), 1);
+        assert_eq!(opened.totals.gross, hit.gross);
+        assert_eq!(opened.artefacts.len(), 1);
+        assert_eq!(opened.status, DocumentStatus::Issued);
+    }
+
+    #[test]
+    fn opening_a_missing_document_says_so() {
+        let (_dir, database, _seller_id) = seeded_archive();
+        let mut view = SearchView::default();
+
+        view.open(&database, DocumentId::new());
+
+        assert!(view.opened.is_none());
+        assert!(
+            view.open_error
+                .as_deref()
+                .unwrap_or_default()
+                .contains("no longer in this archive")
+        );
+    }
+
+    #[test]
     fn the_workspace_draws_without_panicking() {
         let dir = tempfile::TempDir::new().unwrap();
         let mut session = Session::create(
@@ -1523,9 +1716,35 @@ mod tests {
             "passphrase",
         )
         .unwrap();
-        insert_seller(session.database().connection(), &seller(), NOW).unwrap();
+        let seller = seller();
+        insert_seller(session.database().connection(), &seller, NOW).unwrap();
+        let customer = CustomerRecord {
+            id: CustomerId::new(),
+            party: Party::new("Acme BV", Address::new("Rotterdam", CountryCode::NL)),
+        };
+        insert_customer(session.database().connection(), &customer, NOW).unwrap();
+        let mut form = editor();
+        form.customer = Some(customer.id);
+        let draft = build_draft(&form, &seller).unwrap();
+        insert_draft(session.database().connection(), &draft, NOW).unwrap();
+        let issued = issue_draft(
+            session.database_mut().connection_mut(),
+            IssueRequest {
+                draft_id: draft.id,
+                actor: "test",
+                device: "test",
+                renderer_version: "test",
+                now: NOW,
+            },
+            |_| Ok(b"<Invoice/>".to_vec()),
+        )
+        .unwrap();
 
         let mut workspace = Workspace::new(&session).unwrap();
+        // An opened result draws a grid of facts, a line table, and hashes; the
+        // panel is closed by default, so open it here to exercise it.
+        workspace.search.opened = store::archive::load(session.database().connection(), issued.id).unwrap();
+
         let context = egui::Context::default();
         let mut action = WorkspaceAction::None;
         // Drawing is where duplicate widget ids and missing fonts show up as a

@@ -508,13 +508,17 @@ index, and work the user did not ask for is the wrong default. A blank query
 lists what the filters allow, so the panel doubles as a browse view. The empty
 states are distinct — "nothing asked yet", "nothing in this archive", and
 "nothing matches, every word has to appear" — because the three mean different
-things. Results are read-only for now; opening an archived document in the
-editor is not built. `SearchView` keeps the state apart from the drawing code, so
-a unit test drives the panel against a real database, and a headless egui frame
-proves the workspace draws without panicking.
+things. Clicking a number opens the stored document beneath the list: parties as
+snapshotted on the day, lines with their stored amounts, totals, status history,
+and artefact hashes. It is read-only because the archive is write-once, and
+`store::archive::load` rebuilds it from those rows rather than from today's
+customer table — a rename after issue must not rewrite what the invoice says.
+`SearchView` keeps the state apart from the drawing code, so a unit test drives
+the panel against a real database, and a headless egui frame proves the workspace
+draws without panicking, including with a result open.
 
-Remaining in M5: saved filters, opening a result in the editor, the i18n pass,
-document-language selection, and `bonk support-bundle`.
+Remaining in M5: saved filters, the i18n pass, document-language selection, and
+`bonk support-bundle`.
 
 ---
 

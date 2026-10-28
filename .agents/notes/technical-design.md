@@ -1001,6 +1001,13 @@ invoice number puts that invoice first.
 Expected performance: typed queries under 30 ms p95 on a 20 000-invoice database
 (the M5 exit criterion).
 
+Reading a result back is `store::archive::load`: one query over `document`, plus
+its lines, events, and artefacts, rebuilt into the same domain types the writer
+used. It reads the snapshots (`issuer_snapshot_json`, `recipient_snapshot_json`)
+rather than joining `customer`, so a rename after issue cannot change what the
+archived document says, and totals come back from the stored decimal strings and
+integer micro-units, never through a float.
+
 ### 7.5 Migrations
 
 - Embedded SQL migrations, forward-only, each with a SHA-256 recorded in

@@ -6,6 +6,7 @@
 
 use crux::{Address, CountryCode, Party};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::error::StoreError;
 
@@ -88,4 +89,31 @@ pub(crate) fn party_to_value(party: &Party) -> Result<serde_json::Value, StoreEr
         "email": party.email,
         "phone": party.phone,
     }))
+}
+
+/// The inverse of [`party_to_value`], used when a screen reads a snapshot back.
+pub(crate) fn party_from_value(value: &Value) -> Result<Party, StoreError> {
+    let text = |container: &Value, key: &str| container.get(key).and_then(Value::as_str).map(str::to_owned);
+    let legal_name =
+        text(value, "legal_name").ok_or_else(|| StoreError::Data("a party snapshot has no legal name".to_owned()))?;
+    let address = value
+        .get("address")
+        .ok_or_else(|| StoreError::Data("a party snapshot has no address".to_owned()))?;
+    let country = text(address, "country").unwrap_or_default();
+    Ok(Party {
+        legal_name,
+        trading_name: text(value, "trading_name"),
+        vat_id: text(value, "vat_id"),
+        kvk_number: text(value, "kvk_number"),
+        peppol_id: text(value, "peppol_id"),
+        address: Address {
+            street: text(address, "street"),
+            city: text(address, "city").unwrap_or_default(),
+            postal_code: text(address, "postal_code"),
+            country: CountryCode::parse(&country).map_err(|error| StoreError::Data(error.to_string()))?,
+        },
+        contact_name: text(value, "contact_name"),
+        email: text(value, "email"),
+        phone: text(value, "phone"),
+    })
 }

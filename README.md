@@ -306,8 +306,12 @@ issues the document, and the Issued screen can save the Typst PDF.
 
 The workspace also has a find panel: type a number, party, reference, or note and
 press Enter (Ctrl+F jumps to the field), optionally narrowed by side and status.
-Leaving the query blank lists everything the filters allow. Results are read-only
-for now — opening an archived document in the editor is not built yet.
+Leaving the query blank lists everything the filters allow. Clicking a number
+opens the stored document beneath the list — parties as they were on the day,
+lines, totals, status history, and artefact hashes. It is read-only because an
+issued document is immutable; `store::archive` reads it back from the rows
+written at issue or import, including the party snapshots, so renaming a customer
+next month cannot change what last month's invoice says.
 
 An **Archive health** panel sits at the bottom, collapsed. It shows the schema,
 the encryption state, the archive size, the audit chain head (hover for the full

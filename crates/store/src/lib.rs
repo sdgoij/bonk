@@ -13,6 +13,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod archive;
 pub mod audit;
 pub mod backup;
 pub mod db;
@@ -25,6 +26,7 @@ pub mod migrations;
 pub mod repo;
 pub mod support;
 
+pub use archive::{ArtefactInfo, DocumentView, StatusEvent, StoredLine};
 pub use audit::ChainHead;
 pub use backup::{BackupReport, BackupSummary, RETENTION};
 pub use db::Database;
