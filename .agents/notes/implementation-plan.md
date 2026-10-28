@@ -341,7 +341,7 @@ buyer and order reference from the document they correct, so the copied draft
 still passes R003.
 
 Remaining in M2: nothing blocking. Explicit deliver-to address fields beyond the
-buyer country remain for a later slice. Workspace tests: 308 encrypted, 306 plain.
+buyer country remain for a later slice. Workspace tests: 311 encrypted, 309 plain.
 
 Exit criteria:
 
@@ -581,9 +581,21 @@ number that matches both directions. `bonk evidence` and `bonk evidence-verify`
 expose it. The chain travels whole, so bundles grow with the archive; the design
 note records that trade-off and what a bundle does and does not prove.
 
-Remaining in M6: passphrase UX and recovery keys (M6.1), idle lock and zeroisation
-tests (M6.2), evidence bundles (M6.5), log redaction and support bundles (M6.6),
-the integrity screen (M6.7), and the threat-model write-up.
+M6.6's bundle is in. `store::support` collects counts, versions, sizes, the
+integrity audit, the chain head, and per-kind audit counts, writes `summary.json`
+and `summary.txt`, and `bonk support-bundle` prints exactly what it wrote. The
+redaction policy is structural: the bundle is assembled from typed facts, so there
+is no free text to filter, and paths are excluded because they carry the operating
+system user name. A canary test seeds an archive with a distinctive seller name,
+customer name, supplier number, amount, VAT identifier, document id, and temp
+path, then asserts that none appears in either file while the counts do. Still
+open in M6.6: a log redaction layer, since the product has no logs yet; when they
+arrive they must go through a redacting writer rather than being filtered after
+the fact.
+
+Remaining in M6: the passphrase strength meter and the GUI key prompts (M6.1),
+idle lock and zeroisation tests (M6.2), the integrity screen (M6.7), and the
+threat-model write-up.
 
 Exit criteria:
 

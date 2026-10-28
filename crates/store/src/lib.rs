@@ -23,6 +23,7 @@ pub mod integrity;
 pub mod keystore;
 pub mod migrations;
 pub mod repo;
+pub mod support;
 
 pub use audit::ChainHead;
 pub use backup::{BackupReport, BackupSummary, RETENTION};
@@ -40,6 +41,7 @@ pub use repo::{
     resolve_customer, resolve_document, resolve_received, save_draft, save_suppression, search, set_supplier_match,
     verify_artefacts,
 };
+pub use support::SupportSummary;
 
 /// True when the database file is actually encrypted.
 ///

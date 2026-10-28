@@ -1040,6 +1040,22 @@ Consequences worth stating rather than discovering:
   is internally consistent. It does not prove the chain is the only history — an
   archive could always have been forked before the export.
 
+### 7.7 Support bundles
+
+The support bundle is assembled from **typed facts** — counts, versions, sizes,
+integrity results, per-kind audit counts, and the chain head — so there is no
+channel through which a party name, an amount, a document number, an identifier,
+or a path could arrive. Redaction here is structural: a filter over free text can
+miss, an assembly that has no sensitive input cannot. Paths are excluded because
+they carry the operating-system user name, and these bundles are often pasted
+into public issue trackers.
+
+A canary test seeds an archive with a distinctive seller name, customer name,
+supplier number, amount, VAT identifier, document id, and temporary path, then
+asserts that none of them appears in either file while the counts do. The command
+prints the rendering it wrote, so the user sees the whole bundle before sharing
+it.
+
 ---
 
 ## 8. Validation strategy

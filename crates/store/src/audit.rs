@@ -7,6 +7,7 @@
 use std::fmt::Write as _;
 
 use rusqlite::{Connection, OptionalExtension, params};
+use serde::Serialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
@@ -23,7 +24,7 @@ pub(crate) fn genesis() -> &'static str {
 ///
 /// Two copies of the same archive should agree on this pair; a different head
 /// for the same history is the first sign that they do not.
-#[derive(Clone, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug, Serialize)]
 pub struct ChainHead {
     /// Sequence number of the newest event.
     pub seq: i64,

@@ -216,6 +216,13 @@ a received document is refused rather than guessed at — pass the identifier.
 The chain travels whole, so a bundle grows with the archive; the design note says
 what that buys and what it does not prove.
 
+`support-bundle --out <dir>` writes what a maintainer needs and nothing about the
+business: counts, versions, sizes, integrity results, per-kind audit counts, and
+the chain head. No names, amounts, numbers, identifiers, or paths — it is
+assembled from typed facts rather than filtered from logs, so there is no free
+text to redact. The command prints exactly what it writes, so nothing is sent
+that has not been read.
+
 `credit-note` copies an issued invoice into a credit-note draft: same customer,
 currency, and lines, with BG-3 naming the invoice it corrects. Credit notes use
 their own number series (`2026-C0001`) so they never consume an invoice number.

@@ -65,6 +65,13 @@ enum Command {
         #[arg(long)]
         out: PathBuf,
     },
+    /// Write a support bundle: counts, versions, and integrity state, no data.
+    #[command(name = "support-bundle")]
+    SupportBundle {
+        /// Directory to write into. Defaults to `support-bundle` beside the database.
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
     /// Verify a backup without opening it as the live database.
     #[command(name = "verify-backup")]
     VerifyBackup {
@@ -363,6 +370,26 @@ fn run(cli: Cli) -> Result<(), CliError> {
                 Some(hash) => println!("chain:     {} events, head {hash}", report.events),
                 None => println!("chain:     empty"),
             }
+            Ok(())
+        }
+        Some(Command::SupportBundle { out }) => {
+            let session = open(&database, &keystore, passphrase.clone())?;
+            let directory = out.unwrap_or_else(|| store::support::default_directory(&database));
+
+            let summary = store::support::write(
+                session.database(),
+                &store::support::SupportRequest {
+                    database_path: &database,
+                    keystore_path: &keystore,
+                    app_version: env!("CARGO_PKG_VERSION"),
+                    directory: &directory,
+                    now: &store::now_rfc3339(),
+                },
+            )?;
+            // The preview is the bundle: what is printed is exactly what is
+            // written, so nobody sends a file they have not seen.
+            println!("{}", summary.render_text());
+            println!("written to {}", directory.display());
             Ok(())
         }
         Some(Command::Backup { to, keep }) => {

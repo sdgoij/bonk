@@ -10,12 +10,13 @@
 //! the archive would be lying about evidence it claims to hold.
 
 use rusqlite::{Connection, OptionalExtension};
+use serde::Serialize;
 
 use crate::audit;
 use crate::error::StoreError;
 
 /// What the audit found.
-#[derive(Clone, PartialEq, Eq, Debug, Default)]
+#[derive(Clone, PartialEq, Eq, Debug, Default, Serialize)]
 pub struct IntegrityReport {
     /// Blob payloads re-hashed and compared with their records.
     pub blobs: usize,

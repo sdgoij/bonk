@@ -378,6 +378,43 @@ fn reset_without_a_recovery_key_says_so() {
 }
 
 #[test]
+fn a_support_bundle_can_be_written_and_previewed() {
+    let dir = TempDir::new().expect("temp dir");
+    let (database, keystore) = run_init(&dir);
+    let bundle = dir.path().join("support");
+
+    let output = bonk()
+        .args([
+            "support-bundle",
+            "--db",
+            &database,
+            "--keystore",
+            &keystore,
+            "--passphrase",
+            "correct horse battery staple",
+            "--out",
+            bundle.to_str().expect("utf-8"),
+        ])
+        .output()
+        .expect("binary runs");
+    assert!(
+        output.status.success(),
+        "support-bundle failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let said = String::from_utf8_lossy(&output.stdout);
+    assert!(said.contains("bonk support bundle"), "{said}");
+    assert!(
+        said.contains(&format!("version:    {}", env!("CARGO_PKG_VERSION"))),
+        "the bundle must name the version it came from: {said}"
+    );
+    assert!(said.contains("schema:     3"), "{said}");
+    assert!(said.contains("No names, amounts"), "{said}");
+    assert!(bundle.join("summary.txt").exists());
+    assert!(bundle.join("summary.json").exists());
+}
+
+#[test]
 fn init_then_verify() {
     let dir = TempDir::new().expect("temp dir");
     let (database, keystore) = run_init(&dir);
