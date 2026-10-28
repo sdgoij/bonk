@@ -12,13 +12,13 @@ path = "src/main.rs"
 
 [features]
 default = ["cipher"]
-cipher = ["app/cipher", "store/sqlcipher"]
-plain = ["app/plain", "store/plain"]
+cipher = ["app/cipher", "store/sqlcipher", "import/cipher"]
+plain = ["app/plain", "store/plain", "import/plain"]
 
 [dependencies]
 app = { path = "../app", default-features = false }
 crux.workspace = true
-import.workspace = true
+import = { path = "../import", default-features = false }
 store = { path = "../store", default-features = false }
 
 clap.workspace = true

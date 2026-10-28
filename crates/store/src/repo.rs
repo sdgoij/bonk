@@ -998,6 +998,231 @@ pub fn find_import_by_payload(conn: &Connection, payload_hash: &str) -> Result<O
         .transpose()
 }
 
+/// Where a received document stands in the payable register.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+pub enum DocumentStatus {
+    /// Recorded, not yet approved for payment.
+    Received,
+    /// Approved for payment.
+    Approved,
+    /// Settled.
+    Paid,
+    /// Filed away; no further transitions.
+    Archived,
+}
+
+impl DocumentStatus {
+    /// Stable code, as stored in `document_event.kind`.
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::Received => "received",
+            Self::Approved => "approved",
+            Self::Paid => "paid",
+            Self::Archived => "archived",
+        }
+    }
+
+    /// Parses a status code.
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "received" => Some(Self::Received),
+            "approved" => Some(Self::Approved),
+            "paid" => Some(Self::Paid),
+            "archived" => Some(Self::Archived),
+            _ => None,
+        }
+    }
+
+    fn from_event(kind: &str) -> Option<Self> {
+        match kind {
+            "approved" => Some(Self::Approved),
+            "paid" => Some(Self::Paid),
+            "archived" => Some(Self::Archived),
+            _ => None,
+        }
+    }
+}
+
+impl std::fmt::Display for DocumentStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.code())
+    }
+}
+
+/// One row of the payable register.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct ReceivedSummary {
+    /// Document identity.
+    pub id: DocumentId,
+    /// Number as the supplier wrote it.
+    pub number: String,
+    /// Issuer name from the snapshot taken at import.
+    pub supplier: String,
+    /// Issue date.
+    pub issue_date: LocalDate,
+    /// Due date.
+    pub due_date: Option<LocalDate>,
+    /// Amount due (BT-112).
+    pub gross: Money,
+    /// Current status, derived from the latest event.
+    pub status: DocumentStatus,
+    /// True when the issuer matched a party on file at import time.
+    pub matched: bool,
+}
+
+/// Lists inbound documents, most recent issue date first.
+pub fn list_received(conn: &Connection, owner_id: SellerId) -> Result<Vec<ReceivedSummary>, StoreError> {
+    let mut statement = conn.prepare(
+        "SELECT d.id, d.number, d.issue_date_local, d.due_date_local, d.totals_json,
+                d.issuer_snapshot_json, d.currency, d.counterparty_id,
+                (SELECT e.kind FROM document_event e
+                 WHERE e.document_id = d.id
+                 ORDER BY e.seq DESC LIMIT 1) AS status
+         FROM document d
+         WHERE d.direction = 'inbound' AND d.owner_id = ?1
+         ORDER BY d.issue_date_local DESC, d.number DESC",
+    )?;
+    let mut rows = statement.query([owner_id.to_string()])?;
+    let mut received = Vec::new();
+    while let Some(row) = rows.next()? {
+        let id: String = row.get(0)?;
+        let currency =
+            Currency::parse(&row.get::<_, String>(6)?).map_err(|error| StoreError::Data(error.to_string()))?;
+        let totals: serde_json::Value = serde_json::from_str(&row.get::<_, String>(4)?)?;
+        let gross = totals
+            .get("gross")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| StoreError::Data("stored totals have no gross".to_owned()))?;
+        let issuer: serde_json::Value = serde_json::from_str(&row.get::<_, String>(5)?)?;
+        let status: Option<String> = row.get(8)?;
+
+        received.push(ReceivedSummary {
+            id: DocumentId::parse_str(&id).map_err(|error| StoreError::Data(error.to_string()))?,
+            number: row.get(1)?,
+            supplier: issuer
+                .get("legal_name")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("unknown supplier")
+                .to_owned(),
+            issue_date: parse_date(&row.get::<_, String>(2)?)?,
+            due_date: row
+                .get::<_, Option<String>>(3)?
+                .as_deref()
+                .map(parse_date)
+                .transpose()?,
+            gross: Money::parse_fixed(gross, currency).map_err(|error| StoreError::Data(error.to_string()))?,
+            status: status
+                .as_deref()
+                .and_then(DocumentStatus::from_event)
+                .unwrap_or(DocumentStatus::Received),
+            matched: row.get::<_, Option<String>>(7)?.is_some(),
+        });
+    }
+    Ok(received)
+}
+
+/// Current status of one document, from its latest event.
+pub fn document_status(conn: &Connection, id: DocumentId) -> Result<DocumentStatus, StoreError> {
+    let kind: Option<String> = conn
+        .query_row(
+            "SELECT kind FROM document_event WHERE document_id = ?1 ORDER BY seq DESC LIMIT 1",
+            [id.to_string()],
+            |row| row.get(0),
+        )
+        .optional()?;
+    Ok(kind
+        .as_deref()
+        .and_then(DocumentStatus::from_event)
+        .unwrap_or(DocumentStatus::Received))
+}
+
+/// Appends a status event to an inbound document.
+///
+/// Statuses only move forward; a repeated or backwards transition is refused
+/// rather than silently appended. The document row is never touched, so the
+/// audit trail explains the current status instead of hiding it.
+pub fn advance_status(
+    conn: &Connection,
+    id: DocumentId,
+    target: DocumentStatus,
+    actor: &str,
+    now: &str,
+) -> Result<DocumentStatus, StoreError> {
+    if target == DocumentStatus::Received {
+        return Err(StoreError::Rejected(
+            "received is the initial status and cannot be recorded as an event".to_owned(),
+        ));
+    }
+
+    let transaction = conn.unchecked_transaction()?;
+    let direction: String = transaction
+        .query_row(
+            "SELECT direction FROM document WHERE id = ?1",
+            [id.to_string()],
+            |row| row.get(0),
+        )
+        .optional()?
+        .ok_or_else(|| StoreError::NotFound(format!("document {id}")))?;
+    if direction != "inbound" {
+        return Err(StoreError::Rejected(
+            "only received documents use the payable register".to_owned(),
+        ));
+    }
+
+    let current = document_status(&transaction, id)?;
+    if target <= current {
+        return Err(StoreError::Rejected(format!(
+            "document {id} is already {current}; cannot move to {target}"
+        )));
+    }
+
+    transaction.execute(
+        "INSERT INTO document_event (id, document_id, kind, at, actor, detail)
+         VALUES (?1, ?2, ?3, ?4, ?5, NULL)",
+        params![DocumentId::new().to_string(), id.to_string(), target.code(), now, actor],
+    )?;
+    audit::append(
+        &transaction,
+        now,
+        actor,
+        "document_status",
+        "document",
+        &id.to_string(),
+        json!({ "from": current.code(), "to": target.code() }),
+    )?;
+    transaction.commit()?;
+    Ok(target)
+}
+
+/// Finds an inbound document by identity or by the supplier's number.
+pub fn resolve_received(conn: &Connection, owner_id: SellerId, needle: &str) -> Result<Option<DocumentId>, StoreError> {
+    if let Ok(id) = DocumentId::parse_str(needle)
+        && let Some(direction) = conn
+            .query_row(
+                "SELECT direction FROM document WHERE id = ?1",
+                [id.to_string()],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+        && direction == "inbound"
+    {
+        return Ok(Some(id));
+    }
+
+    let found: Option<String> = conn
+        .query_row(
+            "SELECT id FROM document
+             WHERE direction = 'inbound' AND owner_id = ?1 AND number = ?2
+             ORDER BY issue_date_local DESC LIMIT 1",
+            params![owner_id.to_string(), needle],
+            |row| row.get(0),
+        )
+        .optional()?;
+    found
+        .map(|id| DocumentId::parse_str(&id).map_err(|error| StoreError::Data(error.to_string())))
+        .transpose()
+}
+
 /// Issues a draft, invoking `render` inside the transaction.
 pub fn issue_draft<R>(conn: &mut Connection, request: IssueRequest<'_>, render: R) -> Result<DocumentRecord, StoreError>
 where

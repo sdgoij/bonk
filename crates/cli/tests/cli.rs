@@ -326,10 +326,45 @@ fn full_slice_through_the_cli() {
     let again = bonk_ok(&args);
     assert!(again.contains("duplicate: 2026-0001"), "{again}");
 
+    let mut args = vec!["received"];
+    args.extend(common);
+    let listed = bonk_ok(&args);
+    assert!(listed.contains("2026-0001"), "{listed}");
+    assert!(listed.contains("received"), "{listed}");
+    assert!(listed.contains("supplier not matched"), "{listed}");
+
+    let mut args = vec!["approve", "2026-0001"];
+    args.extend(common);
+    let approved = bonk_ok(&args);
+    assert!(approved.contains("approved: 2026-0001"), "{approved}");
+
+    let mut args = vec!["received", "--status", "paid"];
+    args.extend(common);
+    assert!(bonk_ok(&args).contains("no received documents"));
+
+    let mut args = vec!["mark-paid", "2026-0001"];
+    args.extend(common);
+    let paid = bonk_ok(&args);
+    assert!(paid.contains("paid: 2026-0001"), "{paid}");
+
+    let mut args = vec!["received"];
+    args.extend(common);
+    assert!(bonk_ok(&args).contains("paid"), "the register shows the new status");
+
+    let mut args = vec!["approve", "2026-0001"];
+    args.extend(common);
+    let refused = bonk().args(&args).output().expect("binary runs");
+    assert!(!refused.status.success(), "statuses do not move backwards");
+    assert!(
+        String::from_utf8_lossy(&refused.stderr).contains("already paid"),
+        "{}",
+        String::from_utf8_lossy(&refused.stderr)
+    );
+
     let mut args = vec!["verify"];
     args.extend(common);
     let verified = bonk_ok(&args);
-    assert!(verified.contains("audit:    5 events verified"), "{verified}");
+    assert!(verified.contains("audit:    7 events verified"), "{verified}");
 }
 
 #[test]

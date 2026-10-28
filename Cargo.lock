@@ -2036,7 +2036,6 @@ name = "import"
 version = "0.0.0"
 dependencies = [
  "crux",
- "rusqlite",
  "store",
  "syntax",
  "tempfile",

@@ -6,12 +6,18 @@ rust-version.workspace = true
 license.workspace = true
 publish = false
 
+[features]
+default = ["cipher"]
+# Production: SQLCipher page encryption (via `store`).
+cipher = ["store/sqlcipher"]
+# Test-only fallback for hosts without a working OpenSSL/Perl toolchain.
+plain = ["store/plain"]
+
 [dependencies]
 crux.workspace = true
 syntax.workspace = true
 store = { path = "../store", default-features = false }
 thiserror.workspace = true
-rusqlite.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

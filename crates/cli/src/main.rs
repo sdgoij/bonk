@@ -12,8 +12,9 @@ use crux::{
     validate_draft,
 };
 use store::{
-    CustomerRecord, IssueRequest, SellerRecord, StoreError, credit_note_for, first_seller, insert_customer,
-    insert_draft, insert_seller, issue_draft, load_customer, load_draft, load_seller, verify_artefacts,
+    CustomerRecord, DocumentStatus, IssueRequest, SellerRecord, StoreError, advance_status, credit_note_for,
+    first_seller, insert_customer, insert_draft, insert_seller, issue_draft, list_received, load_customer, load_draft,
+    load_seller, resolve_received, verify_artefacts,
 };
 
 #[derive(Parser)]
@@ -156,6 +157,24 @@ enum Command {
         /// Owner; defaults to the first seller.
         #[arg(long)]
         seller: Option<String>,
+    },
+    /// List documents received from suppliers.
+    #[command(name = "received")]
+    Received {
+        /// Only show documents in this status.
+        #[arg(long)]
+        status: Option<String>,
+    },
+    /// Approve a received document for payment.
+    Approve {
+        /// Document number or identifier.
+        document: String,
+    },
+    /// Mark a received document as paid.
+    #[command(name = "mark-paid")]
+    MarkPaid {
+        /// Document number or identifier.
+        document: String,
     },
     /// Validate and issue a draft; writes the UBL artefact to `--out`.
     Issue {
@@ -407,7 +426,7 @@ fn run(cli: Cli) -> Result<(), CliError> {
             let now = store::now_rfc3339();
             let mut failed = 0_usize;
             for file in &files {
-                match import::import_file(connection, owner, file, &now) {
+                match import::import_file(session.database(), owner, file, &now) {
                     Ok(outcome) if outcome.duplicate => {
                         println!("duplicate: {}", outcome.number);
                         println!("  document: {}", outcome.document_id);
@@ -436,6 +455,51 @@ fn run(cli: Cli) -> Result<(), CliError> {
                 )));
             }
             Ok(())
+        }
+        Some(Command::Received { status }) => {
+            let session = open(&database, &keystore, passphrase.clone())?;
+            let connection = session.database().connection();
+            let owner = owner_of(session.database(), None)?;
+            let filter = match status {
+                Some(value) => Some(DocumentStatus::parse(&value).ok_or_else(|| {
+                    CliError::Input(format!(
+                        "unknown status {value:?}; use received, approved, paid, or archived"
+                    ))
+                })?),
+                None => None,
+            };
+
+            let mut shown = 0_usize;
+            for row in list_received(connection, owner)? {
+                if filter.is_some_and(|filter| filter != row.status) {
+                    continue;
+                }
+                println!(
+                    "{:<14} {:<28} {}  {:>12}  {:<9} {}",
+                    row.number,
+                    row.supplier,
+                    row.issue_date.to_iso_string(),
+                    row.gross.to_fixed_string(2)?,
+                    row.status,
+                    row.due_date
+                        .map(|due| format!("due {}", due.to_iso_string()))
+                        .unwrap_or_default()
+                );
+                if !row.matched {
+                    println!("               supplier not matched; the document is kept as received");
+                }
+                shown += 1;
+            }
+            if shown == 0 {
+                println!("no received documents");
+            }
+            Ok(())
+        }
+        Some(Command::Approve { document }) => {
+            settle_received(&database, &keystore, passphrase, &document, DocumentStatus::Approved)
+        }
+        Some(Command::MarkPaid { document }) => {
+            settle_received(&database, &keystore, passphrase, &document, DocumentStatus::Paid)
         }
         Some(Command::Issue {
             draft,
@@ -632,6 +696,33 @@ fn print_findings(findings: &[Finding]) {
             None => eprintln!("{severity} {} {}: {}", finding.code, finding.field, finding.message),
         }
     }
+}
+
+fn owner_of(database: &store::Database, explicit: Option<String>) -> Result<SellerId, CliError> {
+    match explicit {
+        Some(value) => Ok(SellerId::parse_str(&value)?),
+        None => first_seller(database.connection())?
+            .ok_or_else(|| CliError::Input("this database has no seller".to_owned()))
+            .map(|seller| seller.id),
+    }
+}
+
+/// Moves a received document forward in the payable register.
+fn settle_received(
+    database: &Path,
+    keystore: &Path,
+    passphrase: Option<String>,
+    document: &str,
+    target: DocumentStatus,
+) -> Result<(), CliError> {
+    let session = open(database, keystore, passphrase)?;
+    let connection = session.database().connection();
+    let owner = owner_of(session.database(), None)?;
+    let id = resolve_received(connection, owner, document)?
+        .ok_or_else(|| CliError::Input(format!("no received document matching {document:?}")))?;
+    let status = advance_status(connection, id, target, "cli", &store::now_rfc3339())?;
+    println!("{status}: {document}");
+    Ok(())
 }
 
 fn warn_if_unencrypted() {

@@ -341,7 +341,7 @@ buyer and order reference from the document they correct, so the copied draft
 still passes R003.
 
 Remaining in M2: nothing blocking. Explicit deliver-to address fields beyond the
-buyer country remain for a later slice. Workspace tests: 225 encrypted, 223 plain.
+buyer country remain for a later slice. Workspace tests: 227 encrypted, 225 plain.
 
 Exit criteria:
 
@@ -382,7 +382,7 @@ supplier number cannot be recorded twice. Because nothing has shipped, the
 migrations were consolidated rather than stacked: 0001 parties and drafts, 0002
 documents, 0003 suppression, schema version 3.
 
-Not started: CII, Factur-X extraction, and the payable register UI.
+Not started: CII, Factur-X extraction, and the register's user interface beyond the CLI.
 
 The inbound path is wired end to end. `bonk import <files…>` reads a UBL
 document, matches the issuer against the party table (identical VAT identifier,
@@ -394,6 +394,15 @@ supplier leaves `counterparty_id` null and `match_status = 'unmatched'`; no part
 is invented. The same bytes, or the same supplier number, are reported as a
 duplicate and write nothing. The parser's guarantees (no DTD, bounded size and
 depth, UBL root) apply before anything is stored.
+
+M3.5 is in as well. `bonk received` lists inbound documents with supplier, dates,
+amount, and status; `bonk approve` and `bonk mark-paid` move a document forward.
+Status is derived from append-only `document_event` rows, never written to the
+document, so the document stays immutable and the reason for its status stays
+readable. Transitions only move forward and a repeat is refused with a clear
+message; `document_event` has triggers blocking updates and deletes. Outbound
+documents are not part of the register, and asking to settle one is an error
+rather than a silent no-op.
 
 Exit criteria:
 

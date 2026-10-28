@@ -58,6 +58,10 @@ pub enum StoreError {
     #[error("corrupt record: {0}")]
     Data(String),
 
+    /// The request is understood but not allowed in the current state.
+    #[error("{0}")]
+    Rejected(String),
+
     /// Artefact rendering failed.
     #[error("rendering failed: {0}")]
     Render(String),

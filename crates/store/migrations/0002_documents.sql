@@ -95,6 +95,33 @@ CREATE TABLE import_record (
 CREATE INDEX import_record_payload ON import_record (payload_hash);
 CREATE INDEX import_record_document ON import_record (document_id);
 
+-- Status transitions are append-only events. The document row never changes, so
+-- "approved" or "paid" is a fact about what we decided, recorded when we
+-- decided it, not a field someone can overwrite.
+CREATE TABLE document_event (
+    seq         INTEGER PRIMARY KEY AUTOINCREMENT,
+    id          TEXT NOT NULL UNIQUE,
+    document_id TEXT NOT NULL REFERENCES document(id),
+    kind        TEXT NOT NULL CHECK (kind IN ('approved', 'paid', 'archived')),
+    at          TEXT NOT NULL,
+    actor       TEXT NOT NULL,
+    detail      TEXT
+);
+
+CREATE INDEX document_event_document ON document_event (document_id, seq);
+
+CREATE TRIGGER document_event_no_update
+BEFORE UPDATE ON document_event
+BEGIN
+    SELECT RAISE(ABORT, 'document events are append-only');
+END;
+
+CREATE TRIGGER document_event_no_delete
+BEFORE DELETE ON document_event
+BEGIN
+    SELECT RAISE(ABORT, 'document events are append-only');
+END;
+
 -- One series for what we issue; the sender's own numbering for what we receive.
 CREATE UNIQUE INDEX document_outbound_number
     ON document (owner_id, series, number) WHERE direction = 'outbound';

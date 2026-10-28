@@ -112,6 +112,9 @@ bonk issue <draft-id> --out ./out
 bonk credit-note 2026-0001
 bonk issue <credit-note-draft-id> --out ./out
 bonk import ./received/*.xml
+bonk received
+bonk approve 2026-0001
+bonk mark-paid 2026-0001
 bonk verify
 ```
 
@@ -126,6 +129,11 @@ customers by VAT identifier, then Peppol identifier, then legal name and city;
 an unmatched supplier is kept and flagged rather than invented. Importing the
 same file (or the same supplier number) twice writes nothing and reports a
 duplicate.
+
+`received` is the payable register: number, supplier, dates, amount, and status.
+`approve` and `mark-paid` move a document forward, and each step is appended as
+evidence — the document row itself never changes, because what you decided and
+when is part of the record.
 
 `credit-note` copies an issued invoice into a credit-note draft: same customer,
 currency, and lines, with BG-3 naming the invoice it corrects. Credit notes use

@@ -3,7 +3,7 @@
 use std::path::Path;
 
 use crux::{CustomerId, DocumentId, Party, SellerId};
-use rusqlite::Connection;
+
 use store::{CustomerRecord, ImportSource, ReceivedDocument, ReceivedLine, StoreError};
 
 /// What happened to one file.
@@ -48,7 +48,7 @@ pub enum ImportError {
 
 /// Reads and imports one file.
 pub fn import_file(
-    conn: &Connection,
+    database: &store::Database,
     owner_id: SellerId,
     path: &Path,
     now: &str,
@@ -58,7 +58,7 @@ pub fn import_file(
         path: display.clone(),
         detail: error.to_string(),
     })?;
-    import_bytes(conn, owner_id, Some(&display), &bytes, now)
+    import_bytes(database, owner_id, Some(&display), &bytes, now)
 }
 
 /// Imports a document already in memory.
@@ -67,7 +67,7 @@ pub fn import_file(
 /// file. The same bytes are never recorded twice, and the same supplier number
 /// is never recorded twice.
 pub fn import_bytes(
-    conn: &Connection,
+    database: &store::Database,
     owner_id: SellerId,
     path: Option<&str>,
     bytes: &[u8],
@@ -77,9 +77,9 @@ pub fn import_bytes(
     let invoice = syntax::read_invoice(text)?;
     let payload_hash = store::audit::sha256_hex(bytes);
     let display = path.unwrap_or("(memory)").to_owned();
-    let supplier = match_supplier(conn, &invoice.seller)?;
+    let supplier = match_supplier(database, &invoice.seller)?;
 
-    if let Some(existing) = store::find_import_by_payload(conn, &payload_hash)? {
+    if let Some(existing) = store::find_import_by_payload(database.connection(), &payload_hash)? {
         return Ok(ImportOutcome {
             path: display,
             document_id: existing,
@@ -90,7 +90,8 @@ pub fn import_bytes(
     }
 
     if let Some((customer_id, _)) = supplier
-        && let Some(existing) = store::find_inbound_number(conn, owner_id, customer_id, &invoice.number)?
+        && let Some(existing) =
+            store::find_inbound_number(database.connection(), owner_id, customer_id, &invoice.number)?
     {
         return Ok(ImportOutcome {
             path: display,
@@ -101,7 +102,7 @@ pub fn import_bytes(
         });
     }
 
-    let seller = store::load_seller(conn, owner_id)?;
+    let seller = store::load_seller(database.connection(), owner_id)?;
     let lines: Vec<ReceivedLine> = invoice
         .lines
         .iter()
@@ -144,7 +145,7 @@ pub fn import_bytes(
     };
 
     let id = store::record_received(
-        conn,
+        database.connection(),
         owner_id,
         supplier.map(|(customer_id, _)| customer_id),
         &document,
@@ -166,8 +167,8 @@ pub fn import_bytes(
 ///
 /// Suppliers are customers: there is one party table, and a party can be on
 /// either side of a document.
-pub fn match_supplier(conn: &Connection, supplier: &Party) -> Result<Option<(CustomerId, f64)>, StoreError> {
-    let customers = store::list_customers(conn)?;
+pub fn match_supplier(database: &store::Database, supplier: &Party) -> Result<Option<(CustomerId, f64)>, StoreError> {
+    let customers = store::list_customers(database.connection())?;
     Ok(best_match(&customers, supplier))
 }
 
@@ -354,14 +355,8 @@ mod tests {
         store::insert_customer(database.connection(), &supplier, "2026-10-27T00:00:00Z").unwrap();
 
         let bytes = ubl("Acme BV", Some("NL111111110B01"), "SUP-1001");
-        let outcome = import_bytes(
-            database.connection(),
-            seller_id,
-            Some("in/1.xml"),
-            &bytes,
-            "2026-10-27T00:00:00Z",
-        )
-        .expect("import");
+        let outcome =
+            import_bytes(&database, seller_id, Some("in/1.xml"), &bytes, "2026-10-27T00:00:00Z").expect("import");
 
         assert!(!outcome.duplicate);
         assert_eq!(outcome.number, "SUP-1001");
@@ -408,8 +403,7 @@ mod tests {
     fn an_unmatched_supplier_is_kept_not_invented() {
         let (_dir, database, seller_id) = database();
         let bytes = ubl("Stranger BV", None, "X-1");
-        let outcome =
-            import_bytes(database.connection(), seller_id, None, &bytes, "2026-10-27T00:00:00Z").expect("import");
+        let outcome = import_bytes(&database, seller_id, None, &bytes, "2026-10-27T00:00:00Z").expect("import");
 
         assert_eq!(outcome.supplier, None);
         let counterparty: Option<String> = database
@@ -444,8 +438,8 @@ mod tests {
     fn importing_the_same_bytes_twice_writes_one_document() {
         let (_dir, database, seller_id) = database();
         let bytes = ubl("Stranger BV", None, "X-1");
-        let first = import_bytes(database.connection(), seller_id, None, &bytes, "2026-10-27T00:00:00Z").unwrap();
-        let again = import_bytes(database.connection(), seller_id, None, &bytes, "2026-10-27T00:00:01Z").unwrap();
+        let first = import_bytes(&database, seller_id, None, &bytes, "2026-10-27T00:00:00Z").unwrap();
+        let again = import_bytes(&database, seller_id, None, &bytes, "2026-10-27T00:00:01Z").unwrap();
 
         assert!(again.duplicate);
         assert_eq!(again.document_id, first.document_id);
@@ -463,7 +457,7 @@ mod tests {
         store::insert_customer(database.connection(), &supplier, "2026-10-27T00:00:00Z").unwrap();
 
         let first = import_bytes(
-            database.connection(),
+            &database,
             seller_id,
             None,
             &ubl("Acme BV", Some("NL111111110B01"), "SUP-1"),
@@ -475,7 +469,7 @@ mod tests {
             .unwrap()
             .replace("Consulting", "Consultancy")
             .into_bytes();
-        let again = import_bytes(database.connection(), seller_id, None, &re_send, "2026-10-27T00:00:01Z").unwrap();
+        let again = import_bytes(&database, seller_id, None, &re_send, "2026-10-27T00:00:01Z").unwrap();
 
         assert!(again.duplicate, "the supplier number is the identity, not the bytes");
         assert_eq!(again.document_id, first.document_id);
@@ -483,10 +477,116 @@ mod tests {
     }
 
     #[test]
+    fn the_payable_register_only_moves_forward() {
+        use store::DocumentStatus;
+
+        let (_dir, database, seller_id) = database();
+        let outcome = import_bytes(
+            &database,
+            seller_id,
+            None,
+            &ubl("Acme BV", None, "X-7"),
+            "2026-10-27T00:00:00Z",
+        )
+        .unwrap();
+        let id = outcome.document_id;
+        let connection = database.connection();
+
+        let listed = store::list_received(connection, seller_id).unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].status, DocumentStatus::Received);
+        assert_eq!(listed[0].number, "X-7");
+        assert!(!listed[0].matched);
+
+        assert_eq!(
+            store::advance_status(connection, id, DocumentStatus::Approved, "test", "2026-10-28T00:00:00Z").unwrap(),
+            DocumentStatus::Approved
+        );
+        assert!(
+            store::advance_status(connection, id, DocumentStatus::Approved, "test", "2026-10-28T00:00:01Z").is_err(),
+            "a repeated status is refused"
+        );
+        assert!(
+            store::advance_status(connection, id, DocumentStatus::Received, "test", "2026-10-28T00:00:02Z").is_err(),
+            "statuses do not move backwards"
+        );
+
+        store::advance_status(connection, id, DocumentStatus::Paid, "test", "2026-10-29T00:00:00Z").unwrap();
+        assert_eq!(
+            store::list_received(connection, seller_id).unwrap()[0].status,
+            DocumentStatus::Paid
+        );
+
+        // Append-only: the events that explain the status cannot be rewritten.
+        let update = connection.execute("UPDATE document_event SET kind = 'archived'", []);
+        assert!(update.is_err(), "events are append-only");
+        let delete = connection.execute("DELETE FROM document_event", []);
+        assert!(delete.is_err(), "events are append-only");
+    }
+
+    #[test]
+    fn the_register_only_covers_received_documents() {
+        use store::DocumentStatus;
+
+        let (_dir, mut database, seller_id) = database();
+        let customer = customer("Acme BV", None, None);
+        store::insert_customer(database.connection(), &customer, "2026-10-27T00:00:00Z").unwrap();
+
+        let mut draft = crux::InvoiceDraft::new(
+            seller_id,
+            customer.id,
+            Currency::EUR,
+            crux::LocalDate::parse_iso("2026-10-27").unwrap(),
+        );
+        draft.due_date = Some(crux::LocalDate::parse_iso("2026-11-26").unwrap());
+        draft.lines.push(crux::DraftLine {
+            id: crux::LineId::new(),
+            position: 1,
+            name: "Consulting".to_owned(),
+            description: None,
+            quantity: crux::Quantity::ONE,
+            unit: crux::UnitCode::PIECE,
+            unit_price: crux::Money::from_major_units(100, Currency::EUR).unwrap(),
+            price_base_quantity: crux::Quantity::ONE,
+            treatment: crux::TaxTreatment::standard(crux::VatRate::STANDARD_NL),
+        });
+        store::insert_draft(database.connection(), &draft, "2026-10-27T00:00:00Z").unwrap();
+        let issued = store::issue_draft(
+            database.connection_mut(),
+            store::IssueRequest {
+                draft_id: draft.id,
+                actor: "test",
+                device: "test",
+                renderer_version: "test",
+                now: "2026-10-27T00:00:00Z",
+            },
+            |_| Ok(b"<Invoice/>".to_vec()),
+        )
+        .unwrap();
+
+        assert!(
+            store::list_received(database.connection(), seller_id)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            store::advance_status(
+                database.connection(),
+                issued.id,
+                DocumentStatus::Paid,
+                "test",
+                "2026-10-28T00:00:00Z"
+            )
+            .is_err(),
+            "an issued document is not in the payable register"
+        );
+    }
+
+    #[test]
     fn a_non_ubl_file_is_reported_with_its_reason() {
         let (_dir, database, seller_id) = database();
         let error = import_bytes(
-            database.connection(),
+            &database,
             seller_id,
             Some("notes.csv"),
             b"a,b,c",
@@ -502,7 +602,7 @@ mod tests {
         let keystore = KeyStore::create(dir.path().join("keystore.bin"), "pass", KdfParams::TEST).unwrap();
         let database = Database::create(dir.path().join("bonk.db"), &keystore).unwrap();
         let error = import_bytes(
-            database.connection(),
+            &database,
             SellerId::new(),
             None,
             &ubl("Acme BV", None, "X-1"),
