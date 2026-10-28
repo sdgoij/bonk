@@ -366,6 +366,17 @@ Exit criteria:
 | M3.6 | Folder watcher (`notify`) with debounce and idempotent ingest | 2 d |
 | M3.7 | Fuzz targets for all three parsers | 2 d |
 
+**Status, 2026-10-27.** M3.1's UBL reader is in: `syntax::read_invoice` turns a
+received Invoice or CreditNote into the terms the domain already models (header,
+both parties, lines with their VAT treatment, totals, BG-3), rejects DTDs,
+bounds size and depth, and resolves the document's own namespace prefix.
+Round-trip tests prove the reader and the writer agree; error tests cover a
+DTD, a foreign root, a missing number, a malformed date, and excessive nesting.
+CII and Factur-X extraction have not started, and nothing is stored yet: the
+schema reshape (one document table with `direction`, `owner_id`, and
+`counterparty_id`, partial unique indexes per direction) comes next, followed by
+`bonk import` and the payable register.
+
 Exit criteria:
 
 - 100 % of the corpus imports or fails with an actionable message.
