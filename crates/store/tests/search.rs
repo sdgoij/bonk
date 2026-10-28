@@ -105,7 +105,7 @@ fn words_find_the_document_people_remember() {
         &database,
         seller,
         SearchRequest {
-            query: "2026-0002",
+            query: Some("2026-0002"),
             ..SearchRequest::default()
         },
     );
@@ -121,7 +121,7 @@ fn words_find_the_document_people_remember() {
         &database,
         seller,
         SearchRequest {
-            query: "cafe",
+            query: Some("cafe"),
             ..SearchRequest::default()
         },
     );
@@ -134,7 +134,7 @@ fn words_find_the_document_people_remember() {
             &database,
             seller,
             SearchRequest {
-                query,
+                query: Some(query),
                 ..SearchRequest::default()
             },
         );
@@ -160,7 +160,7 @@ fn filters_narrow_the_result_set() {
         &database,
         seller,
         SearchRequest {
-            query: "bv",
+            query: Some("bv"),
             ..SearchRequest::default()
         },
     );
@@ -170,7 +170,7 @@ fn filters_narrow_the_result_set() {
         &database,
         seller,
         SearchRequest {
-            query: "bv",
+            query: Some("bv"),
             from: Some(LocalDate::parse_iso("2026-10-01").unwrap()),
             ..SearchRequest::default()
         },
@@ -182,7 +182,7 @@ fn filters_narrow_the_result_set() {
         &database,
         seller,
         SearchRequest {
-            query: "bv",
+            query: Some("bv"),
             to: Some(LocalDate::parse_iso("2026-09-30").unwrap()),
             ..SearchRequest::default()
         },
@@ -194,7 +194,7 @@ fn filters_narrow_the_result_set() {
         &database,
         seller,
         SearchRequest {
-            query: "bv",
+            query: Some("bv"),
             direction: Some(Direction::Outbound),
             ..SearchRequest::default()
         },
@@ -204,7 +204,7 @@ fn filters_narrow_the_result_set() {
         &database,
         seller,
         SearchRequest {
-            query: "bv",
+            query: Some("bv"),
             direction: Some(Direction::Inbound),
             ..SearchRequest::default()
         },
@@ -228,7 +228,7 @@ fn every_word_must_appear() {
         &database,
         seller,
         SearchRequest {
-            query: "customer quarterly",
+            query: Some("customer quarterly"),
             ..SearchRequest::default()
         },
     );
@@ -239,11 +239,45 @@ fn every_word_must_appear() {
         &database,
         seller,
         SearchRequest {
-            query: "customer annual",
+            query: Some("customer annual"),
             ..SearchRequest::default()
         },
     );
     assert!(none.is_empty(), "words are combined, not either-or");
+}
+
+#[test]
+fn no_query_lists_everything_newest_first() {
+    let (_dir, mut database, seller, customer, cafe) = fixture();
+    let first = issue(
+        &mut database,
+        seller,
+        customer,
+        "PO-1",
+        "Quarterly advice",
+        "2026-10-27",
+    );
+    let second = issue(&mut database, seller, cafe, "PO-2", "Annual review", "2026-09-01");
+
+    let all = find(&database, seller, SearchRequest::default());
+    assert_eq!(all.len(), 2);
+    assert_eq!(all[0].id, first, "newest first");
+    assert_eq!(all[1].id, second);
+    assert_eq!(
+        all[0].status,
+        store::DocumentStatus::Issued,
+        "nothing has happened to it yet"
+    );
+
+    let received = find(
+        &database,
+        seller,
+        SearchRequest {
+            direction: Some(Direction::Inbound),
+            ..SearchRequest::default()
+        },
+    );
+    assert!(received.is_empty());
 }
 
 #[test]
@@ -253,7 +287,7 @@ fn an_empty_query_is_refused() {
         database.connection(),
         seller,
         &SearchRequest {
-            query: "   ",
+            query: Some("   "),
             ..SearchRequest::default()
         },
     )
@@ -278,7 +312,7 @@ fn a_quote_is_not_a_query_operator() {
         &database,
         seller,
         SearchRequest {
-            query: "\"Customer",
+            query: Some("\"Customer"),
             ..SearchRequest::default()
         },
     );

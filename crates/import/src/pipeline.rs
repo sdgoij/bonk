@@ -835,7 +835,7 @@ mod tests {
             database.connection(),
             seller_id,
             &SearchRequest {
-                query: "stranger",
+                query: Some("stranger"),
                 ..SearchRequest::default()
             },
         )
@@ -860,7 +860,7 @@ mod tests {
             database.connection(),
             seller_id,
             &SearchRequest {
-                query: "holding",
+                query: Some("holding"),
                 ..SearchRequest::default()
             },
         )
@@ -881,7 +881,7 @@ mod tests {
             database.connection(),
             seller_id,
             &SearchRequest {
-                query: "stranger",
+                query: Some("stranger"),
                 status: Some(DocumentStatus::Approved),
                 ..SearchRequest::default()
             },
@@ -893,7 +893,7 @@ mod tests {
             database.connection(),
             seller_id,
             &SearchRequest {
-                query: "stranger",
+                query: Some("stranger"),
                 status: Some(DocumentStatus::Received),
                 ..SearchRequest::default()
             },

@@ -115,6 +115,7 @@ bonk import ./received/*.xml
 bonk received
 bonk match 2026-0001 "Customer BV"
 bonk search customer --direction inbound
+bonk export --format csv --out invoices.csv
 bonk approve 2026-0001
 bonk mark-paid 2026-0001
 bonk verify
@@ -149,6 +150,12 @@ when is part of the record.
 narrowed by direction, an issue-date window, or status. Words are combined (all
 must appear) and each may be partial, so `cust 2026` finds what you expect while
 typing. Dates and amounts are filters, not text.
+
+`export` writes the same rows as CSV (for a spreadsheet or an accountant) or
+JSON (for tooling), with the same filters and an optional query. Amounts are
+decimal strings in both formats, and an empty export is a header or an empty
+array rather than an error. Standard output is the default; `--out` writes a
+file.
 
 `credit-note` copies an issued invoice into a credit-note draft: same customer,
 currency, and lines, with BG-3 naming the invoice it corrects. Credit notes use

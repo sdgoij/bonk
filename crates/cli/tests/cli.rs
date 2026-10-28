@@ -362,6 +362,41 @@ fn full_slice_through_the_cli() {
     args.extend(common);
     assert!(bonk_ok(&args).contains("no documents match"));
 
+    // Export is the same rows in a shape someone else can read.
+    let mut args = vec!["export"];
+    args.extend(common);
+    let csv = bonk_ok(&args);
+    assert!(
+        csv.starts_with("number,direction,party,issue_date,currency,gross,status"),
+        "{csv}"
+    );
+    assert!(
+        csv.contains("2026-0001,outbound,Customer BV,2026-10-27,EUR,121.00,issued"),
+        "{csv}"
+    );
+    assert!(
+        csv.contains("2026-0001,inbound,Customer BV,2026-10-27,EUR,121.00,received"),
+        "{csv}"
+    );
+
+    let mut args = vec!["export", "--format", "json", "--direction", "inbound"];
+    args.extend(common);
+    let json = bonk_ok(&args);
+    assert!(json.contains("\"direction\": \"inbound\""), "{json}");
+    assert!(!json.contains("outbound"), "{json}");
+    assert!(json.contains("\"gross\": \"121.00\""), "amounts are strings: {json}");
+
+    let exported = dir.path().join("export.csv");
+    let mut args = vec!["export", "--out", exported.to_str().expect("utf-8")];
+    args.extend(common);
+    let said = bonk_ok(&args);
+    assert!(said.contains("exported: 3 documents"), "{said}");
+    assert!(
+        std::fs::read_to_string(&exported)
+            .expect("export")
+            .contains("2026-0001")
+    );
+
     let mut args = vec!["approve", "2026-0001"];
     args.extend(common);
     let approved = bonk_ok(&args);

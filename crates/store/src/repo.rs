@@ -1001,6 +1001,8 @@ pub fn find_import_by_payload(conn: &Connection, payload_hash: &str) -> Result<O
 /// Where a received document stands in the payable register.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub enum DocumentStatus {
+    /// We issued it; nothing has happened to it yet.
+    Issued,
     /// Recorded, not yet approved for payment.
     Received,
     /// Approved for payment.
@@ -1012,9 +1014,10 @@ pub enum DocumentStatus {
 }
 
 impl DocumentStatus {
-    /// Stable code, as stored in `document_event.kind`.
+    /// Stable code, as stored in `document_event.kind` or `document.state`.
     pub const fn code(self) -> &'static str {
         match self {
+            Self::Issued => "issued",
             Self::Received => "received",
             Self::Approved => "approved",
             Self::Paid => "paid",
@@ -1025,6 +1028,7 @@ impl DocumentStatus {
     /// Parses a status code.
     pub fn parse(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
+            "issued" => Some(Self::Issued),
             "received" => Some(Self::Received),
             "approved" => Some(Self::Approved),
             "paid" => Some(Self::Paid),
@@ -1173,7 +1177,10 @@ impl std::fmt::Display for Direction {
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
 pub struct SearchRequest<'a> {
     /// Words to look for. Every word must appear; each may be partial.
-    pub query: &'a str,
+    ///
+    /// `None` asks for everything the filters allow, newest first, which is what
+    /// an export wants.
+    pub query: Option<&'a str>,
     /// Restrict to one side of the books.
     pub direction: Option<Direction>,
     /// Earliest issue date, inclusive.
@@ -1185,7 +1192,7 @@ pub struct SearchRequest<'a> {
 }
 
 /// One search result.
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub struct SearchHit {
     /// Document identity.
     pub id: DocumentId,
@@ -1203,8 +1210,6 @@ pub struct SearchHit {
     pub gross: Money,
     /// Current status, derived from the latest event.
     pub status: DocumentStatus,
-    /// bm25 score; lower is a better match and it is only meaningful for ordering.
-    pub rank: f64,
 }
 
 /// Latest status expression shared by the register and search.
@@ -1214,27 +1219,40 @@ const LATEST_STATUS: &str = "(SELECT e.kind FROM document_event e WHERE e.docume
 /// Finds documents by what people remember about them.
 ///
 /// The words are matched against the number, the party, the references, and the
-/// note; dates, amounts, direction, and status are filters over the document
-/// itself. Results are ordered by relevance with the number weighted highest, so
-/// typing an invoice number puts that invoice first.
+/// note; dates, direction, and status are filters over the document itself.
+/// Results are ordered by relevance with the number weighted highest, so typing
+/// an invoice number puts that invoice first. Without words the filters alone
+/// decide, and the list is newest first.
 pub fn search(
     conn: &Connection,
     owner_id: SellerId,
     request: &SearchRequest<'_>,
 ) -> Result<Vec<SearchHit>, StoreError> {
-    let expression = match_expression(request.query)?;
+    let expression = match request.query {
+        Some(query) => Some(match_expression(query)?),
+        None => None,
+    };
 
+    // The index holds one row per document, so it is the party name's single
+    // definition for both a search and a plain listing. Status is the latest
+    // event, or the state the document was recorded in when it has none.
     let mut sql = format!(
         "SELECT d.id, d.direction, d.number, d.issue_date_local, d.currency, d.totals_json,
                 invoice_fts.party_name,
-                COALESCE({LATEST_STATUS}, 'received') AS status,
-                bm25(invoice_fts, 0.0, 5.0, 1.0, 1.0, 1.0) AS rank
+                COALESCE({LATEST_STATUS}, d.state) AS status
          FROM invoice_fts
          JOIN document d ON d.id = invoice_fts.document_id
-         WHERE invoice_fts MATCH ?1 AND d.owner_id = ?2"
+         WHERE d.owner_id = ?1"
     );
-    let mut parameters = vec![expression, owner_id.to_string()];
+    let mut parameters = vec![owner_id.to_string()];
+    let mut order = "d.issue_date_local DESC, d.number DESC".to_owned();
 
+    if let Some(expression) = expression {
+        parameters.push(expression);
+        let index = parameters.len();
+        sql.push_str(&format!(" AND invoice_fts MATCH ?{index}"));
+        order = format!("bm25(invoice_fts, 0.0, 5.0, 1.0, 1.0, 1.0), {order}");
+    }
     if let Some(direction) = request.direction {
         parameters.push(direction.code().to_owned());
         let index = parameters.len();
@@ -1253,11 +1271,9 @@ pub fn search(
     if let Some(status) = request.status {
         parameters.push(status.code().to_owned());
         let index = parameters.len();
-        sql.push_str(&format!(" AND COALESCE({LATEST_STATUS}, 'received') = ?{index}"));
+        sql.push_str(&format!(" AND COALESCE({LATEST_STATUS}, d.state) = ?{index}"));
     }
-    sql.push_str(&format!(
-        " ORDER BY rank, d.issue_date_local DESC, d.number DESC LIMIT {SEARCH_LIMIT}"
-    ));
+    sql.push_str(&format!(" ORDER BY {order} LIMIT {SEARCH_LIMIT}"));
 
     let mut statement = conn.prepare(&sql)?;
     let mut rows = statement.query(rusqlite::params_from_iter(parameters))?;
@@ -1283,8 +1299,8 @@ pub fn search(
             issue_date: parse_date(&row.get::<_, String>(3)?)?,
             currency,
             gross: Money::parse_fixed(gross, currency).map_err(|error| StoreError::Data(error.to_string()))?,
-            status: DocumentStatus::from_event(&status).unwrap_or(DocumentStatus::Received),
-            rank: row.get(8)?,
+            status: DocumentStatus::parse(&status)
+                .ok_or_else(|| StoreError::Data(format!("stored status {status:?} is unknown")))?,
         });
     }
     Ok(hits)
@@ -1421,9 +1437,9 @@ pub fn advance_status(
     actor: &str,
     now: &str,
 ) -> Result<DocumentStatus, StoreError> {
-    if target == DocumentStatus::Received {
+    if matches!(target, DocumentStatus::Issued | DocumentStatus::Received) {
         return Err(StoreError::Rejected(
-            "received is the initial status and cannot be recorded as an event".to_owned(),
+            "issued and received are initial states, not events".to_owned(),
         ));
     }
 

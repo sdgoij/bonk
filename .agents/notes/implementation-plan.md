@@ -341,7 +341,7 @@ buyer and order reference from the document they correct, so the copied draft
 still passes R003.
 
 Remaining in M2: nothing blocking. Explicit deliver-to address fields beyond the
-buyer country remain for a later slice. Workspace tests: 264 encrypted, 262 plain.
+buyer country remain for a later slice. Workspace tests: 270 encrypted, 268 plain.
 
 Exit criteria:
 
@@ -488,9 +488,18 @@ note; a supplier decision rewrites the party column. `store::search` takes a
 query plus optional direction, date window, and status filters, quotes and
 prefix-matches each typed word so a search box can never produce an FTS5 syntax
 error, and ranks with `bm25` weighting the number highest. `bonk search` exposes
-it. Remaining in M5: saved filters, CSV/JSON export, keyboard shortcuts and
-empty states in the GUI, the i18n pass, document-language selection, and
-`bonk support-bundle`.
+it.
+
+Export is the same rows in a shape someone else can read: `bonk export` writes
+CSV or JSON over the same filters (an empty query means everything), with the
+amount as a decimal string in both, because a JSON number is a float to most
+parsers and money must not round-trip through a float. An empty export is a
+header or `[]`, not an error. `SearchHit.status` now comes from the latest event
+or, when there is none, from `document.state`, so an issued invoice reads as
+`issued` rather than borrowing the register's initial `received`.
+
+Remaining in M5: saved filters, keyboard shortcuts and empty states in the GUI,
+the i18n pass, document-language selection, and `bonk support-bundle`.
 
 ---
 

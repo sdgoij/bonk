@@ -7,6 +7,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod export;
 mod workspace;
 
 use std::path::{Path, PathBuf};

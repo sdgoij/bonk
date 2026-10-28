@@ -305,6 +305,7 @@ dependencies = [
  "eframe",
  "egui",
  "render",
+ "serde_json",
  "store",
  "syntax",
  "tempfile",

@@ -186,9 +186,33 @@ enum Command {
         /// Latest issue date, `YYYY-MM-DD`.
         #[arg(long)]
         to: Option<String>,
-        /// Only this status: received, approved, paid, or archived.
+        /// Only this status: issued, received, approved, paid, or archived.
         #[arg(long)]
         status: Option<String>,
+    },
+    /// Export documents as CSV or JSON.
+    Export {
+        /// Words to narrow the export; omit to export everything.
+        #[arg(default_value = "")]
+        query: String,
+        /// Output format.
+        #[arg(long, default_value = "csv", value_parser = ["csv", "json"])]
+        format: String,
+        /// Restrict to documents we issued, or to those we received.
+        #[arg(long, value_parser = ["outbound", "inbound"])]
+        direction: Option<String>,
+        /// Earliest issue date, `YYYY-MM-DD`.
+        #[arg(long)]
+        from: Option<String>,
+        /// Latest issue date, `YYYY-MM-DD`.
+        #[arg(long)]
+        to: Option<String>,
+        /// Only this status: issued, received, approved, paid, or archived.
+        #[arg(long)]
+        status: Option<String>,
+        /// File to write; standard output when omitted.
+        #[arg(long)]
+        out: Option<PathBuf>,
     },
     /// Approve a received document for payment.
     Approve {
@@ -488,7 +512,7 @@ fn run(cli: Cli) -> Result<(), CliError> {
             let filter = match status {
                 Some(value) => Some(DocumentStatus::parse(&value).ok_or_else(|| {
                     CliError::Input(format!(
-                        "unknown status {value:?}; use received, approved, paid, or archived"
+                        "unknown status {value:?}; use issued, received, approved, paid, or archived"
                     ))
                 })?),
                 None => None,
@@ -530,38 +554,17 @@ fn run(cli: Cli) -> Result<(), CliError> {
             let session = open(&database, &keystore, passphrase.clone())?;
             let connection = session.database().connection();
             let owner = owner_of(session.database(), None)?;
-            let direction =
-                match direction.as_deref() {
-                    Some(value) => Some(store::Direction::parse(value).ok_or_else(|| {
-                        CliError::Input(format!("unknown direction {value:?}; use outbound or inbound"))
-                    })?),
-                    None => None,
-                };
-            let date = |flag: &str, value: Option<String>| -> Result<Option<LocalDate>, CliError> {
-                value
-                    .map(|value| {
-                        LocalDate::parse_iso(&value).map_err(|error| CliError::Input(format!("--{flag}: {error}")))
-                    })
-                    .transpose()
-            };
-            let status = match status {
-                Some(value) => Some(DocumentStatus::parse(&value).ok_or_else(|| {
-                    CliError::Input(format!(
-                        "unknown status {value:?}; use received, approved, paid, or archived"
-                    ))
-                })?),
-                None => None,
-            };
+            let filters = filters(direction, from, to, status)?;
 
             let hits = store::search(
                 connection,
                 owner,
                 &SearchRequest {
-                    query: &query,
-                    direction,
-                    from: date("from", from)?,
-                    to: date("to", to)?,
-                    status,
+                    query: Some(&query),
+                    direction: filters.direction,
+                    from: filters.from,
+                    to: filters.to,
+                    status: filters.status,
                 },
             )?;
             for hit in &hits {
@@ -577,6 +580,45 @@ fn run(cli: Cli) -> Result<(), CliError> {
             }
             if hits.is_empty() {
                 println!("no documents match {query:?}");
+            }
+            Ok(())
+        }
+        Some(Command::Export {
+            query,
+            format,
+            direction,
+            from,
+            to,
+            status,
+            out,
+        }) => {
+            let session = open(&database, &keystore, passphrase.clone())?;
+            let connection = session.database().connection();
+            let owner = owner_of(session.database(), None)?;
+            let filters = filters(direction, from, to, status)?;
+            let query = query.trim();
+
+            let hits = store::search(
+                connection,
+                owner,
+                &SearchRequest {
+                    query: (!query.is_empty()).then_some(query),
+                    direction: filters.direction,
+                    from: filters.from,
+                    to: filters.to,
+                    status: filters.status,
+                },
+            )?;
+            let rendered = match format.as_str() {
+                "json" => app::export::to_json(&hits)?,
+                _ => app::export::to_csv(&hits)?,
+            };
+            match out {
+                Some(path) => {
+                    std::fs::write(&path, &rendered)?;
+                    println!("exported: {} documents -> {}", hits.len(), path.display());
+                }
+                None => print!("{rendered}"),
             }
             Ok(())
         }
@@ -802,6 +844,48 @@ fn owner_of(database: &store::Database, explicit: Option<String>) -> Result<Sell
             .ok_or_else(|| CliError::Input("this database has no seller".to_owned()))
             .map(|seller| seller.id),
     }
+}
+
+/// The filters `search` and `export` share.
+struct Filters {
+    direction: Option<store::Direction>,
+    from: Option<LocalDate>,
+    to: Option<LocalDate>,
+    status: Option<DocumentStatus>,
+}
+
+fn filters(
+    direction: Option<String>,
+    from: Option<String>,
+    to: Option<String>,
+    status: Option<String>,
+) -> Result<Filters, CliError> {
+    let direction = match direction.as_deref() {
+        Some(value) => Some(
+            store::Direction::parse(value)
+                .ok_or_else(|| CliError::Input(format!("unknown direction {value:?}; use outbound or inbound")))?,
+        ),
+        None => None,
+    };
+    let date = |flag: &str, value: Option<String>| -> Result<Option<LocalDate>, CliError> {
+        value
+            .map(|value| LocalDate::parse_iso(&value).map_err(|error| CliError::Input(format!("--{flag}: {error}"))))
+            .transpose()
+    };
+    let status = match status {
+        Some(value) => Some(DocumentStatus::parse(&value).ok_or_else(|| {
+            CliError::Input(format!(
+                "unknown status {value:?}; use issued, received, approved, paid, or archived"
+            ))
+        })?),
+        None => None,
+    };
+    Ok(Filters {
+        direction,
+        from: date("from", from)?,
+        to: date("to", to)?,
+        status,
+    })
 }
 
 /// Moves a received document forward in the payable register.
