@@ -114,6 +114,7 @@ bonk issue <credit-note-draft-id> --out ./out
 bonk import ./received/*.xml
 bonk received
 bonk match 2026-0001 "Customer BV"
+bonk search customer --direction inbound
 bonk approve 2026-0001
 bonk mark-paid 2026-0001
 bonk verify
@@ -143,6 +144,11 @@ document keeps the name the supplier sent.
 `approve` and `mark-paid` move a document forward, and each step is appended as
 evidence — the document row itself never changes, because what you decided and
 when is part of the record.
+
+`search` looks through numbers, party names, references, and notes, and can be
+narrowed by direction, an issue-date window, or status. Words are combined (all
+must appear) and each may be partial, so `cust 2026` finds what you expect while
+typing. Dates and amounts are filters, not text.
 
 `credit-note` copies an issued invoice into a credit-note draft: same customer,
 currency, and lines, with BG-3 naming the invoice it corrects. Credit notes use

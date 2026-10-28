@@ -941,9 +941,9 @@ the document row.
 
 ```sql
 CREATE VIRTUAL TABLE invoice_fts USING fts5(
-    invoice_id UNINDEXED,
+    document_id UNINDEXED,
     number,
-    customer_name,
+    party_name,
     reference,
     notes,
     tokenize = "unicode61 remove_diacritics 2"
@@ -951,9 +951,25 @@ CREATE VIRTUAL TABLE invoice_fts USING fts5(
 ```
 
 A standalone FTS5 table kept in sync by triggers (search must not depend on
-today's customer record, hence the denormalised `customer_name` column copied at
-issue time). Structured filters (date range, amount range, state, currency, VAT
-category) are indexed columns with composite indexes, not FTS.
+today's customer record, hence the `party_name` column copied at insert time).
+The party name prefers the party on file and falls back to the snapshot, so an
+unmatched inbound document is findable by the spelling its sender used; a
+supplier decision rewrites that one column. `remove_diacritics 2` lets `cafe`
+find `Café`.
+
+Structured filters (date range, direction, state, currency, VAT category) are
+indexed columns with composite indexes over `document` and its events, not FTS
+columns. Status is the latest `document_event`, so a filter compares
+`COALESCE(latest event, 'received')`.
+
+Query building is ours, not the user's: each typed word is quoted and
+prefix-matched and combined with AND, so a partly typed word finds its
+completions and an unbalanced quote finds nothing instead of raising an FTS5
+syntax error. Ranking is `bm25` with the number weighted highest, so typing an
+invoice number puts that invoice first.
+
+Expected performance: typed queries under 30 ms p95 on a 20 000-invoice database
+(the M5 exit criterion).
 
 ### 7.5 Migrations
 

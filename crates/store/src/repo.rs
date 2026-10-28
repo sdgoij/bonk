@@ -1129,6 +1129,186 @@ pub fn list_received(conn: &Connection, owner_id: SellerId) -> Result<Vec<Receiv
     Ok(received)
 }
 
+/// Most results one search returns.
+///
+/// A search box is not a report: the caller narrows with filters rather than
+/// scrolling. The cap keeps a one-letter query from loading the archive.
+pub const SEARCH_LIMIT: u32 = 100;
+
+/// Which side of the books a document is on.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Direction {
+    /// We issued it.
+    Outbound,
+    /// A supplier sent it.
+    Inbound,
+}
+
+impl Direction {
+    /// Code stored in the database.
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::Outbound => "outbound",
+            Self::Inbound => "inbound",
+        }
+    }
+
+    /// Parses the stored code.
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "outbound" => Some(Self::Outbound),
+            "inbound" => Some(Self::Inbound),
+            _ => None,
+        }
+    }
+}
+
+impl std::fmt::Display for Direction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.code())
+    }
+}
+
+/// What to look for.
+#[derive(Clone, PartialEq, Eq, Debug, Default)]
+pub struct SearchRequest<'a> {
+    /// Words to look for. Every word must appear; each may be partial.
+    pub query: &'a str,
+    /// Restrict to one side of the books.
+    pub direction: Option<Direction>,
+    /// Earliest issue date, inclusive.
+    pub from: Option<LocalDate>,
+    /// Latest issue date, inclusive.
+    pub to: Option<LocalDate>,
+    /// Restrict to one status.
+    pub status: Option<DocumentStatus>,
+}
+
+/// One search result.
+#[derive(Clone, PartialEq, Debug)]
+pub struct SearchHit {
+    /// Document identity.
+    pub id: DocumentId,
+    /// Which side of the books.
+    pub direction: Direction,
+    /// Number.
+    pub number: String,
+    /// Party on the other side, as the register shows it.
+    pub party: String,
+    /// Issue date.
+    pub issue_date: LocalDate,
+    /// Document currency.
+    pub currency: Currency,
+    /// Amount including tax (BT-112).
+    pub gross: Money,
+    /// Current status, derived from the latest event.
+    pub status: DocumentStatus,
+    /// bm25 score; lower is a better match and it is only meaningful for ordering.
+    pub rank: f64,
+}
+
+/// Latest status expression shared by the register and search.
+const LATEST_STATUS: &str = "(SELECT e.kind FROM document_event e WHERE e.document_id = d.id \
+     ORDER BY e.seq DESC LIMIT 1)";
+
+/// Finds documents by what people remember about them.
+///
+/// The words are matched against the number, the party, the references, and the
+/// note; dates, amounts, direction, and status are filters over the document
+/// itself. Results are ordered by relevance with the number weighted highest, so
+/// typing an invoice number puts that invoice first.
+pub fn search(
+    conn: &Connection,
+    owner_id: SellerId,
+    request: &SearchRequest<'_>,
+) -> Result<Vec<SearchHit>, StoreError> {
+    let expression = match_expression(request.query)?;
+
+    let mut sql = format!(
+        "SELECT d.id, d.direction, d.number, d.issue_date_local, d.currency, d.totals_json,
+                invoice_fts.party_name,
+                COALESCE({LATEST_STATUS}, 'received') AS status,
+                bm25(invoice_fts, 0.0, 5.0, 1.0, 1.0, 1.0) AS rank
+         FROM invoice_fts
+         JOIN document d ON d.id = invoice_fts.document_id
+         WHERE invoice_fts MATCH ?1 AND d.owner_id = ?2"
+    );
+    let mut parameters = vec![expression, owner_id.to_string()];
+
+    if let Some(direction) = request.direction {
+        parameters.push(direction.code().to_owned());
+        let index = parameters.len();
+        sql.push_str(&format!(" AND d.direction = ?{index}"));
+    }
+    if let Some(from) = request.from {
+        parameters.push(from.to_iso_string());
+        let index = parameters.len();
+        sql.push_str(&format!(" AND d.issue_date_local >= ?{index}"));
+    }
+    if let Some(to) = request.to {
+        parameters.push(to.to_iso_string());
+        let index = parameters.len();
+        sql.push_str(&format!(" AND d.issue_date_local <= ?{index}"));
+    }
+    if let Some(status) = request.status {
+        parameters.push(status.code().to_owned());
+        let index = parameters.len();
+        sql.push_str(&format!(" AND COALESCE({LATEST_STATUS}, 'received') = ?{index}"));
+    }
+    sql.push_str(&format!(
+        " ORDER BY rank, d.issue_date_local DESC, d.number DESC LIMIT {SEARCH_LIMIT}"
+    ));
+
+    let mut statement = conn.prepare(&sql)?;
+    let mut rows = statement.query(rusqlite::params_from_iter(parameters))?;
+    let mut hits = Vec::new();
+    while let Some(row) = rows.next()? {
+        let id: String = row.get(0)?;
+        let direction: String = row.get(1)?;
+        let currency =
+            Currency::parse(&row.get::<_, String>(4)?).map_err(|error| StoreError::Data(error.to_string()))?;
+        let totals: serde_json::Value = serde_json::from_str(&row.get::<_, String>(5)?)?;
+        let gross = totals
+            .get("gross")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| StoreError::Data("stored totals have no gross".to_owned()))?;
+        let status: String = row.get(7)?;
+
+        hits.push(SearchHit {
+            id: DocumentId::parse_str(&id).map_err(|error| StoreError::Data(error.to_string()))?,
+            direction: Direction::parse(&direction)
+                .ok_or_else(|| StoreError::Data(format!("stored direction {direction:?} is unknown")))?,
+            number: row.get(2)?,
+            party: row.get(6)?,
+            issue_date: parse_date(&row.get::<_, String>(3)?)?,
+            currency,
+            gross: Money::parse_fixed(gross, currency).map_err(|error| StoreError::Data(error.to_string()))?,
+            status: DocumentStatus::from_event(&status).unwrap_or(DocumentStatus::Received),
+            rank: row.get(8)?,
+        });
+    }
+    Ok(hits)
+}
+
+/// Turns typed words into an FTS5 expression that cannot be a syntax error.
+///
+/// Each word is quoted and prefix-matched, so a partially typed word still finds
+/// its completions. FTS5's own operators are deliberately not exposed: a search
+/// box is not a query language, and a stray quote should find nothing rather
+/// than fail with a parser message.
+fn match_expression(query: &str) -> Result<String, StoreError> {
+    let words: Vec<String> = query
+        .split_whitespace()
+        .map(|word| word.replace('"', ""))
+        .filter(|word| !word.is_empty())
+        .map(|word| format!("\"{word}\"*"))
+        .collect();
+    if words.is_empty() {
+        return Err(StoreError::Rejected("a search needs at least one word".to_owned()));
+    }
+    Ok(words.join(" "))
+}
+
 /// Records who a received document came from, overriding the import-time match.
 ///
 /// The document itself is not touched: the decision is a separate fact with an

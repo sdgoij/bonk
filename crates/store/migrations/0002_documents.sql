@@ -179,3 +179,56 @@ BEFORE DELETE ON artefact
 BEGIN
     SELECT RAISE(ABORT, 'artefacts cannot be deleted');
 END;
+
+-- Search is a cache over `document`, kept in step by triggers, never the source
+-- of truth. The columns are what someone types into a search box: the number
+-- they are looking for, the party on the other side, a reference, and the note.
+-- Dates, amounts, and status are structured filters over `document` and its
+-- events, not FTS columns. `remove_diacritics 2` lets "cafe" find "Café".
+CREATE VIRTUAL TABLE invoice_fts USING fts5(
+    document_id UNINDEXED,
+    number,
+    party_name,
+    reference,
+    notes,
+    tokenize = "unicode61 remove_diacritics 2"
+);
+
+-- `document` is write-once, so inserts are the only document-side change that
+-- can reach the index. The party name prefers the party on file and falls back
+-- to the snapshot taken when the document was recorded, so an unmatched inbound
+-- document is still findable by the name its sender used.
+CREATE TRIGGER document_search_insert AFTER INSERT ON document
+BEGIN
+    INSERT INTO invoice_fts (document_id, number, party_name, reference, notes)
+    VALUES (
+        NEW.id,
+        NEW.number,
+        COALESCE(
+            (SELECT c.display_name FROM customer c WHERE c.id = NEW.counterparty_id),
+            CASE NEW.direction
+                WHEN 'inbound' THEN json_extract(NEW.issuer_snapshot_json, '$.legal_name')
+                ELSE json_extract(NEW.recipient_snapshot_json, '$.legal_name')
+            END,
+            ''
+        ),
+        trim(COALESCE(NEW.buyer_reference, '') || ' ' || COALESCE(NEW.order_reference, '')),
+        COALESCE(NEW.note, '')
+    );
+END;
+
+-- A supplier decision changes the name the register shows, so it changes what the
+-- index says. The upsert path may fire either trigger.
+CREATE TRIGGER supplier_match_search_insert AFTER INSERT ON supplier_match
+BEGIN
+    UPDATE invoice_fts
+       SET party_name = (SELECT c.display_name FROM customer c WHERE c.id = NEW.customer_id)
+     WHERE document_id = NEW.document_id;
+END;
+
+CREATE TRIGGER supplier_match_search_update AFTER UPDATE ON supplier_match
+BEGIN
+    UPDATE invoice_fts
+       SET party_name = (SELECT c.display_name FROM customer c WHERE c.id = NEW.customer_id)
+     WHERE document_id = NEW.document_id;
+END;

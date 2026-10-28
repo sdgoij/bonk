@@ -12,9 +12,9 @@ use crux::{
     validate_draft,
 };
 use store::{
-    CustomerRecord, DocumentStatus, IssueRequest, SellerRecord, StoreError, advance_status, credit_note_for,
-    first_seller, insert_customer, insert_draft, insert_seller, issue_draft, list_received, load_customer, load_draft,
-    load_seller, resolve_customer, resolve_received, set_supplier_match, verify_artefacts,
+    CustomerRecord, DocumentStatus, IssueRequest, SearchRequest, SellerRecord, StoreError, advance_status,
+    credit_note_for, first_seller, insert_customer, insert_draft, insert_seller, issue_draft, list_received,
+    load_customer, load_draft, load_seller, resolve_customer, resolve_received, set_supplier_match, verify_artefacts,
 };
 
 #[derive(Parser)]
@@ -172,6 +172,23 @@ enum Command {
         document: String,
         /// Customer identifier or display name.
         customer: String,
+    },
+    /// Search documents by number, party, reference, or note.
+    Search {
+        /// Words to look for. Every word must appear.
+        query: String,
+        /// Restrict to documents we issued, or to those we received.
+        #[arg(long, value_parser = ["outbound", "inbound"])]
+        direction: Option<String>,
+        /// Earliest issue date, `YYYY-MM-DD`.
+        #[arg(long)]
+        from: Option<String>,
+        /// Latest issue date, `YYYY-MM-DD`.
+        #[arg(long)]
+        to: Option<String>,
+        /// Only this status: received, approved, paid, or archived.
+        #[arg(long)]
+        status: Option<String>,
     },
     /// Approve a received document for payment.
     Approve {
@@ -500,6 +517,66 @@ fn run(cli: Cli) -> Result<(), CliError> {
             }
             if shown == 0 {
                 println!("no received documents");
+            }
+            Ok(())
+        }
+        Some(Command::Search {
+            query,
+            direction,
+            from,
+            to,
+            status,
+        }) => {
+            let session = open(&database, &keystore, passphrase.clone())?;
+            let connection = session.database().connection();
+            let owner = owner_of(session.database(), None)?;
+            let direction =
+                match direction.as_deref() {
+                    Some(value) => Some(store::Direction::parse(value).ok_or_else(|| {
+                        CliError::Input(format!("unknown direction {value:?}; use outbound or inbound"))
+                    })?),
+                    None => None,
+                };
+            let date = |flag: &str, value: Option<String>| -> Result<Option<LocalDate>, CliError> {
+                value
+                    .map(|value| {
+                        LocalDate::parse_iso(&value).map_err(|error| CliError::Input(format!("--{flag}: {error}")))
+                    })
+                    .transpose()
+            };
+            let status = match status {
+                Some(value) => Some(DocumentStatus::parse(&value).ok_or_else(|| {
+                    CliError::Input(format!(
+                        "unknown status {value:?}; use received, approved, paid, or archived"
+                    ))
+                })?),
+                None => None,
+            };
+
+            let hits = store::search(
+                connection,
+                owner,
+                &SearchRequest {
+                    query: &query,
+                    direction,
+                    from: date("from", from)?,
+                    to: date("to", to)?,
+                    status,
+                },
+            )?;
+            for hit in &hits {
+                println!(
+                    "{:<14} {:<8} {:<28} {}  {:>12}  {}",
+                    hit.number,
+                    hit.direction,
+                    hit.party,
+                    hit.issue_date.to_iso_string(),
+                    hit.gross.to_fixed_string(2)?,
+                    hit.status
+                );
+            }
+            if hits.is_empty() {
+                println!("no documents match {query:?}");
             }
             Ok(())
         }

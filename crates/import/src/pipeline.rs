@@ -818,6 +818,91 @@ mod tests {
     }
 
     #[test]
+    fn search_follows_the_supplier_decision() {
+        use store::{Direction, DocumentStatus, SearchRequest};
+
+        let (_dir, database, seller_id) = database();
+        let outcome = import_bytes(
+            &database,
+            seller_id,
+            None,
+            &ubl("Stranger BV", None, "X-11"),
+            "2026-10-27T00:00:00Z",
+        )
+        .unwrap();
+
+        let by_sender = store::search(
+            database.connection(),
+            seller_id,
+            &SearchRequest {
+                query: "stranger",
+                ..SearchRequest::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(by_sender.len(), 1);
+        assert_eq!(by_sender[0].id, outcome.document_id);
+        assert_eq!(by_sender[0].party, "Stranger BV", "the name as sent");
+        assert_eq!(by_sender[0].direction, Direction::Inbound);
+
+        let customer = customer("Stranger Holding BV", None, None);
+        store::insert_customer(database.connection(), &customer, "2026-10-27T00:00:00Z").unwrap();
+        store::set_supplier_match(
+            database.connection(),
+            outcome.document_id,
+            customer.id,
+            "test",
+            "2026-10-27T00:00:01Z",
+        )
+        .unwrap();
+
+        let by_party = store::search(
+            database.connection(),
+            seller_id,
+            &SearchRequest {
+                query: "holding",
+                ..SearchRequest::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(by_party.len(), 1, "the index followed the decision");
+        assert_eq!(by_party[0].party, "Stranger Holding BV");
+
+        // Status is a filter over the events, not an FTS column.
+        store::advance_status(
+            database.connection(),
+            outcome.document_id,
+            DocumentStatus::Approved,
+            "test",
+            "2026-10-28T00:00:00Z",
+        )
+        .unwrap();
+        let approved = store::search(
+            database.connection(),
+            seller_id,
+            &SearchRequest {
+                query: "stranger",
+                status: Some(DocumentStatus::Approved),
+                ..SearchRequest::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(approved.len(), 1);
+        assert_eq!(approved[0].status, DocumentStatus::Approved);
+        let received = store::search(
+            database.connection(),
+            seller_id,
+            &SearchRequest {
+                query: "stranger",
+                status: Some(DocumentStatus::Received),
+                ..SearchRequest::default()
+            },
+        )
+        .unwrap();
+        assert!(received.is_empty(), "the document moved on");
+    }
+
+    #[test]
     fn a_non_ubl_file_is_reported_with_its_reason() {
         let (_dir, database, seller_id) = database();
         let error = import_bytes(

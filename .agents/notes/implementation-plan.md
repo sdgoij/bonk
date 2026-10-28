@@ -341,7 +341,7 @@ buyer and order reference from the document they correct, so the copied draft
 still passes R003.
 
 Remaining in M2: nothing blocking. Explicit deliver-to address fields beyond the
-buyer country remain for a later slice. Workspace tests: 258 encrypted, 256 plain.
+buyer country remain for a later slice. Workspace tests: 264 encrypted, 262 plain.
 
 Exit criteria:
 
@@ -480,6 +480,17 @@ FTS5 with the design's ranking, saved filters, CSV/JSON export, keyboard
 shortcuts, empty states, Dutch and English UI, document-language selection,
 `bonk support-bundle`. Exit: 20 000-invoice database, typed queries under 30 ms
 p95, no layout breakage at 125 %/150 % DPI scaling.
+
+**Status, 2026-10-28.** Search is in. `invoice_fts` lives in migration 0002 and
+is maintained by triggers, so it cannot drift from the documents: an insert
+indexes the number, the party name, the buyer and order references, and the
+note; a supplier decision rewrites the party column. `store::search` takes a
+query plus optional direction, date window, and status filters, quotes and
+prefix-matches each typed word so a search box can never produce an FTS5 syntax
+error, and ranks with `bm25` weighting the number highest. `bonk search` exposes
+it. Remaining in M5: saved filters, CSV/JSON export, keyboard shortcuts and
+empty states in the GUI, the i18n pass, document-language selection, and
+`bonk support-bundle`.
 
 ---
 

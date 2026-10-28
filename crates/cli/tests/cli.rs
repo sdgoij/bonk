@@ -344,6 +344,24 @@ fn full_slice_through_the_cli() {
     assert!(listed.contains("Customer BV"), "{listed}");
     assert!(!listed.contains("supplier not matched"), "{listed}");
 
+    // Search reaches both directions and follows the supplier decision.
+    let mut args = vec!["search", "customer"];
+    args.extend(common);
+    let found = bonk_ok(&args);
+    assert!(found.contains("2026-0001"), "{found}");
+    assert!(found.contains("inbound"), "{found}");
+    assert!(found.contains("outbound"), "{found}");
+
+    let mut args = vec!["search", "customer", "--direction", "inbound", "--status", "received"];
+    args.extend(common);
+    let found = bonk_ok(&args);
+    assert!(found.contains("inbound"), "{found}");
+    assert!(!found.contains("outbound"), "{found}");
+
+    let mut args = vec!["search", "nothing-like-this"];
+    args.extend(common);
+    assert!(bonk_ok(&args).contains("no documents match"));
+
     let mut args = vec!["approve", "2026-0001"];
     args.extend(common);
     let approved = bonk_ok(&args);
