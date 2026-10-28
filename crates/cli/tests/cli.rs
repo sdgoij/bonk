@@ -1074,6 +1074,96 @@ fn anchoring_an_archive_with_no_history_says_so() {
 }
 
 #[test]
+fn a_watched_folder_imports_a_dropped_invoice_once() {
+    let dir = TempDir::new().expect("temp dir");
+    let database = dir.path().join("bonk.db");
+    let keystore = dir.path().join("keystore.bin");
+    let out_dir = dir.path().join("out");
+    let db = database.to_str().expect("utf-8");
+    let key = keystore.to_str().expect("utf-8");
+    let common = ["--db", db, "--keystore", key, "--passphrase", "pass"];
+
+    let mut args = vec!["init"];
+    args.extend(common);
+    bonk_ok(&args);
+
+    let mut args = vec![
+        "seller-add",
+        "--name",
+        "Seller BV",
+        "--city",
+        "Amsterdam",
+        "--street",
+        "Main 1",
+        "--postal",
+        "1000 AA",
+        "--peppol",
+        "0106:12345678",
+        "--vat",
+        "NL123456782B01",
+        "--kvk",
+        "12345678",
+    ];
+    args.extend(common);
+    let seller = field(&bonk_ok(&args), "seller:");
+
+    let mut args = vec![
+        "customer-add",
+        "--name",
+        "Customer BV",
+        "--city",
+        "Rotterdam",
+        "--street",
+        "Buyer 1",
+        "--postal",
+        "3000 AA",
+        "--peppol",
+        "0106:87654321",
+    ];
+    args.extend(common);
+    let customer = field(&bonk_ok(&args), "customer:");
+
+    let mut args = vec![
+        "draft-new",
+        "--seller",
+        &seller,
+        "--customer",
+        &customer,
+        "--date",
+        "2026-10-27",
+        "--due",
+        "2026-11-26",
+        "--buyer-ref",
+        "PO-1",
+        "--line",
+        "Consulting|1|100.00|21",
+    ];
+    args.extend(common);
+    let draft = field(&bonk_ok(&args), "draft:");
+
+    let mut args = vec!["issue", &draft, "--out", out_dir.to_str().expect("utf-8")];
+    args.extend(common);
+    bonk_ok(&args);
+
+    // Something drops that invoice back into the watched folder.
+    let drop_dir = dir.path().join("drop");
+    std::fs::create_dir(&drop_dir).expect("drop folder");
+    std::fs::copy(out_dir.join("2026-0001.xml"), drop_dir.join("from-supplier.xml")).expect("dropped file");
+
+    let mut args = vec!["watch", drop_dir.to_str().expect("utf-8"), "--once", "--quiet-for", "0"];
+    args.extend(common);
+    let first = bonk_ok(&args);
+    assert!(first.contains("imported:"), "{first}");
+    assert!(first.contains("2026-0001"), "{first}");
+
+    // The same bytes again are the same document, not a second one.
+    let mut args = vec!["watch", drop_dir.to_str().expect("utf-8"), "--once", "--quiet-for", "0"];
+    args.extend(common);
+    let second = bonk_ok(&args);
+    assert!(second.contains("duplicate:"), "{second}");
+}
+
+#[test]
 fn a_weak_passphrase_is_reported_but_not_refused() {
     let dir = TempDir::new().expect("temp dir");
     let database = dir.path().join("bonk.db");

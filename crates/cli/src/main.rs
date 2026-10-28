@@ -58,6 +58,25 @@ enum Command {
         /// File holding the checkpoints. Created on first use.
         file: PathBuf,
     },
+    /// Watch a folder and import invoices dropped into it.
+    ///
+    /// Files already in the folder when the watcher starts are left alone; it acts
+    /// on new or changed files. Polling rather than change notifications is
+    /// deliberate: drop folders are often network shares, where notifications do
+    /// not work, and what matters is that the writer has finished.
+    Watch {
+        /// Folder to watch.
+        directory: PathBuf,
+        /// Seconds between polls.
+        #[arg(long, default_value_t = 2)]
+        every: u64,
+        /// Seconds a file must be untouched before it is read.
+        #[arg(long, default_value_t = 5)]
+        quiet_for: u64,
+        /// Read the folder once and exit, for cron or a deliberate batch.
+        #[arg(long)]
+        once: bool,
+    },
     /// Write a verified, encrypted backup and prune older ones.
     Backup {
         /// Directory for backups. Defaults to `backups` beside the database.
@@ -767,6 +786,43 @@ fn run(cli: Cli) -> Result<(), CliError> {
             }
             Ok(())
         }
+        Some(Command::Watch {
+            directory,
+            every,
+            quiet_for,
+            once,
+        }) => {
+            let session = open(&database, &keystore, passphrase.clone())?;
+            let owner = first_seller(session.database().connection())?
+                .ok_or_else(|| CliError::Input("no seller in this database".to_owned()))?
+                .id;
+            let quiet = std::time::Duration::from_secs(quiet_for);
+
+            if once {
+                let files = import::ready_now(&directory, std::time::SystemTime::now(), quiet)?;
+                let failed = import_watched(&session, owner, &files)?;
+                if failed > 0 {
+                    return Err(CliError::Input(format!(
+                        "{failed} of {} file(s) could not be imported",
+                        files.len()
+                    )));
+                }
+                return Ok(());
+            }
+
+            println!("watching: {}", directory.display());
+            println!("polling:  every {every}s, reading files untouched for {quiet_for}s");
+            println!("note:     files already there are left alone; `bonk import` takes those");
+
+            let mut watcher = import::Watcher::new(quiet);
+            loop {
+                let files = watcher.poll(&directory, std::time::SystemTime::now())?;
+                // A bad file must not stop the watcher: the folder keeps its
+                // purpose even when one drop is not an invoice.
+                import_watched(&session, owner, &files)?;
+                std::thread::sleep(std::time::Duration::from_secs(every.max(1)));
+            }
+        }
         Some(Command::Import { files, seller }) => {
             let session = open(&database, &keystore, passphrase.clone())?;
             let connection = session.database().connection();
@@ -1130,6 +1186,35 @@ fn parse_line(spec: &str, currency: Currency, position: u32) -> Result<DraftLine
             exemption_reason_code,
         },
     })
+}
+
+/// Imports what a watcher handed over, one line per file.
+///
+/// Returns how many files failed, so `--once` can fail the run while the poll
+/// loop carries on: a folder keeps its purpose even when one drop is not an
+/// invoice.
+fn import_watched(session: &Session, owner: SellerId, files: &[PathBuf]) -> Result<usize, CliError> {
+    let mut failed = 0_usize;
+    for file in files {
+        let now = store::now_rfc3339();
+        match import::import_file(session.database(), owner, file, &now) {
+            Ok(outcome) if outcome.duplicate => {
+                println!("duplicate: {} {}", outcome.number, outcome.path);
+            }
+            Ok(outcome) => {
+                let supplier = outcome
+                    .supplier
+                    .map(|id| id.to_string())
+                    .unwrap_or_else(|| "unmatched".to_owned());
+                println!("imported:  {} (supplier {supplier}) {}", outcome.number, outcome.path);
+            }
+            Err(error) => {
+                eprintln!("error:     {}: {error}", file.display());
+                failed += 1;
+            }
+        }
+    }
+    Ok(failed)
 }
 
 fn print_findings(findings: &[Finding]) {

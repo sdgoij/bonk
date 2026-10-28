@@ -1330,6 +1330,30 @@ capability prompt, like an OS permission dialog.
 4. `erp-webhook` — signed HTTP POST/hook for on-premise ERP.
 5. `taxreport-null` — evidence-packaging stub for DRR.
 
+### 11.4 Local folder watching
+
+A drop folder is the least coupling an on-premise ERP can have, so it is the
+first connector rather than the last. `import::watch` polls it; the reasoning is
+ADR-020, and the shape is:
+
+- **Quiet period, not events.** A file is read once it has been untouched for
+  `--quiet-for` seconds. A write in several steps is invisible until it settles,
+  and a network share — where change notifications do not arrive — behaves like a
+  local directory.
+- **Offer once.** Size and modification time are remembered per path, so a file
+  that will never parse costs one attempt, not one per poll. Editing it changes
+  the fingerprint and offers it again.
+- **Prime on start.** What is already there is recorded and left alone: starting a
+  watcher must never import a back catalogue. `--once` is the explicit batch
+  exception.
+- **Idempotence lives in the pipeline.** The same bytes, or the same supplier
+  number, never become a second document; the watcher does not need its own
+  ledger of what it has imported, and does not have one.
+- **Not recursive.** An ERP drops invoices; recursing invites importing an
+  archive by accident.
+
+The clock is a parameter, so the behaviour is tested without sleeping.
+
 ---
 
 ## 12. Synchronisation and CRDTs

@@ -164,6 +164,16 @@ document keeps the name the supplier sent.
 evidence — the document row itself never changes, because what you decided and
 when is part of the record.
 
+`watch <dir>` is the hands-off version of `import`: a folder an ERP drops files
+into. It polls rather than subscribing to filesystem events, because drop folders
+are usually network shares where notifications do not arrive, and what matters is
+that the writer has finished. A file is read once it has been untouched for
+`--quiet-for` seconds (5 by default, polled every `--every`, 2 by default), and
+files already in the folder when the watcher starts are left alone — starting a
+watcher must not import a back catalogue. Editor leftovers and subdirectories are
+ignored. `--once` reads the folder as it stands and exits, for cron. Decision:
+[ADR-020](.agents/notes/adr/020-folder-watching.md).
+
 `search` looks through numbers, party names, references, and notes, and can be
 narrowed by direction, an issue-date window, or status. Words are combined (all
 must appear) and each may be partial, so `cust 2026` finds what you expect while

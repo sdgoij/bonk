@@ -341,7 +341,7 @@ buyer and order reference from the document they correct, so the copied draft
 still passes R003.
 
 Remaining in M2: nothing blocking. Explicit deliver-to address fields beyond the
-buyer country remain for a later slice. Workspace tests: 385 encrypted, 383 plain.
+buyer country remain for a later slice. Workspace tests: 393 encrypted, 391 plain.
 
 Exit criteria:
 
@@ -363,7 +363,7 @@ Exit criteria:
 | M3.3 | Dedupe (supplier + number, payload hash fallback) and duplicate UI | 2 d |
 | M3.4 | Supplier matching against customers, confidence scoring, manual override | 3 d |
 | M3.5 | Payable register: list, filters, status transitions, settlement events | 3 d |
-| M3.6 | Folder watcher (`notify`) with debounce and idempotent ingest | 2 d |
+| M3.6 | Folder watcher with quiet period and idempotent ingest | 2 d |
 | M3.7 | Fuzz targets for all three parsers | 2 d |
 
 **Status, 2026-10-27.** M3.1's UBL reader is in: `syntax::read_invoice` turns a
@@ -448,6 +448,21 @@ Exit criteria:
 - Truncated, zip-bombed, and entity-expansion inputs are rejected without
   crashing or hanging (fuzz run: 1 h clean).
 - Importing the same file twice never creates two records.
+
+M3.6 is in, with one deliberate departure from the plan. `import::watch` polls the
+folder instead of subscribing with `notify`, because drop folders are often
+network shares, where change notifications either do not work or lie, and the
+question that matters is not "did something happen" but "has the writer finished"
+— which is a quiet period, not an event. `bonk watch <dir>` polls every `--every`
+seconds and reads a file once it has been untouched for `--quiet-for` seconds;
+files already in the folder when the watcher starts are left alone, so starting it
+cannot import a back catalogue, and `--once` is the deliberate exception for a
+batch run. The watcher remembers what it has offered (size and modification
+time), so a file that will never parse is not retried every poll; editing it
+offers it again. Idempotent ingest is the pipeline's job and already tested: the
+same bytes, or the same supplier number, never become a second document. Editor
+leftovers (`.tmp`, `.part`, `~$…`, dotfiles) and subdirectories are ignored.
+Decision recorded as ADR-020.
 
 ---
 
