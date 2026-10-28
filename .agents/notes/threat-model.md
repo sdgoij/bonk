@@ -77,7 +77,7 @@ the machine, not a machine an attacker is already logged into.
 |---|---|---|
 | Forgotten passphrase | Recovery key: a second wrap of the same DEK under a 160-bit secret, shown once, never stored; `passphrase-reset` uses it and rotates it | If the recovery key is lost too, the archive is unrecoverable. That is the design, not a bug |
 | Attacker with a copy of the keystore adds their own route | `recovery-add` requires the passphrase and re-derives it from the file before writing | An attacker who already has the passphrase has nothing left to gain |
-| Corrupted or partial keystore write | Rewrites build and unwrap the new bytes in memory, then write a temporary file and rename it into place | On Windows the rename is emulated by remove-then-rename, so a crash in that window can leave neither file in place; see O7 |
+| Corrupted or partial keystore write | Rewrites build and unwrap the new bytes in memory, then write a temporary file and rename it into place. Where the OS will not rename over an existing file, the previous keystore is parked as `keystore.old` and removed only after the new one lands, and put back if the rename fails | A crash can leave `keystore.tmp` or `keystore.old` behind; recovery is a manual rename, not a lost key |
 | Passphrase left in memory | DEK and KEK live in `Zeroizing` buffers | Passphrase `String`s are not zeroised; they are dropped, not wiped |
 | Passphrase on the command line | Flags exist for tests and scripts; the prompt and `BONK_PASSPHRASE` are the documented path | Shell history and process listings are outside our control |
 
@@ -158,6 +158,7 @@ the machine, not a machine an attacker is already logged into.
 | Backups are encrypted and verifiable | `backup` integration tests, including a wrong-key refusal |
 | A damaged copy is detected | `a_damaged_backup_is_detected` |
 | Recovery keys round-trip and refuse typos | `keystore::tests::recovery_keys_round_trip_and_tolerate_transcription` |
+| A rewrite leaves no second copy of the key | `keystore::tests::a_rewrite_leaves_no_stray_keystores_behind` |
 | Adding a key needs the passphrase | `keystore::tests::adding_a_recovery_key_requires_the_passphrase` |
 | The used recovery key is rotated away | CLI `a_lost_passphrase_can_be_reset_with_the_recovery_key` |
 | Chain tampering is caught | `tampering_with_the_audit_chain_is_detected` |
@@ -176,7 +177,5 @@ the machine, not a machine an attacker is already logged into.
 - **O5** Tighten file permissions on the keystore and archive at creation.
 - **O6** Decide whether `bonk verify` should print a head that the user can record
   somewhere durable; today it prints the head and stops there.
-- **O7** Close the Windows remove-then-rename window in keystore writes: keep the
-  previous file until the new one is in place, so a crash cannot leave no key.
 
 Changes to a decision recorded here need an ADR, like any other.

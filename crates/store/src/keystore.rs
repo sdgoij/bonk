@@ -578,13 +578,30 @@ fn read_u32(bytes: &[u8], cursor: &mut usize) -> u32 {
 fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), StoreError> {
     let temporary = path.with_extension("tmp");
     fs::write(&temporary, bytes)?;
+
+    // Unix renames over the destination atomically. Windows refuses, and the
+    // usual remove-then-rename would leave a window in which the keystore does
+    // not exist at all — and the keystore is the only copy of the wrapped key.
+    // So the previous file is parked beside it and removed only once the new one
+    // is in place.
     match fs::rename(&temporary, path) {
         Ok(()) => Ok(()),
         Err(_) if path.exists() => {
-            // Windows cannot rename over an existing file.
+            let previous = path.with_extension("old");
+            fs::copy(path, &previous)?;
             fs::remove_file(path)?;
-            fs::rename(&temporary, path)?;
-            Ok(())
+            match fs::rename(&temporary, path) {
+                Ok(()) => {
+                    let _ = fs::remove_file(&previous);
+                    Ok(())
+                }
+                Err(error) => {
+                    // Put the old file back rather than leave the archive keyless.
+                    let _ = fs::rename(&previous, path);
+                    let _ = fs::remove_file(&temporary);
+                    Err(error.into())
+                }
+            }
         }
         Err(error) => {
             let _ = fs::remove_file(&temporary);
@@ -668,6 +685,21 @@ mod tests {
         assert!(KeyStore::open(&path, PASS).is_err());
         let reopened = KeyStore::open(&path, "a new passphrase").unwrap();
         assert_eq!(reopened.dek(), &dek);
+    }
+
+    #[test]
+    fn a_rewrite_leaves_no_stray_keystores_behind() {
+        let (dir, mut store) = temp_store();
+        store.change_passphrase("a new passphrase").unwrap();
+
+        // The only file that may remain is the keystore itself: a parked copy or
+        // a temporary would be a second copy of the wrapped key lying around.
+        let mut names: Vec<String> = fs::read_dir(dir.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        assert_eq!(names, vec!["keystore.bin".to_owned()]);
     }
 
     #[test]
