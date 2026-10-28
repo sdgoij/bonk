@@ -141,7 +141,9 @@ the machine, not a machine an attacker is already logged into.
 - **R7 — Secrets in memory are only partly wiped.** DEK, KEK, and the values the
   CLI resolves for a passphrase or recovery key live in `Zeroizing` buffers, and
   the desktop unlock form wipes its editor buffer once the credentials are
-  accepted; a wrong passphrase stays in the form so a typo can be corrected. What
+  accepted, and the workspace's security panel wipes its fields when it is
+  dropped, which locking does; a wrong passphrase stays in the form so a typo can
+  be corrected. What
   no code can fix is a passphrase passed as a flag: it is in the process's argv,
   which belongs to the operating system and is readable by other processes
   running as the user for as long as the process lives.
@@ -177,12 +179,15 @@ the machine, not a machine an attacker is already logged into.
 | A used passphrase is not left in the form | `a_wrong_passphrase_stays_for_a_retry_and_a_used_buffer_is_wiped` |
 | A weak passphrase is reported, not refused | CLI `a_weak_passphrase_is_reported_but_not_refused` |
 | Creating needs the phrase twice | `a_new_archive_is_confirmed_before_it_is_written` |
+| A recovery key added in the window opens the archive | `a_recovery_key_from_the_app_opens_the_archive` |
+| A passphrase change in the window keeps it openable | `changing_the_passphrase_from_the_app_keeps_the_archive_openable` |
 | Parsers survive hostile bytes | `arbitrary_bytes_never_panic`, `a_mutated_container_never_panics`, `a_stream_that_inflates_past_the_limit_is_refused` |
 
 ## 8. Open items
 
-- **O1** GUI prompts for adding a recovery key and resetting a lost passphrase
-  (M6.1); the CLI covers both.
+- **O1** The unlock screen has no recovery route: a lost passphrase is reset with
+  `bonk passphrase-reset`, not from the window. Adding a key and changing a
+  passphrase are in the workspace (M6.1).
 - **O3** Optional OS-keychain wrap of the same DEK, for “remember me”.
 - **O4** libFuzzer targets once the runner has nightly and `cargo-fuzz`; the
   property tests are the gate until then.

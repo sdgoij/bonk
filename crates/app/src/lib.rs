@@ -120,6 +120,47 @@ impl Session {
     pub fn keystore_path(&self) -> &Path {
         &self.keystore_path
     }
+
+    /// Adds or replaces the recovery key, returning the secret to show once.
+    ///
+    /// The passphrase is required again rather than taken from the unlock: a
+    /// credential change should not ride on a window that has been left open.
+    pub fn add_recovery_key(&self, passphrase: &str) -> Result<String, StoreError> {
+        let mut keystore = KeyStore::open(self.keystore_path(), passphrase)?;
+        let key = keystore.enable_recovery(passphrase)?;
+        if let Err(error) = store::audit::record_recovery_key(
+            self.database.connection(),
+            &store::now_rfc3339(),
+            "gui",
+            &keystore.path().display().to_string(),
+        ) {
+            // The key is written but unrecorded. Saying so is better than
+            // hiding it, and adding a key again replaces it with one that is
+            // recorded.
+            return Err(StoreError::Rejected(format!(
+                "the recovery key was written, but recording it in the audit chain failed: {error}. \
+                 Add a recovery key again to replace it."
+            )));
+        }
+        Ok(key)
+    }
+
+    /// Rewraps the data key under a new passphrase.
+    pub fn change_passphrase(&self, current: &str, new: &str) -> Result<(), StoreError> {
+        let mut keystore = KeyStore::open(self.keystore_path(), current)?;
+        keystore.change_passphrase(new)?;
+        if let Err(error) = store::audit::record_passphrase_change(
+            self.database.connection(),
+            &store::now_rfc3339(),
+            "gui",
+            &keystore.path().display().to_string(),
+        ) {
+            return Err(StoreError::Rejected(format!(
+                "the passphrase was changed, but recording it in the audit chain failed: {error}"
+            )));
+        }
+        Ok(())
+    }
 }
 
 /// Renders a document to UBL for the issue transaction.
@@ -462,7 +503,7 @@ fn confirm(passphrase: &str, confirmation: &str) -> Result<(), &'static str> {
 }
 
 /// Draws the strength estimate under a passphrase field.
-fn strength_row(ui: &mut egui::Ui, passphrase: &str) {
+pub(crate) fn strength_row(ui: &mut egui::Ui, passphrase: &str) {
     if passphrase.is_empty() {
         return;
     }
@@ -761,6 +802,52 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn a_recovery_key_from_the_app_opens_the_archive() {
+        let dir = TempDir::new().unwrap();
+        let database = dir.path().join("bonk.db");
+        let keystore = dir.path().join("keystore.bin");
+        let passphrase = "correct horse battery staple";
+        let session = Session::create(&database, &keystore, passphrase).unwrap();
+
+        let key = session.add_recovery_key(passphrase).unwrap();
+        assert_eq!(key.split('-').count(), 8, "eight groups");
+        assert_eq!(key.chars().filter(|symbol| *symbol != '-').count(), 32);
+        assert!(KeyStore::open(&keystore, passphrase).unwrap().recovery_enabled());
+
+        // The key is a real route in: it unwraps the data key the database needs.
+        let recovered = KeyStore::open_with_recovery(&keystore, &key).unwrap();
+        let reopened = Database::open(&database, &recovered).unwrap();
+        assert!(reopened.seller_count().unwrap() == 0);
+
+        let recorded: i64 = session
+            .database()
+            .connection()
+            .query_row(
+                "SELECT COUNT(*) FROM audit_event WHERE kind = 'recovery_key_added'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(recorded, 1, "the chain must know a route was added");
+    }
+
+    #[test]
+    fn changing_the_passphrase_from_the_app_keeps_the_archive_openable() {
+        let dir = TempDir::new().unwrap();
+        let database = dir.path().join("bonk.db");
+        let keystore = dir.path().join("keystore.bin");
+        let session = Session::create(&database, &keystore, "old passphrase").unwrap();
+
+        // A wrong current passphrase changes nothing.
+        assert!(session.change_passphrase("not it", "new passphrase").is_err());
+        assert!(Session::unlock(&database, &keystore, "old passphrase").is_ok());
+
+        session.change_passphrase("old passphrase", "new passphrase").unwrap();
+        assert!(Session::unlock(&database, &keystore, "old passphrase").is_err());
+        assert!(Session::unlock(&database, &keystore, "new passphrase").is_ok());
     }
 
     #[test]

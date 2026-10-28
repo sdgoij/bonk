@@ -13,11 +13,13 @@ use store::{
     StoreError, Suppression, archive::DocumentView, attach_artefact, credit_note_for, first_seller, insert_customer,
     insert_seller, issue_draft, list_customers, list_suppressions, save_draft, save_suppression, search,
 };
+use zeroize::Zeroize;
 
 use crate::Session;
 use crate::health::Health;
 
 const ERROR_COLOR: egui::Color32 = egui::Color32::from_rgb(200, 60, 60);
+const WARN_COLOR: egui::Color32 = egui::Color32::from_rgb(190, 140, 40);
 const OK_COLOR: egui::Color32 = egui::Color32::from_rgb(70, 150, 90);
 
 const CATEGORIES: [VatCategory; 6] = [
@@ -56,6 +58,7 @@ pub struct Workspace {
     focus_request: Option<String>,
     message: Option<Message>,
     search: SearchView,
+    security: SecurityForm,
     health: Option<Health>,
 }
 
@@ -114,6 +117,29 @@ impl SearchView {
 struct SuppressionTarget {
     code: String,
     field: String,
+}
+
+/// The security panel's state.
+///
+/// These are passphrases in plain `String`s because egui's `TextEdit` writes into
+/// one; [`Workspace`] wipes them when it is dropped, which happens on lock.
+#[derive(Default)]
+struct SecurityForm {
+    current: String,
+    new_passphrase: String,
+    repeat: String,
+    /// The recovery key, shown once and wiped when the panel is done or the
+    /// workspace closes.
+    recovery_key: Option<String>,
+}
+
+impl SecurityForm {
+    /// Empties every secret and keeps whatever the user still has to read.
+    fn forget_secrets(&mut self) {
+        self.current.zeroize();
+        self.new_passphrase.zeroize();
+        self.repeat.zeroize();
+    }
 }
 
 enum FindingAction {
@@ -282,6 +308,16 @@ impl Default for LineForm {
     }
 }
 
+impl Drop for Workspace {
+    /// The workspace holds passphrase fields because egui's `TextEdit` needs
+    /// plain `String`s. Locking drops it, so the wipe belongs here as well as
+    /// after a successful change.
+    fn drop(&mut self) {
+        self.security.forget_secrets();
+        self.forget_recovery_key();
+    }
+}
+
 impl Workspace {
     /// Loads the seller and customer list for a freshly unlocked session.
     pub fn new(session: &Session) -> Result<Self, StoreError> {
@@ -303,6 +339,7 @@ impl Workspace {
             focus_request: None,
             message: None,
             search: SearchView::default(),
+            security: SecurityForm::default(),
             health: Health::snapshot(session.database(), session.database_path()).ok(),
         })
     }
@@ -355,6 +392,7 @@ impl Workspace {
 
         ui.add_space(8.0);
         self.health_ui(ui, session);
+        self.security_ui(ui, session);
 
         self.suppression_dialog(ui, session);
 
@@ -457,6 +495,107 @@ impl Workspace {
 
         if check {
             self.run_health_check(session);
+        }
+    }
+
+    /// Draws the security panel: credential changes, which ask for the current
+    /// passphrase rather than trusting the open window.
+    ///
+    /// Passphrase changes and recovery keys are the two things that protect the
+    /// archive from its own user, so they are here rather than only in the CLI.
+    fn security_ui(&mut self, ui: &mut egui::Ui, session: &Session) {
+        egui::CollapsingHeader::new("Security")
+            .default_open(false)
+            .show(ui, |ui| self.security_details_ui(ui, session));
+    }
+
+    /// The security panel's contents, drawn directly by the headless test.
+    fn security_details_ui(&mut self, ui: &mut egui::Ui, session: &Session) {
+        let mut change = false;
+        let mut add_key = false;
+        let mut done = false;
+
+        ui.label("A credential change asks for the current passphrase again.");
+        egui::Grid::new("security-form").num_columns(2).show(ui, |ui| {
+            ui.label("Current passphrase");
+            ui.add(egui::TextEdit::singleline(&mut self.security.current).password(true));
+            ui.end_row();
+            ui.label("New passphrase");
+            ui.add(egui::TextEdit::singleline(&mut self.security.new_passphrase).password(true));
+            ui.end_row();
+            ui.label("");
+            crate::strength_row(ui, &self.security.new_passphrase);
+            ui.end_row();
+            ui.label("Repeat the new passphrase");
+            ui.add(egui::TextEdit::singleline(&mut self.security.repeat).password(true));
+            ui.end_row();
+        });
+        ui.horizontal(|ui| {
+            if ui.button("Change passphrase").clicked() {
+                change = true;
+            }
+            if ui.button("Add recovery key").clicked() {
+                add_key = true;
+            }
+        });
+
+        if let Some(key) = &self.security.recovery_key {
+            ui.add_space(6.0);
+            ui.colored_label(
+                WARN_COLOR,
+                "This key is shown once. Write it down and keep it apart from the database and the passphrase.",
+            );
+            ui.label(egui::RichText::new(key.as_str()).monospace());
+            if ui.button("Done").clicked() {
+                done = true;
+            }
+        }
+
+        if change {
+            let verdict = check_password_change(
+                &self.security.current,
+                &self.security.new_passphrase,
+                &self.security.repeat,
+            );
+            if let Err(reason) = verdict {
+                self.message = Some(Message::error(reason));
+            } else {
+                match session.change_passphrase(&self.security.current, &self.security.new_passphrase) {
+                    Ok(()) => {
+                        self.security.forget_secrets();
+                        self.message = Some(Message::ok(
+                            "Passphrase changed. Backups made before this change still need the old one.",
+                        ));
+                    }
+                    Err(error) => self.message = Some(Message::error(error.to_string())),
+                }
+            }
+        }
+
+        if add_key {
+            if self.security.current.trim().is_empty() {
+                self.message = Some(Message::error("Enter the current passphrase first."));
+            } else {
+                match session.add_recovery_key(&self.security.current) {
+                    Ok(key) => {
+                        self.security.recovery_key = Some(key);
+                        self.security.forget_secrets();
+                        self.message = Some(Message::ok("Recovery key added."));
+                    }
+                    Err(error) => self.message = Some(Message::error(error.to_string())),
+                }
+            }
+        }
+
+        if done {
+            self.forget_recovery_key();
+        }
+    }
+
+    /// Drops the shown recovery key, wiping the bytes first.
+    fn forget_recovery_key(&mut self) {
+        if let Some(mut key) = self.security.recovery_key.take() {
+            key.zeroize();
         }
     }
 
@@ -1496,7 +1635,7 @@ fn show_findings(ui: &mut egui::Ui, findings: &[Finding]) -> Option<FindingActio
     for finding in findings.iter().take(12) {
         let color = match finding.severity {
             Severity::Blocking => ERROR_COLOR,
-            Severity::Warning => egui::Color32::from_rgb(190, 140, 40),
+            Severity::Warning => WARN_COLOR,
             Severity::Info => egui::Color32::GRAY,
         };
         let bt = finding.bt.unwrap_or("-");
@@ -1562,6 +1701,23 @@ fn category_label(category: VatCategory) -> &'static str {
         VatCategory::CanaryIslands => "L Canary",
         VatCategory::CeutaMelilla => "M Ceuta",
     }
+}
+
+/// Whether a passphrase change is well formed, with the reason when it is not.
+fn check_password_change(current: &str, new: &str, repeat: &str) -> Result<(), &'static str> {
+    if current.trim().is_empty() {
+        return Err("enter the current passphrase");
+    }
+    if new.trim().is_empty() {
+        return Err("enter a new passphrase");
+    }
+    if new != repeat {
+        return Err("the new passphrases do not match");
+    }
+    if new == current {
+        return Err("the new passphrase must differ from the current one");
+    }
+    Ok(())
 }
 
 fn money_text(value: Money) -> String {
@@ -1744,6 +1900,9 @@ mod tests {
         // An opened result draws a grid of facts, a line table, and hashes; the
         // panel is closed by default, so open it here to exercise it.
         workspace.search.opened = store::archive::load(session.database().connection(), issued.id).unwrap();
+        // Likewise the security panel, including the block that shows a key once.
+        workspace.security.current = "passphrase".to_owned();
+        workspace.security.recovery_key = Some("AAAA-BBBB".to_owned());
 
         let context = egui::Context::default();
         let mut action = WorkspaceAction::None;
@@ -1751,12 +1910,31 @@ mod tests {
         // panic, so a headless frame is worth more than it looks.
         let output = context.run_ui(egui::RawInput::default(), |ui| {
             action = workspace.ui(ui, &mut session);
-            // The panel is collapsed by default, so draw its contents directly:
+            // Panels are collapsed by default, so draw their contents directly:
             // a broken widget inside a closed header is still a broken widget.
             let _ = workspace.health_details_ui(ui);
+            workspace.security_details_ui(ui, &session);
         });
         output.drop_without_applying_deltas();
         assert_eq!(action, WorkspaceAction::None);
+    }
+
+    #[test]
+    fn a_passphrase_change_must_be_well_formed() {
+        assert_eq!(
+            check_password_change("", "new", "new"),
+            Err("enter the current passphrase")
+        );
+        assert_eq!(check_password_change("old", "  ", "  "), Err("enter a new passphrase"));
+        assert_eq!(
+            check_password_change("old", "new", "other"),
+            Err("the new passphrases do not match")
+        );
+        assert_eq!(
+            check_password_change("same", "same", "same"),
+            Err("the new passphrase must differ from the current one")
+        );
+        assert_eq!(check_password_change("old", "new", "new"), Ok(()));
     }
 
     #[test]

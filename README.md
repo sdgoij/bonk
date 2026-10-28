@@ -335,6 +335,13 @@ are taken as they stand. A weak passphrase is reported, not refused — the
 estimate is a heuristic, and a gate that blocks the archive someone asked for
 would be worse than saying so once.
 
+A collapsed **Security** panel changes the passphrase and adds a recovery key
+without leaving the window. Both ask for the current passphrase again: a
+credential change should not ride on a session that has been open for hours, and
+the workspace never holds the data key. A new recovery key is shown once, in
+monospace, with a warning to keep it apart from the database; the panel forgets it
+when you press Done, and the fields are wiped when the workspace is locked.
+
 ## Layout
 
 | Crate | Role | Milestone |
