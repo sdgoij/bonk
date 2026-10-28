@@ -21,6 +21,7 @@ Design documents live in [`.agents/notes/`](.agents/notes/README.md):
 - [`technical-design.md`](.agents/notes/technical-design.md) — v1.0 architecture
 - [`accounting-design.md`](.agents/notes/accounting-design.md) — v1.1 ledger
 - [`implementation-plan.md`](.agents/notes/implementation-plan.md) — milestones
+- [`threat-model.md`](.agents/notes/threat-model.md) — what is defended, and what is not
 
 ## Build
 

@@ -602,8 +602,18 @@ because they are wasted space, not corruption. Unit tests cover a damaged payloa
 the newest-backup rule, and a short chain head; the headless draw test now draws
 the panel contents even though the header is collapsed.
 
-Remaining in M6: the passphrase strength meter and the GUI key prompts (M6.1),
-idle lock and zeroisation tests (M6.2), and the threat-model write-up.
+The threat model is written: [`threat-model.md`](threat-model.md) covers assets,
+trust boundaries, assumptions, threats by category with their residual risk,
+what is out of scope, a claim-to-test table, and open items O1–O6. It is candid
+about the parts that are easy to oversell — a fully rewritten chain is
+indistinguishable from the original without an outside record of a head; an
+unlocked archive is readable by anything running as the user; and a recovery key
+stored beside the archive turns two credentials into one.
+
+Remaining in M6: the passphrase strength meter and the GUI key prompts (M6.1) and
+idle lock plus zeroisation tests (M6.2). The threat model also lists O5–O6 as
+open: tighter file permissions at creation, and a decision on recording chain
+heads somewhere durable.
 
 Exit criteria:
 

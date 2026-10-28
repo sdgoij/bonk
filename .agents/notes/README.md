@@ -6,6 +6,7 @@ architecture may depend on the product name).
 | Document | Purpose |
 |----------|---------|
 | [technical-design.md](technical-design.md) | v1.0 architecture, data model, compliance boundaries, security, testing. The reference for *why* the system is shaped this way. |
+| [threat-model.md](threat-model.md) | Assets, trust boundaries, threats, mitigation, residual risks, and the tests behind each claim. |
 | [accounting-design.md](accounting-design.md) | v1.1 accounting layer: general ledger, VAT return preparation, bank reconciliation. |
 | [implementation-plan.md](implementation-plan.md) | Milestones, effort estimates, release trains, quality gates, first-two-weeks task list. |
 | [adr/](adr/README.md) | Architecture decision records 001–017. |

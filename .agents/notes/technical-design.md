@@ -1540,6 +1540,8 @@ tempting alternatives.
 | 015 | VAT return *preparation* with an immutable basis snapshot; filing stays with the tax authority's portal or a partner | Direct Digipoort filing (eHerkenning, certification, liability), optimistic XBRL export only |
 | 016 | Bank reconciliation is assisted and always recorded as a reversible match event; no silent auto-allocation | Fully automatic matching (silent errors in the books) |
 | 017 | The ledger starts at a configurable accounting start date with imported opening balances; no retroactive reconstruction before it | Full-history migration (unbounded scope), starting at zero with an unbalanced balance sheet (wrong) |
+| 018 | Codelists generated from the official Schematron and vendored with integrity checks | Hand-maintained tables (drift), fetching at runtime (offline requirement) |
+| 019 | Factur-X extraction with `lopdf`; the visual layer is never read | `pdfium` extraction (rendering-oriented), hand-rolled parser (risk), page-text extraction (second, lossy truth) |
 
 ---
 
