@@ -341,7 +341,7 @@ buyer and order reference from the document they correct, so the copied draft
 still passes R003.
 
 Remaining in M2: nothing blocking. Explicit deliver-to address fields beyond the
-buyer country remain for a later slice. Workspace tests: 361 encrypted, 359 plain.
+buyer country remain for a later slice. Workspace tests: 366 encrypted, 364 plain.
 
 Exit criteria:
 
@@ -526,7 +526,16 @@ express — words, a side, a status — because a column nothing writes is a col
 that lies. The panel's **Saved** list applies a view and runs it, so a stored view
 shows results rather than only fields, and **Delete** removes the applied one.
 
-Remaining in M5: the i18n pass and document-language selection.
+Document language is in. `render::Language` (English, Dutch) supplies the words
+for the fixed parts of the printed form, plus the document's own name — "Credit
+note" rather than "Invoice" for a credit note, which it never was. `InvoiceData`
+carries `title` and `labels`, and the template prints them, so the editor preview
+has to supply them too; the payload is assembled by `app::pdf_data`, which is
+separate from the renderer so the shape is testable without Typst. The editor
+defaults the language from the seller's locale and can change it per document;
+a credit note copies the language of the invoice it corrects. UBL is untouched:
+EN 16931 has no label field, so the language is a rendering choice frozen into
+the PDF artefact.
 
 The i18n groundwork is in, English first. `app::text` holds a `Language` enum and
 the strings for the lock screen and the strength estimate, grouped by screen; each
@@ -538,6 +547,9 @@ table has a place to be selected from — the seller's locale is the obvious sou
 The workspace body still has literals in its widgets; moving them is the rest of
 the pass, and the boundary is deliberate rather than accidental: everything a
 user can read in the shell is in `text`, and what is left is the editor.
+
+Remaining in M5: the rest of the i18n pass — the workspace body still holds
+literals, while the shell reads from `text`.
 
 ---
 

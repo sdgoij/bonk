@@ -21,6 +21,10 @@ pub const TEMPLATE: &str = include_str!("../templates/invoice.typ");
 /// stays free of business logic.
 #[derive(Clone, PartialEq, Eq, Debug, Serialize)]
 pub struct InvoiceData {
+    /// The word for the document itself: "Invoice", "Creditnota", and so on.
+    pub title: String,
+    /// The words for the fixed parts of the form.
+    pub labels: Labels,
     /// Invoice number.
     pub number: String,
     /// ISO issue date.
@@ -43,6 +47,88 @@ pub struct InvoiceData {
     pub gross: String,
     /// Optional note.
     pub notes: Option<String>,
+}
+
+/// The language the printed document speaks.
+///
+/// Not the interface language: a Dutch seller may print an English invoice for a
+/// customer abroad, and the interface speaks one language at a time.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum Language {
+    /// English labels.
+    #[default]
+    English,
+    /// Dutch labels.
+    Dutch,
+}
+
+impl Language {
+    /// The words this language prints.
+    pub const fn labels(self) -> Labels {
+        match self {
+            Language::English => Labels {
+                due: "Due",
+                vat: "VAT",
+                bill_to: "Bill to",
+                item: "Item",
+                qty: "Qty",
+                unit_price: "Unit price",
+                total: "Total",
+                net: "Net",
+            },
+            Language::Dutch => Labels {
+                due: "Vervaldatum",
+                vat: "BTW",
+                bill_to: "Factuur aan",
+                item: "Omschrijving",
+                qty: "Aantal",
+                unit_price: "Stukprijs",
+                total: "Totaal",
+                net: "Netto",
+            },
+        }
+    }
+
+    /// The word for the document, which a credit note does not share.
+    pub const fn document_title(self, credit_note: bool) -> &'static str {
+        match (self, credit_note) {
+            (Language::English, false) => "Invoice",
+            (Language::English, true) => "Credit note",
+            (Language::Dutch, false) => "Factuur",
+            (Language::Dutch, true) => "Creditnota",
+        }
+    }
+
+    /// Infers the printed language from a locale tag; `nl` anywhere in the
+    /// primary subtag means Dutch, anything else English.
+    pub fn from_locale(locale: &str) -> Self {
+        if locale.trim().to_ascii_lowercase().starts_with("nl") {
+            Language::Dutch
+        } else {
+            Language::English
+        }
+    }
+}
+
+/// The words the template prints for the fixed parts of the form.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize)]
+pub struct Labels {
+    /// Due date.
+    pub due: &'static str,
+    /// VAT identifier.
+    pub vat: &'static str,
+    /// Heading over the customer block.
+    pub bill_to: &'static str,
+    /// Item column.
+    pub item: &'static str,
+    /// Quantity column.
+    pub qty: &'static str,
+    /// Unit price column.
+    pub unit_price: &'static str,
+    /// Line total column.
+    pub total: &'static str,
+    /// Net total row.
+    pub net: &'static str,
 }
 
 /// A party block in the template.
@@ -197,6 +283,8 @@ mod tests {
 
     fn sample() -> InvoiceData {
         InvoiceData {
+            title: "Invoice".to_owned(),
+            labels: Language::English.labels(),
             number: "2026-0001".to_owned(),
             issue_date: "2026-10-27".to_owned(),
             due_date: Some("2026-11-26".to_owned()),
@@ -223,6 +311,25 @@ mod tests {
             gross: "121.00".to_owned(),
             notes: None,
         }
+    }
+
+    #[test]
+    fn a_dutch_locale_prints_dutch() {
+        assert_eq!(Language::from_locale("nl-NL"), Language::Dutch);
+        assert_eq!(Language::from_locale("NL-nl"), Language::Dutch);
+        assert_eq!(Language::from_locale("nl"), Language::Dutch);
+        assert_eq!(Language::from_locale("en-GB"), Language::English);
+        assert_eq!(Language::from_locale(""), Language::English);
+    }
+
+    #[test]
+    fn labels_differ_between_languages() {
+        let dutch = Language::Dutch.labels();
+        let english = Language::English.labels();
+        assert_eq!(dutch.vat, "BTW");
+        assert_ne!(dutch.item, english.item);
+        assert_eq!(dutch.net, "Netto");
+        assert_eq!(english.net, "Net");
     }
 
     #[test]

@@ -972,6 +972,33 @@ fn blocking_findings_stop_issue_creation() {
 }
 
 #[test]
+fn an_unknown_document_language_is_refused() {
+    let dir = TempDir::new().expect("temp dir");
+    let database = dir.path().join("bonk.db");
+    let keystore = dir.path().join("keystore.bin");
+
+    let output = bonk()
+        .args([
+            "issue",
+            "00000000-0000-0000-0000-000000000000",
+            "--db",
+            database.to_str().expect("utf-8"),
+            "--keystore",
+            keystore.to_str().expect("utf-8"),
+            "--passphrase",
+            "correct horse battery staple",
+            "--language",
+            "fr",
+        ])
+        .output()
+        .expect("binary runs");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("invalid value"), "{stderr}");
+}
+
+#[test]
 fn a_weak_passphrase_is_reported_but_not_refused() {
     let dir = TempDir::new().expect("temp dir");
     let database = dir.path().join("bonk.db");

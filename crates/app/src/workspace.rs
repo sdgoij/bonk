@@ -296,6 +296,8 @@ struct Editor {
     note: String,
     buyer_reference: String,
     order_reference: String,
+    /// The language the printed document speaks, chosen per document.
+    document_language: render::Language,
     lines: Vec<LineForm>,
 }
 
@@ -312,13 +314,14 @@ impl Clone for Editor {
             note: self.note.clone(),
             buyer_reference: self.buyer_reference.clone(),
             order_reference: self.order_reference.clone(),
+            document_language: self.document_language,
             lines: self.lines.clone(),
         }
     }
 }
 
 impl Editor {
-    fn new(customer: Option<CustomerId>) -> Self {
+    fn new(customer: Option<CustomerId>, document_language: render::Language) -> Self {
         Self {
             id: DocumentId::new(),
             doc_type: DocType::Invoice,
@@ -330,15 +333,16 @@ impl Editor {
             note: String::new(),
             buyer_reference: String::new(),
             order_reference: String::new(),
+            document_language,
             lines: vec![LineForm::default()],
         }
     }
 
     /// An editor pre-filled from a credit-note draft copied from an issued
     /// invoice: the reference is fixed, the lines and customer are editable.
-    fn credit_note(draft: &InvoiceDraft) -> Option<Self> {
+    fn credit_note(draft: &InvoiceDraft, document_language: render::Language) -> Option<Self> {
         let preceding = draft.preceding_invoice.clone()?;
-        let mut editor = Self::new(Some(draft.customer_id));
+        let mut editor = Self::new(Some(draft.customer_id), document_language);
         editor.id = draft.id;
         editor.doc_type = DocType::CreditNote;
         editor.preceding = Some(preceding);
@@ -606,6 +610,14 @@ impl Workspace {
         if delete_saved && let (Some(owner), Some(name)) = (owner, self.search.applied.clone()) {
             self.search.delete_saved(&name, session.database(), owner);
         }
+    }
+
+    /// The seller's locale is the sensible default for what gets printed, and
+    /// only a default: the editor can change it per document.
+    fn default_document_language(&self) -> render::Language {
+        self.seller.as_ref().map_or_else(render::Language::default, |seller| {
+            render::Language::from_locale(&seller.default_locale)
+        })
     }
 
     /// Draws the health panel: cheap facts always, the payload audit on request.
@@ -995,7 +1007,7 @@ impl Workspace {
         ui.horizontal(|ui| {
             if ui.button("New invoice").clicked() {
                 let customer = self.customers.first().map(|customer| customer.id);
-                self.editor = Some(Editor::new(customer));
+                self.editor = Some(Editor::new(customer, self.default_document_language()));
                 self.suppressions.clear();
                 self.suppress_target = None;
                 self.suppression_reason.clear();
@@ -1101,8 +1113,16 @@ impl Workspace {
                 ui.end_row();
                 ui.label("Delivery date");
                 text_field(ui, &mut editor.delivery_date, "delivery_date", 110.0, focus);
-                ui.label("");
-                ui.label("");
+                ui.label("Document language");
+                egui::ComboBox::from_id_salt("editor.language")
+                    .selected_text(match editor.document_language {
+                        render::Language::English => "English",
+                        render::Language::Dutch => "Nederlands",
+                    })
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut editor.document_language, render::Language::English, "English");
+                        ui.selectable_value(&mut editor.document_language, render::Language::Dutch, "Nederlands");
+                    });
                 ui.end_row();
             });
             ui.horizontal(|ui| {
@@ -1248,6 +1268,11 @@ impl Workspace {
         };
         let number = issued.number.clone();
         let seller_id = seller.id;
+        // A correction speaks the same language as the document it corrects.
+        let language = self
+            .editor
+            .as_ref()
+            .map_or_else(render::Language::default, |editor| editor.document_language);
         let result = credit_note_for(
             session.database().connection(),
             seller_id,
@@ -1255,7 +1280,7 @@ impl Workspace {
             LocalDate::today_utc(),
         );
         match result {
-            Ok(Some(draft)) => match Editor::credit_note(&draft) {
+            Ok(Some(draft)) => match Editor::credit_note(&draft, language) {
                 Some(editor) => {
                     self.reset_document();
                     self.editor = Some(editor);
@@ -1381,6 +1406,7 @@ impl Workspace {
         let Some(editor) = self.editor.clone() else {
             return;
         };
+        let language = editor.document_language;
         let draft = match build_draft(&editor, &seller) {
             Ok(draft) => draft,
             Err(error) => {
@@ -1429,7 +1455,7 @@ impl Workspace {
         match result {
             Ok(issued) => {
                 let mut attach_error = None;
-                match crate::invoice_pdf(&issued.number, &draft, &seller, &customer, &issued.totals) {
+                match crate::invoice_pdf(&issued.number, &draft, &seller, &customer, &issued.totals, language) {
                     Ok(bytes) => {
                         let hash = match attach_artefact(
                             session.database().connection(),
@@ -1878,7 +1904,7 @@ mod tests {
     }
 
     fn editor() -> Editor {
-        let mut editor = Editor::new(Some(CustomerId::new()));
+        let mut editor = Editor::new(Some(CustomerId::new()), render::Language::default());
         editor.lines[0].name = "Consulting".to_owned();
         editor.lines[0].quantity = "2".to_owned();
         editor.lines[0].unit_price = "50.00".to_owned();
@@ -2120,6 +2146,61 @@ mod tests {
             Err("the new passphrase must differ from the current one")
         );
         assert_eq!(check_password_change("old", "new", "new"), Ok(()));
+    }
+
+    #[test]
+    fn the_printed_document_speaks_the_chosen_language() {
+        let seller = seller();
+        let customer = CustomerRecord {
+            id: CustomerId::new(),
+            party: Party::new("Acme BV", Address::new("Rotterdam", CountryCode::NL)),
+        };
+        let draft = build_draft(&editor(), &seller).unwrap();
+        let totals = calculate_totals(&draft.lines).unwrap();
+
+        let dutch = crate::pdf_data(
+            "2026-0001",
+            &draft,
+            &seller,
+            &customer,
+            &totals,
+            render::Language::Dutch,
+        );
+        assert_eq!(dutch.title, "Factuur");
+        assert_eq!(dutch.labels.vat, "BTW");
+        assert_eq!(dutch.labels.bill_to, "Factuur aan");
+
+        let english = crate::pdf_data(
+            "2026-0001",
+            &draft,
+            &seller,
+            &customer,
+            &totals,
+            render::Language::English,
+        );
+        assert_eq!(english.title, "Invoice");
+        assert_eq!(english.labels.vat, "VAT");
+    }
+
+    #[test]
+    fn a_credit_note_is_named_as_one() {
+        let seller = seller();
+        let customer = CustomerRecord {
+            id: CustomerId::new(),
+            party: Party::new("Acme BV", Address::new("Rotterdam", CountryCode::NL)),
+        };
+        let mut editor = editor();
+        editor.doc_type = DocType::CreditNote;
+        let draft = build_draft(&editor, &seller).unwrap();
+        let totals = calculate_totals(&draft.lines).unwrap();
+
+        for (language, expected) in [
+            (render::Language::English, "Credit note"),
+            (render::Language::Dutch, "Creditnota"),
+        ] {
+            let data = crate::pdf_data("2026-0001-C", &draft, &seller, &customer, &totals, language);
+            assert_eq!(data.title, expected);
+        }
     }
 
     #[test]

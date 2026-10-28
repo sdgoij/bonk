@@ -298,6 +298,10 @@ enum Command {
         actor: String,
         #[arg(long, default_value = "cli")]
         device: String,
+        /// Language of the printed document: `en` or `nl`. Defaults to the
+        /// seller's locale.
+        #[arg(long, value_parser = ["en", "nl"])]
+        language: Option<String>,
     },
     /// Open the desktop UI (also the default with no subcommand).
     Gui,
@@ -906,6 +910,7 @@ fn run(cli: Cli) -> Result<(), CliError> {
             out,
             actor,
             device,
+            language,
         }) => {
             let mut session = open(&database, &keystore, passphrase.clone())?;
             let draft_id = DocumentId::parse_str(&draft)?;
@@ -914,6 +919,11 @@ fn run(cli: Cli) -> Result<(), CliError> {
                 .ok_or_else(|| CliError::Input(format!("draft {draft_id} does not exist")))?;
             let seller = load_seller(session.database().connection(), loaded.seller_id)?;
             let customer = load_customer(session.database().connection(), loaded.customer_id)?;
+            let language = match language.as_deref() {
+                Some("nl") => app::DocumentLanguage::Dutch,
+                Some("en") => app::DocumentLanguage::English,
+                _ => app::DocumentLanguage::from_locale(&seller.default_locale),
+            };
 
             let findings = validate_draft(&loaded, &seller.party, &customer.party);
             print_findings(&findings);
@@ -955,7 +965,7 @@ fn run(cli: Cli) -> Result<(), CliError> {
             println!("sha256: {}", issued.ubl_sha256);
             println!("audit:  {}", issued.audit_head);
 
-            match app::invoice_pdf(&issued.number, &loaded, &seller, &customer, &issued.totals) {
+            match app::invoice_pdf(&issued.number, &loaded, &seller, &customer, &issued.totals, language) {
                 Ok(pdf) => {
                     let pdf_path = out.join(format!("{}.pdf", issued.number));
                     std::fs::write(&pdf_path, &pdf)?;

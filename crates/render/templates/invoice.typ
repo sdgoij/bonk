@@ -7,6 +7,17 @@
   json(sys.inputs.data)
 } else {
   (
+    title: "Invoice",
+    labels: (
+      due: "Due",
+      vat: "VAT",
+      bill_to: "Bill to",
+      item: "Item",
+      qty: "Qty",
+      unit_price: "Unit price",
+      total: "Total",
+      net: "Net",
+    ),
     number: "2026-0001",
     issue_date: "2026-10-27",
     due_date: "2026-11-26",
@@ -22,37 +33,37 @@
 }
 
 #grid(columns: (1fr, 1fr), gutter: 1cm, [
-  #text(size: 18pt, weight: "bold")[Invoice #data.number]
+  #text(size: 18pt, weight: "bold")[#data.title #data.number]
   #v(4pt)
   #data.issue_date
-  #if data.due_date != none [#linebreak() Due #data.due_date]
+  #if data.due_date != none [#linebreak() #data.labels.due #data.due_date]
 ], [
   #text(weight: "bold")[#data.seller.name]
   #linebreak()
   #data.seller.address
-  #if data.seller.vat != none [#linebreak() VAT #data.seller.vat]
+  #if data.seller.vat != none [#linebreak() #data.labels.vat #data.seller.vat]
 ])
 
 #v(1cm)
-#text(weight: "bold")[Bill to]
+#text(weight: "bold")[#data.labels.bill_to]
 #v(2pt)
 #data.customer.name \
 #data.customer.address \
-#if data.customer.vat != none [VAT #data.customer.vat]
+#if data.customer.vat != none [#data.labels.vat #data.customer.vat]
 
 #v(1cm)
 #table(
   columns: (1fr, 50pt, 70pt, 45pt, 75pt),
   stroke: 0.5pt,
-  [*Item*], [*Qty*], [*Unit price*], [*VAT*], [*Total*],
+  [*#data.labels.item*], [*#data.labels.qty*], [*#data.labels.unit_price*], [*#data.labels.vat*], [*#data.labels.total*],
   ..data.lines.map(line => ([#line.name], [#line.qty], [#line.price], [#line.vat], [#line.total])).flatten(),
 )
 
 #v(0.5cm)
 #align(right)[
-  Net #data.net #data.currency \
-  VAT #data.tax #data.currency \
-  #text(weight: "bold")[Total #data.gross #data.currency]
+  #data.labels.net #data.net #data.currency \
+  #data.labels.vat #data.tax #data.currency \
+  #text(weight: "bold")[#data.labels.total #data.gross #data.currency]
 ]
 
 #if data.notes != none [

@@ -25,6 +25,12 @@ use zeroize::{Zeroize, Zeroizing};
 
 pub use workspace::{Workspace, WorkspaceAction};
 
+/// The language the printed document speaks.
+///
+/// Re-exported so a front end that renders through `invoice_pdf` does not need a
+/// direct dependency on the renderer.
+pub use render::Language as DocumentLanguage;
+
 /// What the dashboard shows.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Summary {
@@ -284,8 +290,30 @@ pub fn invoice_pdf(
     seller: &SellerRecord,
     customer: &CustomerRecord,
     totals: &InvoiceTotals,
+    language: render::Language,
 ) -> Result<Vec<u8>, StoreError> {
-    let data = render::InvoiceData {
+    let data = pdf_data(number, draft, seller, customer, totals, language);
+
+    render::TypstCliRenderer::from_environment()
+        .render(&data)
+        .map_err(|error| StoreError::Render(error.to_string()))
+}
+
+/// The payload handed to the template.
+///
+/// Kept apart from the renderer so the shape can be checked without shelling out
+/// to Typst, and so the words the document prints are decided in one place.
+pub fn pdf_data(
+    number: &str,
+    draft: &InvoiceDraft,
+    seller: &SellerRecord,
+    customer: &CustomerRecord,
+    totals: &InvoiceTotals,
+    language: render::Language,
+) -> render::InvoiceData {
+    render::InvoiceData {
+        title: language.document_title(draft.doc_type.is_credit_note()).to_owned(),
+        labels: language.labels(),
         number: number.to_owned(),
         issue_date: draft.issue_date.to_iso_string(),
         due_date: draft.due_date.map(LocalDate::to_iso_string),
@@ -311,11 +339,7 @@ pub fn invoice_pdf(
         tax: totals.tax.to_fixed_string(2).unwrap_or_default(),
         gross: totals.gross.to_fixed_string(2).unwrap_or_default(),
         notes: draft.note.clone(),
-    };
-
-    render::TypstCliRenderer::from_environment()
-        .render(&data)
-        .map_err(|error| StoreError::Render(error.to_string()))
+    }
 }
 
 fn party_data(party: &Party) -> render::PartyData {
