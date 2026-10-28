@@ -341,7 +341,7 @@ buyer and order reference from the document they correct, so the copied draft
 still passes R003.
 
 Remaining in M2: nothing blocking. Explicit deliver-to address fields beyond the
-buyer country remain for a later slice. Workspace tests: 298 encrypted, 296 plain.
+buyer country remain for a later slice. Workspace tests: 300 encrypted, 298 plain.
 
 Exit criteria:
 
@@ -565,8 +565,10 @@ groups and never stored; the passphrase wrap keeps its version-1 layout and both
 versions still open. `bonk recovery-add` requires the passphrase before adding a
 route, replaces an existing key, verifies in memory that both routes unwrap the
 same key before writing, and records `recovery_key_added`. A passphrase change
-carries the recovery wrap over without holding the secret. Still open in M6.1:
-the strength meter and the GUI prompts.
+carries the recovery wrap over without holding the secret. `passphrase-reset`
+uses the key to install a new passphrase when the old one is gone, then rotates
+the key and prints the replacement, because the used key has now been typed
+somewhere. Still open in M6.1: the strength meter and the GUI prompts.
 
 Remaining in M6: passphrase UX and recovery keys (M6.1), idle lock and zeroisation
 tests (M6.2), evidence bundles (M6.5), log redaction and support bundles (M6.6),

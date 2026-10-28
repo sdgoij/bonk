@@ -104,6 +104,26 @@ pub fn record_recovery_key(conn: &Connection, at: &str, actor: &str, keystore: &
     record_key_event(conn, at, actor, "recovery_key_added", keystore)
 }
 
+/// Records that a passphrase was replaced with the help of a recovery key.
+pub fn record_passphrase_reset(
+    conn: &Connection,
+    at: &str,
+    actor: &str,
+    keystore: &str,
+    recovery_key_rotated: bool,
+) -> Result<(), StoreError> {
+    append(
+        conn,
+        at,
+        actor,
+        "passphrase_reset",
+        "keystore",
+        keystore,
+        serde_json::json!({ "recovery_key_rotated": recovery_key_rotated }),
+    )?;
+    Ok(())
+}
+
 fn record_key_event(conn: &Connection, at: &str, actor: &str, kind: &str, keystore: &str) -> Result<(), StoreError> {
     append(conn, at, actor, kind, "keystore", keystore, serde_json::json!({}))?;
     Ok(())

@@ -71,6 +71,18 @@ enum Command {
     /// the old one stops working.
     #[command(name = "recovery-add")]
     RecoveryAdd,
+    /// Replace a lost passphrase with the recovery key, then rotate that key.
+    #[command(name = "passphrase-reset")]
+    PassphraseReset {
+        /// Recovery key. A flag is for tests and scripts; prefer the prompt or
+        /// `BONK_RECOVERY_KEY`.
+        #[arg(long)]
+        recovery_key: Option<String>,
+        /// New passphrase. A flag is for tests and scripts; prefer the prompt or
+        /// `BONK_NEW_PASSPHRASE`.
+        #[arg(long)]
+        new_passphrase: Option<String>,
+    },
     /// Roll back reversible migrations. Refuses to cross an irreversible one.
     #[command(name = "migrate-down")]
     MigrateDown {
@@ -358,6 +370,48 @@ fn run(cli: Cli) -> Result<(), CliError> {
 
             println!("passphrase changed: {}", key_store.path().display());
             println!("backups made before this change still need the old passphrase");
+            Ok(())
+        }
+        Some(Command::PassphraseReset {
+            recovery_key,
+            new_passphrase,
+        }) => {
+            let recovery_key = resolve_recovery_key(recovery_key)?;
+            let new_passphrase = resolve_new_passphrase(new_passphrase)?;
+
+            let mut key_store =
+                KeyStore::open_with_recovery(&keystore, &recovery_key).map_err(|error| match error {
+                    StoreError::WrongPassphrase => {
+                        CliError::Input("that recovery key does not open this archive".to_owned())
+                    }
+                    other => CliError::from(other),
+                })?;
+            let archive = store::Database::open(&database, &key_store)?;
+
+            key_store.change_passphrase(&new_passphrase)?;
+            // The key that was just typed may now sit in a shell history or a
+            // screenshot. Rotating it leaves exactly one working route plus a
+            // fresh key the user can put somewhere safe.
+            let new_key = key_store.enable_recovery(&new_passphrase)?;
+
+            if let Err(error) = store::audit::record_passphrase_reset(
+                archive.connection(),
+                &store::now_rfc3339(),
+                "cli",
+                &key_store.path().display().to_string(),
+                true,
+            ) {
+                return Err(CliError::Input(format!(
+                    "the passphrase was reset, but recording it in the audit chain failed: {error}"
+                )));
+            }
+
+            println!("passphrase reset: {}", key_store.path().display());
+            println!();
+            println!("new recovery key: {new_key}");
+            println!();
+            println!("The recovery key used for this reset no longer works. Write the new one");
+            println!("down and keep it apart from the database and the passphrase.");
             Ok(())
         }
         Some(Command::RecoveryAdd) => {
@@ -1049,6 +1103,19 @@ fn resolve_passphrase(explicit: Option<String>) -> Result<String, CliError> {
         return Ok(value);
     }
     rpassword::prompt_password("Passphrase: ").map_err(|error| CliError::Input(error.to_string()))
+}
+
+/// The recovery key for `passphrase-reset`.
+fn resolve_recovery_key(explicit: Option<String>) -> Result<String, CliError> {
+    if let Some(value) = explicit.filter(|value| !value.trim().is_empty()) {
+        return Ok(value);
+    }
+    if let Ok(value) = std::env::var("BONK_RECOVERY_KEY")
+        && !value.trim().is_empty()
+    {
+        return Ok(value);
+    }
+    rpassword::prompt_password("Recovery key: ").map_err(|error| CliError::Input(error.to_string()))
 }
 
 /// The new passphrase for `passphrase-change`, asked for twice when interactive.

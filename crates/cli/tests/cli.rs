@@ -227,6 +227,157 @@ fn a_recovery_key_is_printed_once_and_the_passphrase_still_works() {
 }
 
 #[test]
+fn a_lost_passphrase_can_be_reset_with_the_recovery_key() {
+    let dir = TempDir::new().expect("temp dir");
+    let (database, keystore) = run_init(&dir);
+    let old_passphrase = "correct horse battery staple";
+    let new_passphrase = "a fresh passphrase";
+
+    let output = bonk()
+        .args([
+            "recovery-add",
+            "--db",
+            &database,
+            "--keystore",
+            &keystore,
+            "--passphrase",
+            old_passphrase,
+        ])
+        .output()
+        .expect("binary runs");
+    assert!(output.status.success());
+    let key = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .find_map(|line| line.strip_prefix("recovery key: "))
+        .expect("the key is printed")
+        .trim()
+        .to_owned();
+
+    // Forget the passphrase and come back with the key instead.
+    let output = bonk()
+        .args([
+            "passphrase-reset",
+            "--db",
+            &database,
+            "--keystore",
+            &keystore,
+            "--recovery-key",
+            &key,
+            "--new-passphrase",
+            new_passphrase,
+        ])
+        .output()
+        .expect("binary runs");
+    assert!(
+        output.status.success(),
+        "reset failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let said = String::from_utf8_lossy(&output.stdout);
+    let rotated = said
+        .lines()
+        .find_map(|line| line.strip_prefix("new recovery key: "))
+        .expect("the rotated key is printed")
+        .trim()
+        .to_owned();
+    assert_ne!(rotated, key, "the used key is rotated away");
+    assert!(said.contains("no longer works"), "{said}");
+
+    // The new passphrase opens the archive; the old one does not.
+    let output = bonk()
+        .args([
+            "verify",
+            "--db",
+            &database,
+            "--keystore",
+            &keystore,
+            "--passphrase",
+            new_passphrase,
+        ])
+        .output()
+        .expect("binary runs");
+    assert!(output.status.success());
+    let verified = String::from_utf8_lossy(&output.stdout);
+    assert!(verified.contains("audit:    2 events verified"), "{verified}");
+
+    let output = bonk()
+        .args([
+            "verify",
+            "--db",
+            &database,
+            "--keystore",
+            &keystore,
+            "--passphrase",
+            old_passphrase,
+        ])
+        .output()
+        .expect("binary runs");
+    assert!(!output.status.success(), "the forgotten passphrase stays forgotten");
+
+    // The key that was used for the reset no longer opens the archive...
+    let output = bonk()
+        .args([
+            "passphrase-reset",
+            "--db",
+            &database,
+            "--keystore",
+            &keystore,
+            "--recovery-key",
+            &key,
+            "--new-passphrase",
+            "third passphrase",
+        ])
+        .output()
+        .expect("binary runs");
+    assert!(!output.status.success(), "a used recovery key is rotated away");
+
+    // ...and the rotated one does.
+    let output = bonk()
+        .args([
+            "passphrase-reset",
+            "--db",
+            &database,
+            "--keystore",
+            &keystore,
+            "--recovery-key",
+            &rotated,
+            "--new-passphrase",
+            "third passphrase",
+        ])
+        .output()
+        .expect("binary runs");
+    assert!(
+        output.status.success(),
+        "the rotated key must open the archive: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn reset_without_a_recovery_key_says_so() {
+    let dir = TempDir::new().expect("temp dir");
+    let (database, keystore) = run_init(&dir);
+
+    let output = bonk()
+        .args([
+            "passphrase-reset",
+            "--db",
+            &database,
+            "--keystore",
+            &keystore,
+            "--recovery-key",
+            &"0".repeat(32),
+            "--new-passphrase",
+            "a fresh passphrase",
+        ])
+        .output()
+        .expect("binary runs");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("no recovery key"), "{stderr}");
+}
+
+#[test]
 fn init_then_verify() {
     let dir = TempDir::new().expect("temp dir");
     let (database, keystore) = run_init(&dir);

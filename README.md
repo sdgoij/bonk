@@ -199,6 +199,12 @@ is required first — otherwise anyone holding a copy of the keystore could add 
 route of their own. The key is shown once and never stored; running the command
 again replaces it and the old key stops working.
 
+`passphrase-reset` is the other half: it opens the archive with the recovery key
+instead of the passphrase, installs a new passphrase, and **rotates the recovery
+key**, printing the new one. Rotation is deliberate — the key that was just typed
+may now be in a shell history or a screenshot, and leaving it valid would quietly
+keep a second route open. The used key stops working.
+
 `credit-note` copies an issued invoice into a credit-note draft: same customer,
 currency, and lines, with BG-3 naming the invoice it corrects. Credit notes use
 their own number series (`2026-C0001`) so they never consume an invoice number.

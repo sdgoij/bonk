@@ -632,7 +632,10 @@ random DEK (32 B) ─────────── AES-256-GCM wrap ───�
   only its sealed wrap remains, which a passphrase change carries over without
   ever holding the secret. Adding one requires the passphrase, because a copied
   keystore must not be able to gain a route of its own; replacing one invalidates
-  the previous key. The chain records `recovery_key_added`.
+  the previous key. The chain records `recovery_key_added`. Opening with the
+  recovery key lets a lost passphrase be replaced, and the key used to do that is
+  rotated in the same step: it has now been typed into a shell or a prompt, so it
+  must not stay valid.
 - Optional: wrap the DEK a second time with an OS-keychain secret so that
   "remember me" does not weaken the file-level key. If the keychain is
   unavailable, fall back to passphrase-only with a visible warning.
