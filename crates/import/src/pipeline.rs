@@ -74,7 +74,8 @@ pub fn import_bytes(
     now: &str,
 ) -> Result<ImportOutcome, ImportError> {
     let text = std::str::from_utf8(bytes).map_err(|error| ImportError::NotUtf8(error.to_string()))?;
-    let invoice = syntax::read_invoice(text)?;
+    let read = syntax::read_document(text)?;
+    let invoice = read.invoice;
     let payload_hash = store::audit::sha256_hex(bytes);
     let display = path.unwrap_or("(memory)").to_owned();
     let supplier = match_supplier(database, &invoice.seller)?;
@@ -138,7 +139,10 @@ pub fn import_bytes(
     };
 
     let source = ImportSource {
-        kind: "ubl",
+        kind: match read.syntax {
+            syntax::Syntax::Ubl21 => "ubl",
+            syntax::Syntax::CiiD16B => "cii",
+        },
         path,
         payload_hash: &payload_hash,
         payload: bytes,
@@ -300,6 +304,87 @@ mod tests {
         write_invoice(&invoice).unwrap().into_bytes()
     }
 
+    /// The same document in UN/CEFACT CII, as Factur-X and some access points
+    /// send it.
+    fn cii(seller: &str, vat: Option<&str>, number: &str) -> Vec<u8> {
+        let registration = match vat {
+            Some(vat) => format!(
+                "<ram:SpecifiedTaxRegistration><ram:ID schemeID=\"VA\">{vat}</ram:ID></ram:SpecifiedTaxRegistration>"
+            ),
+            None => String::new(),
+        };
+        format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<rsm:CrossIndustryInvoice
+  xmlns:rsm="urn:un:unece:uncefact:data:standard:CrossIndustryInvoice:100"
+  xmlns:ram="urn:un:unece:uncefact:data:standard:ReusableAggregateBusinessInformationEntity:100"
+  xmlns:udt="urn:un:unece:uncefact:data:standard:UnqualifiedDataType:100">
+  <rsm:ExchangedDocument>
+    <ram:ID>{number}</ram:ID>
+    <ram:TypeCode>380</ram:TypeCode>
+    <ram:IssueDateTime><udt:DateTimeString format="102">20261027</udt:DateTimeString></ram:IssueDateTime>
+  </rsm:ExchangedDocument>
+  <rsm:SupplyChainTradeTransaction>
+    <ram:IncludedSupplyChainTradeLineItem>
+      <ram:AssociatedDocumentLineDocument><ram:LineID>1</ram:LineID></ram:AssociatedDocumentLineDocument>
+      <ram:SpecifiedTradeProduct><ram:Name>Consulting</ram:Name></ram:SpecifiedTradeProduct>
+      <ram:SpecifiedLineTradeAgreement>
+        <ram:NetPriceProductTradePrice>
+          <ram:ChargeAmount>100.00</ram:ChargeAmount>
+          <ram:BasisQuantity unitCode="C62">1</ram:BasisQuantity>
+        </ram:NetPriceProductTradePrice>
+      </ram:SpecifiedLineTradeAgreement>
+      <ram:SpecifiedLineTradeDelivery><ram:BilledQuantity unitCode="C62">1</ram:BilledQuantity></ram:SpecifiedLineTradeDelivery>
+      <ram:SpecifiedLineTradeSettlement>
+        <ram:ApplicableTradeTax>
+          <ram:TypeCode>VAT</ram:TypeCode>
+          <ram:CategoryCode>S</ram:CategoryCode>
+          <ram:RateApplicablePercent>21</ram:RateApplicablePercent>
+        </ram:ApplicableTradeTax>
+        <ram:LineTotalAmount>100.00</ram:LineTotalAmount>
+      </ram:SpecifiedLineTradeSettlement>
+    </ram:IncludedSupplyChainTradeLineItem>
+    <ram:ApplicableHeaderTradeAgreement>
+      <ram:BuyerReference>PO-1</ram:BuyerReference>
+      <ram:SellerTradeParty>
+        <ram:Name>{seller}</ram:Name>
+        {registration}
+        <ram:PostalTradeAddress>
+          <ram:CityName>Amsterdam</ram:CityName>
+          <ram:CountryID>NL</ram:CountryID>
+        </ram:PostalTradeAddress>
+      </ram:SellerTradeParty>
+      <ram:BuyerTradeParty>
+        <ram:Name>Us BV</ram:Name>
+        <ram:PostalTradeAddress>
+          <ram:CityName>Amsterdam</ram:CityName>
+          <ram:CountryID>NL</ram:CountryID>
+        </ram:PostalTradeAddress>
+      </ram:BuyerTradeParty>
+    </ram:ApplicableHeaderTradeAgreement>
+    <ram:ApplicableHeaderTradeSettlement>
+      <ram:InvoiceCurrencyCode>EUR</ram:InvoiceCurrencyCode>
+      <ram:ApplicableTradeTax>
+        <ram:CalculatedAmount>21.00</ram:CalculatedAmount>
+        <ram:TypeCode>VAT</ram:TypeCode>
+        <ram:BasisAmount>100.00</ram:BasisAmount>
+        <ram:CategoryCode>S</ram:CategoryCode>
+        <ram:RateApplicablePercent>21</ram:RateApplicablePercent>
+      </ram:ApplicableTradeTax>
+      <ram:SpecifiedTradeSettlementHeaderMonetarySummation>
+        <ram:LineTotalAmount>100.00</ram:LineTotalAmount>
+        <ram:TaxBasisTotalAmount>100.00</ram:TaxBasisTotalAmount>
+        <ram:TaxTotalAmount currencyID="EUR">21.00</ram:TaxTotalAmount>
+        <ram:GrandTotalAmount>121.00</ram:GrandTotalAmount>
+        <ram:DuePayableAmount>121.00</ram:DuePayableAmount>
+      </ram:SpecifiedTradeSettlementHeaderMonetarySummation>
+    </ram:ApplicableHeaderTradeSettlement>
+  </rsm:SupplyChainTradeTransaction>
+</rsm:CrossIndustryInvoice>"#
+        )
+        .into_bytes()
+    }
+
     fn database() -> (tempfile::TempDir, Database, SellerId) {
         let dir = tempfile::TempDir::new().unwrap();
         let keystore = KeyStore::create(dir.path().join("keystore.bin"), "pass", KdfParams::TEST).unwrap();
@@ -397,6 +482,42 @@ mod tests {
 
         // The audit chain still verifies with an imported document in it.
         assert_eq!(store::audit::verify_chain(database.connection()).unwrap(), 1);
+    }
+
+    #[test]
+    fn imports_a_cii_document_as_the_same_kind_of_record() {
+        let (_dir, database, seller_id) = database();
+        let supplier = customer("Acme BV", Some("NL111111110B01"), None);
+        store::insert_customer(database.connection(), &supplier, "2026-10-27T00:00:00Z").unwrap();
+
+        let outcome = import_bytes(
+            &database,
+            seller_id,
+            Some("in/2.xml"),
+            &cii("Acme BV", Some("NL111111110B01"), "SUP-2001"),
+            "2026-10-27T00:00:00Z",
+        )
+        .expect("import");
+
+        assert_eq!(outcome.number, "SUP-2001");
+        assert_eq!(outcome.supplier, Some(supplier.id));
+
+        let (direction, kind): (String, String) = database
+            .connection()
+            .query_row(
+                "SELECT d.direction, i.source_kind FROM document d
+                 JOIN import_record i ON i.document_id = d.id WHERE d.id = ?1",
+                [outcome.document_id.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(direction, "inbound");
+        assert_eq!(kind, "cii", "the archive records which syntax arrived");
+
+        let listed = store::list_received(database.connection(), seller_id).unwrap();
+        assert_eq!(listed[0].number, "SUP-2001");
+        assert_eq!(listed[0].supplier, "Acme BV");
+        assert!(listed[0].matched);
     }
 
     #[test]
@@ -564,11 +685,6 @@ mod tests {
         )
         .unwrap();
 
-        assert!(
-            store::list_received(database.connection(), seller_id)
-                .unwrap()
-                .is_empty()
-        );
         assert!(
             store::list_received(database.connection(), seller_id)
                 .unwrap()

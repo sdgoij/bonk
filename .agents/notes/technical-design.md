@@ -1070,6 +1070,14 @@ element (`Invoice` in UBL ns vs `CrossIndustryInvoice`) → reject with a precis
 reason. Factur-X extraction reads the embedded file from the PDF name tree; do
 not parse the visual layer.
 
+The two XML readers share one bounded tree (`syntax::dom`) and one output shape
+(`ImportedInvoice`), so the pipeline never learns which syntax arrived; UBL and
+CII differ only in element names, because the business terms and their BT/BG
+numbers are the same in EN 16931. CII dates are `CCYYMMDD` under `format="102"`
+and are rejected, not guessed, otherwise. `read_document` picks the reader from
+the root element and reports the syntax, which is recorded as the import's
+`source_kind`.
+
 Deduplication key: `(supplier_key, external_number)` plus a payload hash
 fallback for suppliers that reuse numbers. Duplicates are flagged, never
 silently dropped.

@@ -1,26 +1,29 @@
-//! UBL 2.1 reader: a received invoice becomes the terms we model.
+//! Reading received invoices: a document becomes the terms we model.
 //!
-//! The reader is deliberately narrow. It extracts what the domain and the
-//! payable register need, keeps the document's own amounts as sent, and refuses
-//! anything it cannot represent rather than guessing. It never decides business
-//! rules; `conformance` does that on the resulting view.
+//! The readers are deliberately narrow. They extract what the domain and the
+//! payable register need, keep the document's own amounts as sent, and refuse
+//! anything they cannot represent rather than guessing. They never decide
+//! business rules; `conformance` does that on the resulting view.
 //!
-//! Safety: documents come from third parties. DTDs are rejected outright (so no
-//! entity expansion), nesting depth and size are bounded, and a document is only
-//! accepted when its root element is in the UBL Invoice or CreditNote namespace.
+//! This module reads UBL 2.1; `cii` reads UN/CEFACT CII. The safety rules apply
+//! to both, because documents come from third parties: DTDs are rejected
+//! outright (so no entity expansion), nesting depth and size are bounded, and a
+//! document is only accepted when its root element is in a namespace we know.
 
 use crux::{
     Address, CountryCode, Currency, DocType, InvoiceTotals, LocalDate, Money, Party, Quantity, TaxBreakdown,
     TaxTreatment, UnitCode, VatCategory, VatRate,
 };
-use quick_xml::Reader;
-use quick_xml::events::Event;
 
-/// Largest document the reader accepts.
+use crate::Syntax;
+use crate::cii;
+use crate::dom::{Node, money, namespace, parse, text};
+
+/// Largest document a reader accepts.
 pub const MAX_DOCUMENT_BYTES: usize = 10 * 1024 * 1024;
 
-/// Deepest element nesting the reader accepts.
-pub const MAX_DEPTH: usize = 64;
+/// Deepest element nesting a reader accepts.
+pub const MAX_DEPTH: usize = crate::dom::MAX_DEPTH;
 
 const INVOICE_NAMESPACE: &str = "urn:oasis:names:specification:ubl:schema:xsd:Invoice-2";
 const CREDIT_NOTE_NAMESPACE: &str = "urn:oasis:names:specification:ubl:schema:xsd:CreditNote-2";
@@ -92,6 +95,15 @@ pub struct ImportedInvoice {
     pub totals: InvoiceTotals,
 }
 
+/// A received document and the syntax it arrived in.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct ImportedDocument {
+    /// Syntax the reader recognised.
+    pub syntax: Syntax,
+    /// The document's terms.
+    pub invoice: ImportedInvoice,
+}
+
 /// Why a document was not accepted.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum ImportError {
@@ -108,6 +120,8 @@ pub enum ImportError {
     TooDeep,
     /// The root element is not UBL 2.1 Invoice or CreditNote.
     NotUbl(String),
+    /// The root element is not a CII CrossIndustryInvoice.
+    NotCii(String),
     /// A required element is absent or empty.
     Missing(&'static str),
     /// A required element has a value we cannot represent.
@@ -130,6 +144,7 @@ impl std::fmt::Display for ImportError {
                 f,
                 "{root:?} is not a UBL 2.1 Invoice or CreditNote (unexpected root or namespace)"
             ),
+            Self::NotCii(root) => write!(f, "{root:?} is not a CII CrossIndustryInvoice (unexpected namespace)"),
             Self::Missing(field) => write!(f, "{field} is required but missing or empty"),
             Self::Invalid { field, value } => write!(f, "{field} has an unsupported value {value:?}"),
         }
@@ -138,16 +153,38 @@ impl std::fmt::Display for ImportError {
 
 impl std::error::Error for ImportError {}
 
+/// Reads a received invoice or credit note, whichever syntax it uses.
+///
+/// The root element decides: `CrossIndustryInvoice` goes to the CII reader,
+/// everything else to the UBL reader, which reports why it was refused.
+pub fn read_document(xml: &str) -> Result<ImportedDocument, ImportError> {
+    let root = parse_bounded(xml)?;
+    if root.name == "CrossIndustryInvoice" {
+        return Ok(ImportedDocument {
+            syntax: Syntax::CiiD16B,
+            invoice: cii::from_root(&root)?,
+        });
+    }
+    Ok(ImportedDocument {
+        syntax: Syntax::Ubl21,
+        invoice: from_root(&root)?,
+    })
+}
+
 /// Reads a UBL 2.1 invoice or credit note.
 pub fn read_invoice(xml: &str) -> Result<ImportedInvoice, ImportError> {
-    if xml.len() > MAX_DOCUMENT_BYTES {
-        return Err(ImportError::TooLarge { bytes: xml.len() });
-    }
-    let root = parse(xml)?;
+    let root = parse_bounded(xml)?;
     from_root(&root)
 }
 
-fn from_root(root: &Node) -> Result<ImportedInvoice, ImportError> {
+fn parse_bounded(xml: &str) -> Result<Node, ImportError> {
+    if xml.len() > MAX_DOCUMENT_BYTES {
+        return Err(ImportError::TooLarge { bytes: xml.len() });
+    }
+    parse(xml)
+}
+
+pub(crate) fn from_root(root: &Node) -> Result<ImportedInvoice, ImportError> {
     let doc_type = match (root.name.as_str(), namespace(root).as_deref()) {
         ("Invoice", Some(INVOICE_NAMESPACE)) | ("CreditNote", Some(CREDIT_NOTE_NAMESPACE)) => {
             if root.name == "Invoice" {
@@ -408,12 +445,6 @@ fn required(node: &Node, name: &str) -> Result<String, ImportError> {
     text(node, name).ok_or(ImportError::Missing("cbc:DocumentCurrencyCode"))
 }
 
-fn text(node: &Node, name: &str) -> Option<String> {
-    node.first(name)
-        .map(|child| child.text.trim().to_owned())
-        .filter(|value| !value.is_empty())
-}
-
 fn date(node: &Node, name: &str) -> Result<Option<LocalDate>, ImportError> {
     text(node, name)
         .map(|value| {
@@ -425,159 +456,8 @@ fn date(node: &Node, name: &str) -> Result<Option<LocalDate>, ImportError> {
         .transpose()
 }
 
-fn money(node: Option<&Node>, currency: Currency, field: &'static str) -> Result<Option<Money>, ImportError> {
-    let Some(node) = node else {
-        return Ok(None);
-    };
-    let value = node.text.trim();
-    Money::parse_fixed(value, currency)
-        .map(Some)
-        .map_err(|error| ImportError::Invalid {
-            field,
-            value: format!("{value} ({error})"),
-        })
-}
-
 fn invalid(field: &'static str, detail: String) -> ImportError {
     ImportError::Invalid { field, value: detail }
-}
-
-// ---------------------------------------------------------------- minimal DOM
-
-struct Node {
-    name: String,
-    raw_name: String,
-    attributes: Vec<(String, String)>,
-    children: Vec<Node>,
-    text: String,
-}
-
-impl Node {
-    fn first(&self, name: &str) -> Option<&Node> {
-        self.children.iter().find(|child| child.name == name)
-    }
-
-    fn children<'a>(&'a self, name: &'a str) -> impl Iterator<Item = &'a Node> + 'a {
-        self.children.iter().filter(move |child| child.name == name)
-    }
-
-    fn attribute(&self, name: &str) -> Option<String> {
-        self.attributes
-            .iter()
-            .find(|(key, _)| key == name)
-            .map(|(_, value)| value.clone())
-    }
-}
-
-fn namespace(root: &Node) -> Option<String> {
-    match root.raw_name.split_once(':') {
-        Some((prefix, _)) => root.attribute(&format!("xmlns:{prefix}")),
-        None => root.attribute("xmlns"),
-    }
-}
-
-/// Parses well-formed XML into a bounded tree of local names.
-fn parse(xml: &str) -> Result<Node, ImportError> {
-    let mut reader = Reader::from_str(xml);
-    reader.config_mut().trim_text(true);
-
-    let mut stack: Vec<Node> = Vec::new();
-    let mut root: Option<Node> = None;
-
-    loop {
-        let event = reader
-            .read_event()
-            .map_err(|error| ImportError::NotXml(error.to_string()))?;
-        match event {
-            Event::Start(element) => {
-                if stack.len() >= MAX_DEPTH {
-                    return Err(ImportError::TooDeep);
-                }
-                let raw_name = element.name().as_ref().to_owned();
-                stack.push(Node {
-                    name: local(element.name().as_ref()),
-                    raw_name,
-                    attributes: attributes(&element),
-                    children: Vec::new(),
-                    text: String::new(),
-                });
-            }
-            Event::Empty(element) => {
-                let raw_name = element.name().as_ref().to_owned();
-                let node = Node {
-                    name: local(element.name().as_ref()),
-                    raw_name,
-                    attributes: attributes(&element),
-                    children: Vec::new(),
-                    text: String::new(),
-                };
-                attach(&mut stack, &mut root, node)?;
-            }
-            Event::End(_) => {
-                let node = stack
-                    .pop()
-                    .ok_or_else(|| ImportError::NotXml("unbalanced element".to_owned()))?;
-                attach(&mut stack, &mut root, node)?;
-            }
-            Event::Text(text) => {
-                if let Some(current) = stack.last_mut() {
-                    let value = text.into_inner().into_owned();
-                    push_text(&mut current.text, &value);
-                }
-            }
-            Event::CData(data) => {
-                if let Some(current) = stack.last_mut() {
-                    let value: &str = data.as_ref();
-                    push_text(&mut current.text, value);
-                }
-            }
-            Event::DocType(_) => return Err(ImportError::Doctype),
-            Event::Eof => break,
-            _ => {}
-        }
-    }
-
-    if !stack.is_empty() {
-        return Err(ImportError::NotXml("unclosed elements".to_owned()));
-    }
-    root.ok_or_else(|| ImportError::NotXml("empty document".to_owned()))
-}
-
-fn attach(stack: &mut [Node], root: &mut Option<Node>, node: Node) -> Result<(), ImportError> {
-    match stack.last_mut() {
-        Some(parent) => {
-            parent.children.push(node);
-            Ok(())
-        }
-        None if root.is_none() => {
-            *root = Some(node);
-            Ok(())
-        }
-        None => Err(ImportError::NotXml("more than one root element".to_owned())),
-    }
-}
-
-fn push_text(target: &mut String, value: &str) {
-    if !target.is_empty() {
-        target.push(' ');
-    }
-    target.push_str(value);
-}
-
-fn local(name: &str) -> String {
-    name.rsplit(':').next().unwrap_or(name).to_owned()
-}
-
-fn attributes(element: &quick_xml::events::BytesStart<'_>) -> Vec<(String, String)> {
-    element
-        .attributes()
-        .flatten()
-        .map(|attribute| {
-            // Attribute names keep their prefix: namespace declarations are
-            // looked up as `xmlns` / `xmlns:prefix`.
-            (attribute.key.as_ref().to_owned(), attribute.value.into_owned())
-        })
-        .collect()
 }
 
 #[cfg(test)]

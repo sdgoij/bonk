@@ -341,7 +341,7 @@ buyer and order reference from the document they correct, so the copied draft
 still passes R003.
 
 Remaining in M2: nothing blocking. Explicit deliver-to address fields beyond the
-buyer country remain for a later slice. Workspace tests: 228 encrypted, 226 plain.
+buyer country remain for a later slice. Workspace tests: 239 encrypted, 237 plain.
 
 Exit criteria:
 
@@ -394,6 +394,15 @@ supplier leaves `counterparty_id` null and `match_status = 'unmatched'`; no part
 is invented. The same bytes, or the same supplier number, are reported as a
 duplicate and write nothing. The parser's guarantees (no DTD, bounded size and
 depth, UBL root) apply before anything is stored.
+
+M3.1 is complete: CII D16B documents import through the same path. The two
+readers share one bounded tree (`syntax::dom`) and produce the same
+`ImportedInvoice`, so matching, dedupe, and the register are unaware of the
+syntax; `read_document` selects the reader from the root element and the chosen
+syntax is recorded as `source_kind` (`ubl` or `cii`). Dates, type codes, parties,
+lines, and totals map from the same BT/BG numbers; `format="102"` is the only
+CII date format accepted, and 380/384 read as an invoice while 381 reads as a
+credit note.
 
 M3.5 is in as well. `bonk received` lists inbound documents with supplier, dates,
 amount, and status; `bonk approve` and `bonk mark-paid` move a document forward.
