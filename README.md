@@ -308,6 +308,14 @@ press Enter (Ctrl+F jumps to the field), optionally narrowed by side and status.
 Leaving the query blank lists everything the filters allow. Results are read-only
 for now — opening an archived document in the editor is not built yet.
 
+An **Archive health** panel sits at the bottom, collapsed. It shows the schema,
+the encryption state, the archive size, the audit chain head (hover for the full
+hash), and the newest backup beside the archive. **Check integrity now** runs
+SQLite's integrity check and re-hashes every stored payload, counting unreferenced
+blobs as wasted space rather than corruption. It waits to be asked because the
+audit is a full pass over the archive, and a screen that freezes on open is one
+people learn to avoid.
+
 ## Layout
 
 | Crate | Role | Milestone |

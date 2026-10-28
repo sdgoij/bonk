@@ -341,7 +341,7 @@ buyer and order reference from the document they correct, so the copied draft
 still passes R003.
 
 Remaining in M2: nothing blocking. Explicit deliver-to address fields beyond the
-buyer country remain for a later slice. Workspace tests: 311 encrypted, 309 plain.
+buyer country remain for a later slice. Workspace tests: 315 encrypted, 313 plain.
 
 Exit criteria:
 
@@ -593,9 +593,17 @@ open in M6.6: a log redaction layer, since the product has no logs yet; when the
 arrive they must go through a redacting writer rather than being filtered after
 the fact.
 
+M6.7 is in. `app::health` snapshots the cheap facts when the workspace opens —
+schema, encryption, archive size, chain head, newest backup beside the archive —
+and runs the expensive audit only when the Archive health panel asks: SQLite's
+owner integrity check first, then every blob re-hashed, then orphaned payloads
+counted. Damage shows as an error rather than a tick; orphans show as a warning
+because they are wasted space, not corruption. Unit tests cover a damaged payload,
+the newest-backup rule, and a short chain head; the headless draw test now draws
+the panel contents even though the header is collapsed.
+
 Remaining in M6: the passphrase strength meter and the GUI key prompts (M6.1),
-idle lock and zeroisation tests (M6.2), the integrity screen (M6.7), and the
-threat-model write-up.
+idle lock and zeroisation tests (M6.2), and the threat-model write-up.
 
 Exit criteria:
 

@@ -15,6 +15,7 @@ use store::{
 };
 
 use crate::Session;
+use crate::health::Health;
 
 const ERROR_COLOR: egui::Color32 = egui::Color32::from_rgb(200, 60, 60);
 const OK_COLOR: egui::Color32 = egui::Color32::from_rgb(70, 150, 90);
@@ -55,6 +56,7 @@ pub struct Workspace {
     focus_request: Option<String>,
     message: Option<Message>,
     search: SearchView,
+    health: Option<Health>,
 }
 
 /// The find panel's state, kept apart from the drawing code so it can be tested.
@@ -279,6 +281,7 @@ impl Workspace {
             focus_request: None,
             message: None,
             search: SearchView::default(),
+            health: Health::snapshot(session.database(), session.database_path()).ok(),
         })
     }
 
@@ -327,6 +330,9 @@ impl Workspace {
         } else {
             self.unlocked_ui(ui, session, focus.as_deref());
         }
+
+        ui.add_space(8.0);
+        self.health_ui(ui, session);
 
         self.suppression_dialog(ui, session);
 
@@ -389,6 +395,100 @@ impl Workspace {
             };
             if let Err(error) = self.search.run(session.database(), owner) {
                 self.message = Some(Message::error(error.to_string()));
+            }
+        }
+    }
+
+    /// Draws the health panel: cheap facts always, the payload audit on request.
+    fn health_ui(&mut self, ui: &mut egui::Ui, session: &Session) {
+        let mut check = false;
+        egui::CollapsingHeader::new("Archive health")
+            .default_open(false)
+            .show(ui, |ui| {
+                check = self.health_details_ui(ui);
+            });
+
+        if check {
+            self.run_health_check(session);
+        }
+    }
+
+    /// The panel's contents. Returns true when the user asked for a check.
+    fn health_details_ui(&mut self, ui: &mut egui::Ui) -> bool {
+        let Some(health) = &self.health else {
+            ui.label("Health could not be read from this archive.");
+            return false;
+        };
+
+        ui.horizontal(|ui| {
+            ui.label(format!("schema {}", health.schema_version));
+            ui.label("·");
+            ui.label(health.encryption);
+            ui.label("·");
+            ui.label(format!("{} KB", health.database_bytes / 1024));
+        });
+
+        match &health.chain {
+            Some(head) => {
+                let short = health.short_head().unwrap_or_default();
+                ui.horizontal(|ui| {
+                    ui.label(format!("audit: {} events, head", head.seq));
+                    ui.label(egui::RichText::new(short).monospace())
+                        .on_hover_text(head.hash.as_str());
+                });
+            }
+            None => {
+                ui.label("audit: empty chain");
+            }
+        }
+
+        match (&health.report, &health.error) {
+            (_, Some(error)) => {
+                ui.colored_label(ERROR_COLOR, format!("integrity: {error}"));
+            }
+            (Some(report), None) if report.orphaned_blobs > 0 => {
+                ui.colored_label(
+                    egui::Color32::from_rgb(190, 140, 40),
+                    format!(
+                        "integrity: {} payloads verified, {} unreferenced (wasted space only)",
+                        report.blobs, report.orphaned_blobs
+                    ),
+                );
+            }
+            (Some(report), None) => {
+                ui.colored_label(OK_COLOR, format!("integrity: {} payloads verified", report.blobs));
+            }
+            (None, None) => {
+                ui.label("integrity: not checked");
+            }
+        }
+        if let Some(checked) = &health.checked_at {
+            ui.weak(format!("checked {checked}"));
+        }
+
+        match &health.last_backup {
+            Some(backup) => {
+                ui.label(format!("last backup: {} ({} KB)", backup.name, backup.bytes / 1024));
+            }
+            None => {
+                ui.label("last backup: none — run bonk backup");
+            }
+        }
+
+        ui.button("Check integrity now").clicked()
+    }
+
+    fn run_health_check(&mut self, session: &Session) {
+        let now = store::now_rfc3339();
+        match &mut self.health {
+            Some(health) => health.check(session.database(), &now),
+            None => {
+                if let Ok(health) = Health::snapshot(session.database(), session.database_path()) {
+                    self.health = Some(health);
+                    if let Some(health) = &mut self.health {
+                        health.check(session.database(), &now);
+                    }
+                }
             }
         }
     }
@@ -1432,6 +1532,9 @@ mod tests {
         // panic, so a headless frame is worth more than it looks.
         let output = context.run_ui(egui::RawInput::default(), |ui| {
             action = workspace.ui(ui, &mut session);
+            // The panel is collapsed by default, so draw its contents directly:
+            // a broken widget inside a closed header is still a broken widget.
+            let _ = workspace.health_details_ui(ui);
         });
         output.drop_without_applying_deltas();
         assert_eq!(action, WorkspaceAction::None);
