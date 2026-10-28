@@ -67,6 +67,105 @@ fn typst_available() -> bool {
 }
 
 #[test]
+fn changing_the_passphrase_keeps_the_archive_openable() {
+    let dir = TempDir::new().expect("temp dir");
+    let (database, keystore) = run_init(&dir);
+    let old = "correct horse battery staple";
+    let new = "a much better passphrase";
+
+    let output = bonk()
+        .args([
+            "passphrase-change",
+            "--db",
+            &database,
+            "--keystore",
+            &keystore,
+            "--passphrase",
+            old,
+            "--new-passphrase",
+            new,
+        ])
+        .output()
+        .expect("binary runs");
+    assert!(
+        output.status.success(),
+        "change failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let said = String::from_utf8_lossy(&output.stdout);
+    assert!(said.contains("passphrase changed"), "{said}");
+
+    // The archive opens with the new passphrase, and the change is on the chain.
+    let output = bonk()
+        .args([
+            "verify",
+            "--db",
+            &database,
+            "--keystore",
+            &keystore,
+            "--passphrase",
+            new,
+        ])
+        .output()
+        .expect("binary runs");
+    assert!(output.status.success());
+    let verified = String::from_utf8_lossy(&output.stdout);
+    assert!(verified.contains("integrity check passed"), "{verified}");
+    assert!(verified.contains("audit:    1 events verified"), "{verified}");
+
+    // The old passphrase does not.
+    let output = bonk()
+        .args([
+            "verify",
+            "--db",
+            &database,
+            "--keystore",
+            &keystore,
+            "--passphrase",
+            old,
+        ])
+        .output()
+        .expect("binary runs");
+    assert!(
+        !output.status.success(),
+        "the old passphrase must no longer open the keystore"
+    );
+
+    // A refused change leaves the keystore alone.
+    let output = bonk()
+        .args([
+            "passphrase-change",
+            "--db",
+            &database,
+            "--keystore",
+            &keystore,
+            "--passphrase",
+            "not the passphrase",
+            "--new-passphrase",
+            "another passphrase",
+        ])
+        .output()
+        .expect("binary runs");
+    assert!(!output.status.success());
+    let output = bonk()
+        .args([
+            "verify",
+            "--db",
+            &database,
+            "--keystore",
+            &keystore,
+            "--passphrase",
+            new,
+        ])
+        .output()
+        .expect("binary runs");
+    assert!(
+        output.status.success(),
+        "a failed change must leave the keystore usable with the current passphrase"
+    );
+}
+
+#[test]
 fn init_then_verify() {
     let dir = TempDir::new().expect("temp dir");
     let (database, keystore) = run_init(&dir);

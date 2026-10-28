@@ -341,7 +341,7 @@ buyer and order reference from the document they correct, so the copied draft
 still passes R003.
 
 Remaining in M2: nothing blocking. Explicit deliver-to address fields beyond the
-buyer country remain for a later slice. Workspace tests: 289 encrypted, 287 plain.
+buyer country remain for a later slice. Workspace tests: 290 encrypted, 288 plain.
 
 Exit criteria:
 
@@ -551,10 +551,17 @@ has its payload, runs `PRAGMA foreign_key_check`, and counts blobs nothing refer
 to. `bonk verify` reports all four; an orphan is wasted space, a mismatch or a
 missing payload is corruption. `blob` now has the same write-once triggers as the
 other evidence tables, since every recorded hash points at those bytes. The GUI
-integrity screen is still open; the engine behind it exists. Remaining in M6: passphrase UX and recovery keys (M6.1), key
-rotation and idle lock (M6.2), evidence bundles
-(M6.5), log redaction and support bundles (M6.6), the integrity screen (M6.7), and
-the threat-model write-up.
+integrity screen is still open; the engine behind it exists.
+
+M6.2's rewrap is in as well. `bonk passphrase-change` opens the keystore and the
+database with the current passphrase, seals the same data key under the new one,
+unseals those bytes in memory and compares the key before the file is replaced,
+then appends a `passphrase_changed` event. A wrong current passphrase or a
+missing database leaves the keystore untouched.
+
+Remaining in M6: passphrase UX and recovery keys (M6.1), idle lock and zeroisation
+tests (M6.2), evidence bundles (M6.5), log redaction and support bundles (M6.6),
+the integrity screen (M6.7), and the threat-model write-up.
 
 Exit criteria:
 

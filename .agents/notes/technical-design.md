@@ -621,7 +621,12 @@ random DEK (32 B) ─────────── AES-256-GCM wrap ───�
 
 - SQLCipher is opened with a **raw key** (`PRAGMA key = "x'<hex>'"`), skipping
   its own KDF so parameters are ours and auditable.
-- Changing the passphrase rewraps the DEK; no database re-encryption.
+- Changing the passphrase rewraps the DEK; no database re-encryption. The new
+  keystore is sealed, unsealed in memory, and compared with the live key before
+  it replaces the file: a rewrap that produced a different key would otherwise
+  be indistinguishable from losing the archive. The change is appended to the
+  audit chain as `passphrase_changed`, naming the keystore file and never key
+  material.
 - Optional: wrap the DEK a second time with an OS-keychain secret so that
   "remember me" does not weaken the file-level key. If the keychain is
   unavailable, fall back to passphrase-only with a visible warning.

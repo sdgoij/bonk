@@ -185,6 +185,13 @@ file, then run `bonk verify`.
 copies of the same archive must agree on that triple; `verify-backup` prints the
 same line for a copy, so the comparison is a diff rather than a guess.
 
+`passphrase-change` rewraps the data key with a new passphrase. The database is
+not touched, the new keystore is only written after the sealed bytes have been
+unsealed in memory and confirmed to hold the same key, and the change is
+recorded in the audit chain. Backups made before the change still need the old
+passphrase. The new passphrase is prompted for twice; `BONK_NEW_PASSPHRASE` or
+`--new-passphrase` exist for scripts and tests.
+
 `credit-note` copies an issued invoice into a credit-note draft: same customer,
 currency, and lines, with BG-3 naming the invoice it corrects. Credit notes use
 their own number series (`2026-C0001`) so they never consume an invoice number.

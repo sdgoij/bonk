@@ -88,6 +88,23 @@ pub fn append(
     Ok(hash)
 }
 
+/// Records that the keystore was rewrapped.
+///
+/// The subject is the keystore file, never key material: the chain shows when
+/// the key changed, not what it is.
+pub fn record_passphrase_change(conn: &Connection, at: &str, actor: &str, keystore: &str) -> Result<(), StoreError> {
+    append(
+        conn,
+        at,
+        actor,
+        "passphrase_changed",
+        "keystore",
+        keystore,
+        serde_json::json!({}),
+    )?;
+    Ok(())
+}
+
 /// Recomputes the whole chain. Returns the number of events verified.
 pub fn verify_chain(conn: &Connection) -> Result<usize, StoreError> {
     let mut statement = conn.prepare(

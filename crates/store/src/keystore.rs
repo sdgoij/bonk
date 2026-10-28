@@ -102,6 +102,14 @@ impl KeyStore {
     pub fn open(path: impl AsRef<Path>, passphrase: &str) -> Result<Self, StoreError> {
         let path = path.as_ref().to_path_buf();
         let bytes = fs::read(&path)?;
+        Self::from_bytes(path, &bytes, passphrase)
+    }
+
+    /// Unseals keystore bytes that are already in memory.
+    ///
+    /// Separate from [`Self::open`] so a rewrapped file can be checked before it
+    /// replaces the one on disk.
+    fn from_bytes(path: PathBuf, bytes: &[u8], passphrase: &str) -> Result<Self, StoreError> {
         if bytes.len() != FILE_LEN || &bytes[..MAGIC.len()] != MAGIC {
             return Err(StoreError::InvalidKeystore);
         }
@@ -111,9 +119,9 @@ impl KeyStore {
 
         let mut cursor = MAGIC.len() + 1;
         let params = KdfParams {
-            m_cost_kib: read_u32(&bytes, &mut cursor),
-            t_cost: read_u32(&bytes, &mut cursor),
-            p_cost: read_u32(&bytes, &mut cursor),
+            m_cost_kib: read_u32(bytes, &mut cursor),
+            t_cost: read_u32(bytes, &mut cursor),
+            p_cost: read_u32(bytes, &mut cursor),
         };
         let mut salt = [0u8; SALT_LEN];
         salt.copy_from_slice(&bytes[cursor..cursor + SALT_LEN]);
@@ -159,10 +167,23 @@ impl KeyStore {
     }
 
     /// Changes the passphrase by rewrapping the same data key.
+    ///
+    /// The new file is sealed and unsealed in memory before anything is written:
+    /// if those bytes did not give the same key back, the old keystore stays in
+    /// place. Writing first would make a bug in [`Self::seal`] indistinguishable
+    /// from losing the archive.
     pub fn change_passphrase(&mut self, new_passphrase: &str) -> Result<(), StoreError> {
         let mut nonce_bytes = [0u8; NONCE_LEN];
         fill_random(&mut nonce_bytes);
         let bytes = self.seal(new_passphrase, &nonce_bytes)?;
+
+        let candidate = Self::from_bytes(self.path.clone(), &bytes, new_passphrase)?;
+        if candidate.dek() != self.dek() {
+            return Err(StoreError::Crypto(
+                "the rewrapped keystore does not hold the same data key".to_owned(),
+            ));
+        }
+
         write_atomic(&self.path, &bytes)
     }
 

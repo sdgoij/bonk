@@ -57,6 +57,14 @@ enum Command {
         /// Backup file to check.
         path: PathBuf,
     },
+    /// Rewrap the keystore with a new passphrase, keeping the database key.
+    #[command(name = "passphrase-change")]
+    PassphraseChange {
+        /// New passphrase. A flag is for tests and scripts; prefer the prompt or
+        /// `BONK_NEW_PASSPHRASE`.
+        #[arg(long)]
+        new_passphrase: Option<String>,
+    },
     /// Roll back reversible migrations. Refuses to cross an irreversible one.
     #[command(name = "migrate-down")]
     MigrateDown {
@@ -318,6 +326,32 @@ fn run(cli: Cli) -> Result<(), CliError> {
                 Some(head) => println!("head:            {} {} ({})", head.seq, head.hash, head.at),
                 None => println!("head:            empty chain"),
             }
+            Ok(())
+        }
+        Some(Command::PassphraseChange { new_passphrase }) => {
+            let passphrase = resolve_passphrase(passphrase)?;
+            let new_passphrase = resolve_new_passphrase(new_passphrase)?;
+
+            // Unlock first: if the database or the current passphrase is wrong,
+            // nothing is rewritten.
+            let mut key_store = KeyStore::open(&keystore, &passphrase)?;
+            let session = Session::unlock(&database, &keystore, &passphrase)?;
+
+            key_store.change_passphrase(&new_passphrase)?;
+
+            if let Err(error) = store::audit::record_passphrase_change(
+                session.database().connection(),
+                &store::now_rfc3339(),
+                "cli",
+                &key_store.path().display().to_string(),
+            ) {
+                return Err(CliError::Input(format!(
+                    "the passphrase was changed, but recording it in the audit chain failed: {error}"
+                )));
+            }
+
+            println!("passphrase changed: {}", key_store.path().display());
+            println!("backups made before this change still need the old passphrase");
             Ok(())
         }
         Some(Command::Init) => {
@@ -985,6 +1019,30 @@ fn resolve_passphrase(explicit: Option<String>) -> Result<String, CliError> {
         return Ok(value);
     }
     rpassword::prompt_password("Passphrase: ").map_err(|error| CliError::Input(error.to_string()))
+}
+
+/// The new passphrase for `passphrase-change`, asked for twice when interactive.
+fn resolve_new_passphrase(explicit: Option<String>) -> Result<String, CliError> {
+    let value = match explicit.filter(|value| !value.is_empty()) {
+        Some(value) => value,
+        None => match std::env::var("BONK_NEW_PASSPHRASE") {
+            Ok(value) if !value.is_empty() => value,
+            _ => {
+                let first = rpassword::prompt_password("New passphrase: ")
+                    .map_err(|error| CliError::Input(error.to_string()))?;
+                let again = rpassword::prompt_password("Repeat the new passphrase: ")
+                    .map_err(|error| CliError::Input(error.to_string()))?;
+                if first != again {
+                    return Err(CliError::Input("the passphrases do not match".to_owned()));
+                }
+                first
+            }
+        },
+    };
+    if value.trim().is_empty() {
+        return Err(CliError::Input("an empty passphrase is not accepted".to_owned()));
+    }
+    Ok(value)
 }
 
 #[cfg(test)]
