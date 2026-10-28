@@ -664,6 +664,8 @@ impl Workspace {
         let mut change = false;
         let mut add_key = false;
         let mut done = false;
+        let mut remember = false;
+        let mut forget = false;
 
         ui.label(text::security::note(language));
         egui::Grid::new("security-form").num_columns(2).show(ui, |ui| {
@@ -697,6 +699,16 @@ impl Workspace {
                 done = true;
             }
         }
+
+        ui.add_space(6.0);
+        ui.horizontal(|ui| {
+            if ui.button(text::security::remember_action(language)).clicked() {
+                remember = true;
+            }
+            if ui.button(text::security::forget_action(language)).clicked() {
+                forget = true;
+            }
+        });
 
         if change {
             let verdict = check_password_change(
@@ -734,6 +746,32 @@ impl Workspace {
 
         if done {
             self.forget_recovery_key();
+        }
+
+        if remember {
+            if self.security.current.trim().is_empty() {
+                self.message = Some(Message::error(text::security::enter_current(language)));
+            } else {
+                match session.remember_device(&self.security.current, &store::device::Keychain) {
+                    Ok(()) => {
+                        self.security.forget_secrets();
+                        self.message = Some(Message::ok(text::security::device_remembered(language)));
+                    }
+                    Err(error) => self.message = Some(Message::error(error.to_string())),
+                }
+            }
+        }
+
+        if forget {
+            match session.forget_device(&store::device::Keychain) {
+                Ok(true) => {
+                    self.message = Some(Message::ok(text::security::device_forgotten(language)));
+                }
+                Ok(false) => {
+                    self.message = Some(Message::ok(text::security::device_no_key(language)));
+                }
+                Err(error) => self.message = Some(Message::error(error.to_string())),
+            }
         }
     }
 

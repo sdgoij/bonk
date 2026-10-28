@@ -61,6 +61,11 @@ pub mod shell {
         "Forgotten the passphrase?"
     }
 
+    /// Opens the archive with the key this device kept.
+    pub fn unlock_with_device(_: Language) -> &'static str {
+        "Unlock with this device"
+    }
+
     /// Explains what creating an archive does.
     pub fn create_note(_: Language) -> &'static str {
         "A new archive is created empty and sealed with this passphrase. Nothing else can open it, so type it twice."
@@ -911,6 +916,31 @@ pub mod security {
     /// The passphrase field is empty when a key is requested.
     pub fn enter_current(_: Language) -> &'static str {
         "Enter the current passphrase first."
+    }
+
+    /// Keeps the key in this device's credential store.
+    pub fn remember_action(_: Language) -> &'static str {
+        "Remember this device"
+    }
+
+    /// Stops this device from keeping the key.
+    pub fn forget_action(_: Language) -> &'static str {
+        "Forget this device"
+    }
+
+    /// The device now holds the key.
+    pub fn device_remembered(_: Language) -> &'static str {
+        "This device now opens the archive without the passphrase; your login protects it while it does."
+    }
+
+    /// The device no longer holds it.
+    pub fn device_forgotten(_: Language) -> &'static str {
+        "This device has forgotten the key; the passphrase is needed again."
+    }
+
+    /// There was nothing to forget.
+    pub fn device_no_key(_: Language) -> &'static str {
+        "This device held no key for the archive."
     }
 }
 

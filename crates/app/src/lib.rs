@@ -482,6 +482,8 @@ pub struct BonkApp {
     /// Interface language. English today, and set here rather than in each
     /// screen so a second table has one place to be chosen.
     language: text::Language,
+    /// True when this device holds the key for the configured archive.
+    device_ready: bool,
 }
 
 impl Default for BonkApp {
@@ -498,6 +500,7 @@ impl Default for BonkApp {
             },
             idle: idle::IdleLock::new(idle::configured_timeout(), std::time::Instant::now()),
             language: text::Language::default(),
+            device_ready: Self::device_ready_for(&keystore.display().to_string()),
         }
     }
 }
@@ -507,6 +510,7 @@ impl Default for BonkApp {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Action {
     Unlock,
+    UnlockDevice,
     BeginCreate,
     Create,
     CancelCreate,
@@ -538,6 +542,20 @@ impl BonkApp {
         let keystore_path = PathBuf::from(self.keystore_path.trim());
 
         let opened = Session::unlock(&database_path, &keystore_path, &passphrase);
+        self.finish(opened);
+    }
+
+    /// True when this device holds a key for the archive at `keystore_path`.
+    fn device_ready_for(keystore_path: &str) -> bool {
+        Session::device_ready(keystore_path.trim(), &store::device::Keychain)
+    }
+
+    /// Opens the archive with the key this device kept, without asking for
+    /// anything.
+    fn unlock_with_device(&mut self) {
+        let database_path = PathBuf::from(self.database_path.trim());
+        let keystore_path = PathBuf::from(self.keystore_path.trim());
+        let opened = Session::unlock_with_device(&database_path, &keystore_path, &store::device::Keychain);
         self.finish(opened);
     }
 
@@ -710,6 +728,7 @@ impl BonkApp {
     fn apply(&mut self, action: Action) {
         match action {
             Action::Unlock => self.unlock(),
+            Action::UnlockDevice => self.unlock_with_device(),
             Action::BeginCreate => {
                 let UiState::Locked { form, error } = &mut self.state else {
                     return;
@@ -800,6 +819,9 @@ impl BonkApp {
                     },
                     error: None,
                 };
+                // The device entry can have been added or removed while the
+                // workspace was open.
+                self.device_ready = Self::device_ready_for(&self.keystore_path);
             }
         }
     }
@@ -876,6 +898,7 @@ impl eframe::App for BonkApp {
         egui::CentralPanel::default().show(ui, |ui| {
             let mut action = None;
             let language = self.language;
+            let device_ready = self.device_ready;
             match &mut self.state {
                 UiState::Locked { form, error } => {
                     ui.heading(text::shell::PRODUCT);
@@ -930,6 +953,9 @@ impl eframe::App for BonkApp {
                             });
                             if ui.button(text::shell::forgotten_action(language)).clicked() {
                                 action = Some(Action::BeginReset);
+                            }
+                            if device_ready && ui.button(text::shell::unlock_with_device(language)).clicked() {
+                                action = Some(Action::UnlockDevice);
                             }
                         }
                         LockForm::Reset {

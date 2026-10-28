@@ -157,6 +157,11 @@ land `0600`, and opening an archive tightens what was left open. On Windows a
 file under `%APPDATA%` inherits an ACL that grants the user, the system, and
 administrators — which is the intended boundary — but nothing here narrows it
 further, and an archive placed in a shared folder keeps that folder's ACL.
+- **R9 — "Remember this device" moves the boundary to the login.** When it is on,
+the data key is in the operating system's credential store, so anyone at an
+unlocked session can read the archive; the passphrase stops being required on
+this machine. It still protects a copy of the keystore taken elsewhere. Turning
+it off deletes the entry and appends `device_forgotten` to the chain.
 
 ## 6. Out of scope for v1.0
 
@@ -196,17 +201,18 @@ further, and an archive placed in a shared folder keeps that folder's ACL.
 | A passphrase change in the window keeps it openable | `changing_the_passphrase_from_the_app_keeps_the_archive_openable` |
 | A reset with the recovery key works from the window | `a_forgotten_passphrase_is_reset_from_the_lock_screen` |
 | A wrong recovery key changes nothing | `a_wrong_recovery_key_leaves_the_archive_alone` |
+| A remembered device opens the archive without the passphrase | `a_remembered_device_opens_the_archive_without_the_passphrase` |
+| Forgetting the device removes the route | `forgetting_the_device_removes_the_route` |
 | Parsers survive hostile bytes | `arbitrary_bytes_never_panic`, `a_mutated_container_never_panics`, `a_stream_that_inflates_past_the_limit_is_refused` |
 
 ## 8. Open items
 
-- **O3** Optional OS-keychain wrap of the same DEK, for “remember me”.
 - **O4** libFuzzer targets once the runner has nightly and `cargo-fuzz`; the
   property tests are the gate until then.
 
 Changes to a decision recorded here need an ADR, like any other.
 
 O2 (zeroisation of passphrase strings) was closed in M6.2, O1 (a recovery route
-in the window) in M6.1, O5 (file permissions) in M6.2, and O6 (a durable record of
-a head) in M6.3. The numbering of the remaining items is left as it was, so
-references in other notes still resolve.
+in the window) in M6.1, O5 (file permissions) in M6.2, O6 (a durable record of a
+head) in M6.3, and O3 ("remember this device") in M6.1. The numbering of the
+remaining items is left as it was, so references in other notes still resolve.

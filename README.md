@@ -213,6 +213,16 @@ recorded in the audit chain. Backups made before the change still need the old
 passphrase. The new passphrase is prompted for twice; `BONK_NEW_PASSPHRASE` or
 `--new-passphrase` exist for scripts and tests.
 
+`remember` keeps the archive key in the operating system's credential store —
+Windows Credential Manager, the macOS Keychain, or the Secret Service — so
+`--device` opens the archive without a passphrase. It asks for the passphrase
+first, records `device_trusted` in the chain, and says what it costs: while it is
+on, the archive is protected by your login, not the passphrase. `forget` deletes
+the entry, records `device_forgotten`, and needs only `--device` — revoking the
+convenience must not require the credential it replaced. A copy of the keystore
+taken to another machine still needs the passphrase. Decision:
+[ADR-021](.agents/notes/adr/021-remember-this-device.md).
+
 `recovery-add` seals the same data key under a second, one-time secret and prints
 it: 32 base32 symbols in eight groups, from an alphabet without `I`, `L`, `O`, or
 `U`, so a transcribed key is a typo rather than a different key. The passphrase
@@ -371,6 +381,12 @@ credential change should not ride on a session that has been open for hours, and
 the workspace never holds the data key. A new recovery key is shown once, in
 monospace, with a warning to keep it apart from the database; the panel forgets it
 when you press Done, and the fields are wiped when the workspace is locked.
+
+The same panel can **remember this device**: the archive key goes into the
+operating system's credential store, and the unlock screen then offers **Unlock
+with this device**. It takes the current passphrase, records the decision in the
+audit chain, and **Forget this device** undoes it. While it is on, the archive is
+protected by your login rather than the passphrase — the panel says so.
 
 **Forgotten the passphrase?** on the unlock screen takes a recovery key and a new
 passphrase instead. The reset replaces the recovery key and shows the replacement

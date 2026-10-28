@@ -33,6 +33,11 @@ struct Cli {
     #[arg(long, global = true)]
     passphrase: Option<String>,
 
+    /// Open the archive with the key this device remembered, instead of a
+    /// passphrase. Commands that change credentials still ask for the passphrase.
+    #[arg(long, global = true)]
+    device: bool,
+
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -41,6 +46,17 @@ struct Cli {
 enum Command {
     /// Create an encrypted database and its keystore.
     Init,
+    /// Remember this device: keep the archive key in the OS credential store.
+    ///
+    /// Afterwards `--device` opens the archive without a passphrase. While it is
+    /// on, the archive is protected by your operating system login rather than by
+    /// the passphrase; `forget` undoes it.
+    Remember,
+    /// Forget this device, so the passphrase is needed again.
+    ///
+    /// Works with `--device` too, which is the case that matters: revoking the
+    /// convenience should not need the passphrase it replaced.
+    Forget,
     /// Check integrity, the audit chain, and every stored artefact.
     Verify {
         /// Check the chain against checkpoints recorded outside the archive.
@@ -330,8 +346,9 @@ enum Command {
         out: PathBuf,
         #[arg(long, default_value = "cli")]
         actor: String,
-        #[arg(long, default_value = "cli")]
-        device: String,
+        /// Name of the device that recorded the issue, for the audit chain.
+        #[arg(long = "device-name", default_value = "cli")]
+        device_name: String,
         /// Language of the printed document: `en` or `nl`. Defaults to the
         /// seller's locale.
         #[arg(long, value_parser = ["en", "nl"])]
@@ -371,11 +388,60 @@ fn main() -> ExitCode {
 fn run(cli: Cli) -> Result<(), CliError> {
     warn_if_unencrypted();
     let (database, keystore) = paths(&cli);
-    let passphrase = cli.passphrase.clone();
+    let access = Access {
+        passphrase: cli.passphrase.clone(),
+        device: cli.device,
+    };
     match cli.command {
         None | Some(Command::Gui) => app::run().map_err(|error| CliError::Gui(error.to_string())),
+        Some(Command::Remember) => {
+            if !store::device::available() {
+                return Err(CliError::Input(
+                    "this system has no credential store, so the key cannot be remembered here".to_owned(),
+                ));
+            }
+            let passphrase = resolve_passphrase(access.passphrase.clone())?;
+            let key_store = KeyStore::open(&keystore, &passphrase)?;
+            let archive = store::Database::open(&database, &key_store)?;
+            store::device::remember(&store::device::Keychain, &keystore, key_store.dek())?;
+            if let Err(error) = store::audit::record_device_trust(
+                archive.connection(),
+                &store::now_rfc3339(),
+                "cli",
+                &keystore.display().to_string(),
+            ) {
+                return Err(CliError::Input(format!(
+                    "the key was stored for this device, but recording it in the audit chain failed: {error}"
+                )));
+            }
+            println!("remembered: {}", keystore.display());
+            println!("this device now opens the archive with --device, without a passphrase");
+            println!("while it does, the archive is protected by your login, not the passphrase");
+            Ok(())
+        }
+        Some(Command::Forget) => {
+            let session = access.session(&database, &keystore)?;
+            let forgotten = store::device::forget(&store::device::Keychain, &keystore)?;
+            if forgotten {
+                if let Err(error) = store::audit::record_device_forget(
+                    session.database().connection(),
+                    &store::now_rfc3339(),
+                    "cli",
+                    &keystore.display().to_string(),
+                ) {
+                    return Err(CliError::Input(format!(
+                        "the key was forgotten, but recording it in the audit chain failed: {error}"
+                    )));
+                }
+                println!("forgotten:  {}", keystore.display());
+                println!("the passphrase is needed again on this device");
+            } else {
+                println!("nothing to forget: this device held no key for that archive");
+            }
+            Ok(())
+        }
         Some(Command::Evidence { document, out }) => {
-            let session = open(&database, &keystore, passphrase.clone())?;
+            let session = access.session(&database, &keystore)?;
             let owner = owner_of(session.database(), None)?;
             let id = resolve_document(session.database().connection(), owner, &document)?
                 .ok_or_else(|| CliError::Input(format!("no document matching {document:?}")))?;
@@ -412,7 +478,7 @@ fn run(cli: Cli) -> Result<(), CliError> {
             Ok(())
         }
         Some(Command::SupportBundle { out }) => {
-            let session = open(&database, &keystore, passphrase.clone())?;
+            let session = access.session(&database, &keystore)?;
             let directory = out.unwrap_or_else(|| store::support::default_directory(&database));
 
             let summary = store::support::write(
@@ -432,7 +498,7 @@ fn run(cli: Cli) -> Result<(), CliError> {
             Ok(())
         }
         Some(Command::Backup { to, keep }) => {
-            let passphrase = resolve_passphrase(passphrase)?;
+            let passphrase = resolve_passphrase(access.passphrase.clone())?;
             let key_store = KeyStore::open(&keystore, &passphrase)?;
             let session = Session::unlock(&database, &keystore, &passphrase)?;
             let directory = to.unwrap_or_else(|| {
@@ -451,7 +517,7 @@ fn run(cli: Cli) -> Result<(), CliError> {
             Ok(())
         }
         Some(Command::VerifyBackup { path }) => {
-            let passphrase = resolve_passphrase(passphrase)?;
+            let passphrase = resolve_passphrase(access.passphrase.clone())?;
             let key_store = KeyStore::open(&keystore, &passphrase)?;
             let summary = store::backup::inspect(&path, key_store.dek())?;
             println!("backup verified: {}", path.display());
@@ -464,7 +530,7 @@ fn run(cli: Cli) -> Result<(), CliError> {
             Ok(())
         }
         Some(Command::PassphraseChange { new_passphrase }) => {
-            let passphrase = resolve_passphrase(passphrase)?;
+            let passphrase = resolve_passphrase(access.passphrase.clone())?;
             let new_passphrase = resolve_new_passphrase(new_passphrase)?;
             warn_if_weak(&new_passphrase);
 
@@ -534,7 +600,7 @@ fn run(cli: Cli) -> Result<(), CliError> {
             Ok(())
         }
         Some(Command::RecoveryAdd) => {
-            let passphrase = resolve_passphrase(passphrase)?;
+            let passphrase = resolve_passphrase(access.passphrase.clone())?;
             let mut key_store = KeyStore::open(&keystore, &passphrase)?;
             let session = Session::unlock(&database, &keystore, &passphrase)?;
 
@@ -558,7 +624,7 @@ fn run(cli: Cli) -> Result<(), CliError> {
             Ok(())
         }
         Some(Command::Init) => {
-            let passphrase = resolve_creation_passphrase(passphrase.clone())?;
+            let passphrase = resolve_creation_passphrase(access.passphrase.clone())?;
             warn_if_weak(&passphrase);
             let session = Session::create(&database, &keystore, &passphrase)?;
             let summary = session.summary()?;
@@ -569,7 +635,7 @@ fn run(cli: Cli) -> Result<(), CliError> {
             Ok(())
         }
         Some(Command::Verify { anchor }) => {
-            let session = open(&database, &keystore, passphrase.clone())?;
+            let session = access.session(&database, &keystore)?;
             session.integrity_check()?;
             let summary = session.summary()?;
             let audit_events = store::audit::verify_chain(session.database().connection())?;
@@ -607,7 +673,7 @@ fn run(cli: Cli) -> Result<(), CliError> {
             Ok(())
         }
         Some(Command::Anchor { file }) => {
-            let session = open(&database, &keystore, passphrase.clone())?;
+            let session = access.session(&database, &keystore)?;
             let now = store::now_rfc3339();
             let report = store::anchor::record(&file, session.database().connection(), &now)?;
 
@@ -630,7 +696,7 @@ fn run(cli: Cli) -> Result<(), CliError> {
                     "refusing to roll back migrations without --yes".to_owned(),
                 ));
             }
-            let mut session = open(&database, &keystore, passphrase.clone())?;
+            let mut session = access.session(&database, &keystore)?;
             let rolled_back = store::migrations::rollback_to(session.database_mut().connection_mut(), to)?;
             println!("rolled back: {rolled_back} migration(s)");
             println!("schema:   {}", session.summary()?.schema_version);
@@ -650,7 +716,7 @@ fn run(cli: Cli) -> Result<(), CliError> {
             currency,
             locale,
         }) => {
-            let session = open(&database, &keystore, passphrase.clone())?;
+            let session = access.session(&database, &keystore)?;
             let party = party(name, city, country, street, postal, vat, kvk, peppol, email, contact)?;
             let id = SellerId::new();
             insert_seller(
@@ -678,7 +744,7 @@ fn run(cli: Cli) -> Result<(), CliError> {
             email,
             contact,
         }) => {
-            let session = open(&database, &keystore, passphrase.clone())?;
+            let session = access.session(&database, &keystore)?;
             let id = CustomerId::new();
             insert_customer(
                 session.database().connection(),
@@ -702,7 +768,7 @@ fn run(cli: Cli) -> Result<(), CliError> {
             buyer_ref,
             order_ref,
         }) => {
-            let session = open(&database, &keystore, passphrase.clone())?;
+            let session = access.session(&database, &keystore)?;
             let seller_id = SellerId::parse_str(&seller)?;
             let customer_id = CustomerId::parse_str(&customer)?;
             let seller_record = load_seller(session.database().connection(), seller_id)?;
@@ -745,7 +811,7 @@ fn run(cli: Cli) -> Result<(), CliError> {
             note,
             dry_run,
         }) => {
-            let session = open(&database, &keystore, passphrase.clone())?;
+            let session = access.session(&database, &keystore)?;
             let connection = session.database().connection();
             let seller_id = match seller {
                 Some(value) => SellerId::parse_str(&value)?,
@@ -792,7 +858,7 @@ fn run(cli: Cli) -> Result<(), CliError> {
             quiet_for,
             once,
         }) => {
-            let session = open(&database, &keystore, passphrase.clone())?;
+            let session = access.session(&database, &keystore)?;
             let owner = first_seller(session.database().connection())?
                 .ok_or_else(|| CliError::Input("no seller in this database".to_owned()))?
                 .id;
@@ -824,7 +890,7 @@ fn run(cli: Cli) -> Result<(), CliError> {
             }
         }
         Some(Command::Import { files, seller }) => {
-            let session = open(&database, &keystore, passphrase.clone())?;
+            let session = access.session(&database, &keystore)?;
             let connection = session.database().connection();
             let owner = match seller {
                 Some(value) => SellerId::parse_str(&value)?,
@@ -868,7 +934,7 @@ fn run(cli: Cli) -> Result<(), CliError> {
             Ok(())
         }
         Some(Command::Received { status }) => {
-            let session = open(&database, &keystore, passphrase.clone())?;
+            let session = access.session(&database, &keystore)?;
             let connection = session.database().connection();
             let owner = owner_of(session.database(), None)?;
             let filter = match status {
@@ -913,7 +979,7 @@ fn run(cli: Cli) -> Result<(), CliError> {
             to,
             status,
         }) => {
-            let session = open(&database, &keystore, passphrase.clone())?;
+            let session = access.session(&database, &keystore)?;
             let connection = session.database().connection();
             let owner = owner_of(session.database(), None)?;
             let filters = filters(direction, from, to, status)?;
@@ -954,7 +1020,7 @@ fn run(cli: Cli) -> Result<(), CliError> {
             status,
             out,
         }) => {
-            let session = open(&database, &keystore, passphrase.clone())?;
+            let session = access.session(&database, &keystore)?;
             let connection = session.database().connection();
             let owner = owner_of(session.database(), None)?;
             let filters = filters(direction, from, to, status)?;
@@ -985,7 +1051,7 @@ fn run(cli: Cli) -> Result<(), CliError> {
             Ok(())
         }
         Some(Command::Match { document, customer }) => {
-            let session = open(&database, &keystore, passphrase.clone())?;
+            let session = access.session(&database, &keystore)?;
             let connection = session.database().connection();
             let owner = owner_of(session.database(), None)?;
             let id = resolve_received(connection, owner, &document)?
@@ -997,19 +1063,19 @@ fn run(cli: Cli) -> Result<(), CliError> {
             Ok(())
         }
         Some(Command::Approve { document }) => {
-            settle_received(&database, &keystore, passphrase, &document, DocumentStatus::Approved)
+            settle_received(&access, &database, &keystore, &document, DocumentStatus::Approved)
         }
         Some(Command::MarkPaid { document }) => {
-            settle_received(&database, &keystore, passphrase, &document, DocumentStatus::Paid)
+            settle_received(&access, &database, &keystore, &document, DocumentStatus::Paid)
         }
         Some(Command::Issue {
             draft,
             out,
             actor,
-            device,
+            device_name,
             language,
         }) => {
-            let mut session = open(&database, &keystore, passphrase.clone())?;
+            let mut session = access.session(&database, &keystore)?;
             let draft_id = DocumentId::parse_str(&draft)?;
 
             let loaded = load_draft(session.database().connection(), draft_id)?
@@ -1034,7 +1100,7 @@ fn run(cli: Cli) -> Result<(), CliError> {
                 IssueRequest {
                     draft_id,
                     actor: &actor,
-                    device: &device,
+                    device: &device_name,
                     renderer_version: "syntax-0.1",
                     now: &store::now_rfc3339(),
                 },
@@ -1091,9 +1157,31 @@ fn run(cli: Cli) -> Result<(), CliError> {
     }
 }
 
-fn open(database: &Path, keystore: &Path, passphrase: Option<String>) -> Result<Session, CliError> {
-    let passphrase = resolve_passphrase(passphrase)?;
-    Ok(Session::unlock(database, keystore, &passphrase)?)
+/// How a command wants to open the archive.
+struct Access {
+    /// Given on the command line, in the environment, or prompted for later.
+    passphrase: Option<String>,
+    /// Use the key this device remembered instead.
+    device: bool,
+}
+
+impl Access {
+    /// Opens the archive.
+    ///
+    /// The passphrase is resolved here rather than in `run`, so a command that
+    /// keeps its own prompt (`init`, `remember`, the credential changes) does not
+    /// ask for one it will not use.
+    fn session(&self, database: &Path, keystore: &Path) -> Result<Session, CliError> {
+        if self.device {
+            return Ok(Session::unlock_with_device(
+                database,
+                keystore,
+                &store::device::Keychain,
+            )?);
+        }
+        let passphrase = resolve_passphrase(self.passphrase.clone())?;
+        Ok(Session::unlock(database, keystore, &passphrase)?)
+    }
 }
 
 fn paths(cli: &Cli) -> (PathBuf, PathBuf) {
@@ -1287,13 +1375,13 @@ fn filters(
 
 /// Moves a received document forward in the payable register.
 fn settle_received(
+    access: &Access,
     database: &Path,
     keystore: &Path,
-    passphrase: Option<String>,
     document: &str,
     target: DocumentStatus,
 ) -> Result<(), CliError> {
-    let session = open(database, keystore, passphrase)?;
+    let session = access.session(database, keystore)?;
     let connection = session.database().connection();
     let owner = owner_of(session.database(), None)?;
     let id = resolve_received(connection, owner, document)?
@@ -1413,6 +1501,7 @@ mod tests {
             db: Some(PathBuf::from("/tmp/work/bonk.db")),
             keystore: None,
             passphrase: None,
+            device: false,
             command: None,
         };
         let (database, keystore) = paths(&cli);

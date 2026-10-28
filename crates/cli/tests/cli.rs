@@ -1074,6 +1074,26 @@ fn anchoring_an_archive_with_no_history_says_so() {
 }
 
 #[test]
+fn opening_with_device_when_nothing_is_remembered_says_so() {
+    let dir = TempDir::new().expect("temp dir");
+    let (database, keystore) = run_init(&dir);
+
+    let output = bonk()
+        .args(["verify", "--device", "--db", &database, "--keystore", &keystore])
+        .output()
+        .expect("binary runs");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    // Either this device has no key, or this system has no credential store at
+    // all; both are honest answers and neither may panic.
+    assert!(
+        stderr.contains("no key for that archive") || stderr.contains("credential store"),
+        "{stderr}"
+    );
+}
+
+#[test]
 fn a_watched_folder_imports_a_dropped_invoice_once() {
     let dir = TempDir::new().expect("temp dir");
     let database = dir.path().join("bonk.db");

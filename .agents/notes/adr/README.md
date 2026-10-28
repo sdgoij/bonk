@@ -21,6 +21,7 @@ captures the decision, its context, and what it costs.
 | [018](018-generated-codelists.md) | Code lists generated from the official Schematron, not hand-maintained |
 | [019](019-pdf-extraction.md) | Factur-X extraction with `lopdf`; the visual layer is never read |
 | [020](020-folder-watching.md) | Drop folders are polled with a quiet period, not watched with notifications |
+| [021](021-remember-this-device.md) | "Remember this device" keeps the data key in the OS credential store |
 
 Adding or changing a decision means adding an ADR; editing history is not how
 this directory works.

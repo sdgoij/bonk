@@ -59,6 +59,13 @@ rpassword = "7"
 quick-xml = "0.42"
 lopdf = "0.46"
 
+[profile.test]
+# MSVC's linker refuses a program database larger than 4 GB (LNK1140), and the
+# desktop test binary — eframe, wgpu, the SQLCipher binding — is large enough to
+# cross it. Line tables are kept, so a panic still names its file and line;
+# variable inspection in a debugger is what is traded away, and only for tests.
+debug = 1
+
 [workspace.lints.rust]
 unsafe_code = "forbid"
 # Vendored static libraries (OpenSSL) reference PDBs that are not shipped;

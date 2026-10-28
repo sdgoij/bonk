@@ -341,7 +341,7 @@ buyer and order reference from the document they correct, so the copied draft
 still passes R003.
 
 Remaining in M2: nothing blocking. Explicit deliver-to address fields beyond the
-buyer country remain for a later slice. Workspace tests: 393 encrypted, 391 plain.
+buyer country remain for a later slice. Workspace tests: 400 encrypted, 398 plain.
 
 Exit criteria:
 
@@ -607,6 +607,16 @@ the store test builds a second archive, swaps its (valid) chain in, confirms
 `verify_chain` still accepts it, and then confirms the anchor refuses. Without a
 checkpoint there is no such check, which is what the threat model says.
 
+M6.1's "remember this device" is in. `store::device` keeps the data key in the
+platform credential store through `keyring`, so `--device` and the unlock screen
+open the archive without a passphrase; enabling it takes the passphrase again and
+appends `device_trusted`, disabling appends `device_forgotten` and needs no
+passphrase when it is done with `--device`. The store is a port because no CI
+runner has a credential store, so the tests drive the same code through an
+in-memory one. ADR-021 records why the key goes in as itself rather than as a third
+keystore wrap, and threat model R9 states the cost: while it is on, the login is
+the boundary.
+
 M6.7's data half is in. `store::integrity::audit` re-hashes every blob, cross-
 checks each artefact's hash against its blob, confirms every import record still
 has its payload, runs `PRAGMA foreign_key_check`, and counts blobs nothing refers
@@ -729,8 +739,7 @@ indistinguishable from the original without an outside record of a head; an
 unlocked archive is readable by anything running as the user; and a recovery key
 stored beside the archive turns two credentials into one.
 
-Remaining in M6: nothing. The threat model lists O3 and O4 as open: an optional
-keychain wrap, and fuzz targets.
+Remaining in M6: nothing. The threat model lists O4 as open: fuzz targets.
 
 Exit criteria:
 
