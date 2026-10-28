@@ -341,7 +341,7 @@ buyer and order reference from the document they correct, so the copied draft
 still passes R003.
 
 Remaining in M2: nothing blocking. Explicit deliver-to address fields beyond the
-buyer country remain for a later slice. Workspace tests: 349 encrypted, 347 plain.
+buyer country remain for a later slice. Workspace tests: 357 encrypted, 355 plain.
 
 Exit criteria:
 
@@ -517,8 +517,16 @@ customer table — a rename after issue must not rewrite what the invoice says.
 the panel against a real database, and a headless egui frame proves the workspace
 draws without panicking, including with a result open.
 
-Remaining in M5: saved filters, the i18n pass, document-language selection, and
-`bonk support-bundle`.
+Saved views are in. `saved_search` sits in migration 0002 with `(owner_id, name)`
+unique, so saving under an existing name edits those filters instead of growing a
+second row with the same label; `store::saved` has `save`, `list`, and `delete`,
+and it is the one table in the archive without immutability triggers, because a
+saved view is convenience rather than evidence. It stores only what the panel can
+express — words, a side, a status — because a column nothing writes is a column
+that lies. The panel's **Saved** list applies a view and runs it, so a stored view
+shows results rather than only fields, and **Delete** removes the applied one.
+
+Remaining in M5: the i18n pass and document-language selection.
 
 ---
 

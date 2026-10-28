@@ -1008,6 +1008,12 @@ rather than joining `customer`, so a rename after issue cannot change what the
 archived document says, and totals come back from the stored decimal strings and
 integer micro-units, never through a float.
 
+Saved views are `saved_search` rows keyed by `(owner_id, name)`: the name is what
+the user sees and what replacing an existing view matches on, while the row keeps
+the id it was created with. They carry only the filters the panel can express, so
+applying one restores exactly what was saved; a date range joins the table when
+the panel can ask for one.
+
 ### 7.5 Migrations
 
 - Embedded SQL migrations, forward-only, each with a SHA-256 recorded in

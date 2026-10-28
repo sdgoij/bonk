@@ -34,7 +34,7 @@ pub use calc::{AMOUNT_SCALE, Totals, line_net, sum, sum_in, tax_amount};
 pub use date::LocalDate;
 pub use error::DomainError;
 pub use findings::{Finding, Severity, has_blocking};
-pub use ids::{CustomerId, DeviceId, DocumentId, JournalEntryId, LineId, SellerId};
+pub use ids::{CustomerId, DeviceId, DocumentId, JournalEntryId, LineId, SavedSearchId, SellerId};
 pub use invoice::{
     DocType, DraftLine, InvoiceDraft, InvoiceEvent, InvoiceState, PrecedingInvoice, TransitionError, transition,
 };

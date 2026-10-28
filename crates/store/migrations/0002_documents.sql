@@ -209,6 +209,22 @@ CREATE VIRTUAL TABLE invoice_fts USING fts5(
     tokenize = "unicode61 remove_diacritics 2"
 );
 
+-- A named set of find-panel filters. Convenience, not evidence: unlike every
+-- other table here, this one is meant to be edited and deleted, so it has no
+-- immutability triggers. It stores only what the panel can express today; a
+-- column nothing writes is a column that lies.
+CREATE TABLE saved_search (
+    id         TEXT PRIMARY KEY,
+    owner_id   TEXT NOT NULL REFERENCES seller(id),
+    name       TEXT NOT NULL,
+    query      TEXT NOT NULL,
+    direction  TEXT CHECK (direction IN ('outbound', 'inbound')),
+    status     TEXT CHECK (status IN ('issued', 'received', 'approved', 'paid', 'archived')),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE (owner_id, name)
+);
+
 -- `document` is write-once, so inserts are the only document-side change that
 -- can reach the index. The party name prefers the party on file and falls back
 -- to the snapshot taken when the document was recorded, so an unmatched inbound

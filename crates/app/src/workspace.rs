@@ -5,13 +5,14 @@
 
 use crux::{
     Address, CountryCode, Currency, CustomerId, DocType, DocumentId, DraftLine, Finding, InvoiceDraft, LineId,
-    LocalDate, Money, Party, PrecedingInvoice, Quantity, SellerId, Severity, TaxTreatment, UnitCode, VatCategory,
-    VatRate, calculate_totals, has_blocking, validate_draft,
+    LocalDate, Money, Party, PrecedingInvoice, Quantity, SavedSearchId, SellerId, Severity, TaxTreatment, UnitCode,
+    VatCategory, VatRate, calculate_totals, has_blocking, validate_draft,
 };
 use store::{
-    CustomerRecord, Direction, DocumentRecord, DocumentStatus, IssueRequest, SearchHit, SearchRequest, SellerRecord,
-    StoreError, Suppression, archive::DocumentView, attach_artefact, credit_note_for, first_seller, insert_customer,
-    insert_seller, issue_draft, list_customers, list_suppressions, save_draft, save_suppression, search,
+    CustomerRecord, Direction, DocumentRecord, DocumentStatus, IssueRequest, SavedSearch, SearchHit, SearchRequest,
+    SellerRecord, StoreError, Suppression, archive::DocumentView, attach_artefact, credit_note_for, first_seller,
+    insert_customer, insert_seller, issue_draft, list_customers, list_suppressions, save_draft, save_suppression,
+    search,
 };
 use zeroize::Zeroize;
 
@@ -76,6 +77,14 @@ struct SearchView {
     opened: Option<DocumentView>,
     /// Why the last attempt to open a result failed, if it did.
     open_error: Option<String>,
+    /// The saved filters for this seller.
+    saved: Vec<SavedSearch>,
+    /// The name typed for "save current".
+    save_name: String,
+    /// Name of the saved filter last applied, so Delete has a target.
+    applied: Option<String>,
+    /// Why the last save, apply, or delete failed.
+    saved_error: Option<String>,
 }
 
 impl SearchView {
@@ -109,6 +118,69 @@ impl SearchView {
                 self.opened = None;
                 self.open_error = Some(error.to_string());
             }
+        }
+    }
+
+    /// Reloads the saved filters for this seller.
+    fn reload_saved(&mut self, database: &store::Database, owner: SellerId) {
+        match store::saved::list(database.connection(), owner) {
+            Ok(saved) => {
+                self.saved = saved;
+                self.saved_error = None;
+            }
+            Err(error) => self.saved_error = Some(error.to_string()),
+        }
+    }
+
+    /// Stores what the panel currently asks for under the typed name.
+    fn save_current(&mut self, database: &store::Database, owner: SellerId) {
+        let search = SavedSearch {
+            id: SavedSearchId::new(),
+            name: self.save_name.trim().to_owned(),
+            query: self.query.trim().to_owned(),
+            direction: self.direction,
+            status: self.status,
+        };
+        match store::saved::save(database.connection(), owner, &search, &store::now_rfc3339()) {
+            Ok(()) => {
+                self.save_name.clear();
+                self.applied = Some(search.name);
+                self.reload_saved(database, owner);
+            }
+            Err(error) => self.saved_error = Some(error.to_string()),
+        }
+    }
+
+    /// Fills the panel from a saved search and runs it, so a stored view shows
+    /// its results rather than only its filters.
+    fn apply_saved(&mut self, name: &str, database: &store::Database, owner: SellerId) {
+        let Some(found) = self.saved.iter().find(|search| search.name == name).cloned() else {
+            return;
+        };
+        self.query = found.query;
+        self.direction = found.direction;
+        self.status = found.status;
+        self.applied = Some(found.name);
+        match self.run(database, owner) {
+            Ok(()) => self.saved_error = None,
+            Err(error) => self.saved_error = Some(error.to_string()),
+        }
+    }
+
+    /// Deletes a saved search by name.
+    fn delete_saved(&mut self, name: &str, database: &store::Database, owner: SellerId) {
+        match store::saved::delete(database.connection(), owner, name) {
+            Ok(true) => {
+                if self.applied.as_deref() == Some(name) {
+                    self.applied = None;
+                }
+                self.reload_saved(database, owner);
+            }
+            Ok(false) => {
+                self.applied = None;
+                self.reload_saved(database, owner);
+            }
+            Err(error) => self.saved_error = Some(error.to_string()),
         }
     }
 }
@@ -322,7 +394,7 @@ impl Workspace {
     /// Loads the seller and customer list for a freshly unlocked session.
     pub fn new(session: &Session) -> Result<Self, StoreError> {
         let connection = session.database().connection();
-        Ok(Self {
+        let mut workspace = Self {
             seller: first_seller(connection)?,
             customers: list_customers(connection)?,
             seller_form: SellerForm::default(),
@@ -341,7 +413,11 @@ impl Workspace {
             search: SearchView::default(),
             security: SecurityForm::default(),
             health: Health::snapshot(session.database(), session.database_path()).ok(),
-        })
+        };
+        if let Some(seller) = workspace.seller.as_ref().map(|seller| seller.id) {
+            workspace.search.reload_saved(session.database(), seller);
+        }
+        Ok(workspace)
     }
 
     /// Draws the workspace.
@@ -412,6 +488,9 @@ impl Workspace {
         let mut run = false;
         let mut clear = false;
         let mut opened = None;
+        let mut apply_saved = None;
+        let mut save_current = false;
+        let mut delete_saved = false;
         ui.group(|ui| {
             ui.horizontal(|ui| {
                 ui.strong("Find documents");
@@ -431,6 +510,37 @@ impl Workspace {
                     clear = true;
                 }
             });
+
+            ui.horizontal(|ui| {
+                ui.label("Saved");
+                let selected = self.search.applied.clone().unwrap_or_else(|| "none".to_owned());
+                egui::ComboBox::from_id_salt("search.saved")
+                    .selected_text(selected)
+                    .show_ui(ui, |ui| {
+                        for search in &self.search.saved {
+                            let chosen = self.search.applied.as_deref() == Some(search.name.as_str());
+                            if ui.selectable_label(chosen, search.name.as_str()).clicked() {
+                                apply_saved = Some(search.name.clone());
+                            }
+                        }
+                    });
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.search.save_name)
+                        .hint_text("name")
+                        .desired_width(140.0),
+                );
+                if ui.button("Save current").clicked() {
+                    save_current = true;
+                }
+                let deletable = self.search.applied.is_some();
+                if ui.add_enabled(deletable, egui::Button::new("Delete")).clicked() {
+                    delete_saved = true;
+                }
+            });
+
+            if let Some(message) = &self.search.saved_error {
+                ui.colored_label(ERROR_COLOR, message.as_str());
+            }
 
             if self.search.ran {
                 if self.search.results.is_empty() {
@@ -468,6 +578,7 @@ impl Workspace {
             }
         });
 
+        let owner = self.seller.as_ref().map(|seller| seller.id);
         if let Some(id) = opened {
             self.search.open(session.database(), id);
         }
@@ -475,12 +586,21 @@ impl Workspace {
             self.search = SearchView::default();
         }
         if run {
-            let Some(owner) = self.seller.as_ref().map(|seller| seller.id) else {
+            let Some(owner) = owner else {
                 return;
             };
             if let Err(error) = self.search.run(session.database(), owner) {
                 self.message = Some(Message::error(error.to_string()));
             }
+        }
+        if let (Some(name), Some(owner)) = (apply_saved, owner) {
+            self.search.apply_saved(&name, session.database(), owner);
+        }
+        if save_current && let Some(owner) = owner {
+            self.search.save_current(session.database(), owner);
+        }
+        if delete_saved && let (Some(owner), Some(name)) = (owner, self.search.applied.clone()) {
+            self.search.delete_saved(&name, session.database(), owner);
         }
     }
 
@@ -1845,6 +1965,67 @@ mod tests {
         assert_eq!(opened.totals.gross, hit.gross);
         assert_eq!(opened.artefacts.len(), 1);
         assert_eq!(opened.status, DocumentStatus::Issued);
+    }
+
+    #[test]
+    fn a_saved_search_can_be_stored_and_applied() {
+        let (_dir, database, seller_id) = seeded_archive();
+
+        let mut view = SearchView {
+            query: "acme".to_owned(),
+            save_name: "Acme".to_owned(),
+            ..SearchView::default()
+        };
+        view.save_current(&database, seller_id);
+        assert!(view.saved_error.is_none());
+        assert_eq!(view.saved.len(), 1);
+        assert_eq!(view.saved[0].name, "Acme");
+
+        // The panel moves on; applying the saved search brings the filters back
+        // and runs them, so a saved view shows results and not just fields.
+        view.query = "nothing-matches-this".to_owned();
+        view.run(&database, seller_id).unwrap();
+        assert!(view.results.is_empty());
+
+        view.apply_saved("Acme", &database, seller_id);
+        assert_eq!(view.query, "acme");
+        assert_eq!(view.results.len(), 1);
+
+        view.delete_saved("Acme", &database, seller_id);
+        assert!(view.saved.is_empty());
+        assert!(view.applied.is_none());
+    }
+
+    #[test]
+    fn a_saved_search_keeps_the_side_filter() {
+        let (_dir, database, seller_id) = seeded_archive();
+        let mut view = SearchView {
+            direction: Some(Direction::Inbound),
+            save_name: "Bills".to_owned(),
+            ..SearchView::default()
+        };
+        view.save_current(&database, seller_id);
+        assert_eq!(view.saved[0].direction, Some(Direction::Inbound));
+
+        view.direction = None;
+        view.apply_saved("Bills", &database, seller_id);
+        assert_eq!(view.direction, Some(Direction::Inbound));
+        assert!(view.results.is_empty(), "the only document in the fixture was issued");
+    }
+
+    #[test]
+    fn a_saved_search_needs_a_name_in_the_panel_too() {
+        let (_dir, database, seller_id) = seeded_archive();
+        let mut view = SearchView {
+            query: "acme".to_owned(),
+            save_name: "  ".to_owned(),
+            ..SearchView::default()
+        };
+
+        view.save_current(&database, seller_id);
+
+        assert!(view.saved.is_empty());
+        assert!(view.saved_error.as_deref().unwrap_or_default().contains("needs a name"));
     }
 
     #[test]

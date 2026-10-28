@@ -88,6 +88,10 @@ uuid_id!(
     /// A journal entry (v1.1 accounting layer).
     JournalEntryId
 );
+uuid_id!(
+    /// A named set of find-panel filters.
+    SavedSearchId
+);
 
 #[cfg(test)]
 mod tests {
