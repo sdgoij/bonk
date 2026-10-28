@@ -5,8 +5,10 @@
 //! writer with M4. Writers are dumb serialisers over the domain view and must
 //! be byte-deterministic; business rules live in `crux` and `conformance`.
 
+pub mod read;
 pub mod ubl;
 
+pub use read::{ImportError, ImportedInvoice, ImportedLine, ImportedReference, read_invoice};
 pub use ubl::{UblError, UblInvoice, UblLine, UblPrecedingInvoice, write_invoice};
 
 /// Crate identity, used by diagnostics and support bundles.

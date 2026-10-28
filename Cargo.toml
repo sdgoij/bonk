@@ -55,6 +55,7 @@ egui = "0.37"
 
 clap = { version = "4", features = ["derive"] }
 rpassword = "7"
+quick-xml = "0.42"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
