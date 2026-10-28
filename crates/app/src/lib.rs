@@ -9,6 +9,7 @@
 
 pub mod export;
 pub mod health;
+pub mod idle;
 mod workspace;
 
 use std::path::{Path, PathBuf};
@@ -275,6 +276,7 @@ pub struct BonkApp {
     database_path: String,
     keystore_path: String,
     state: UiState,
+    idle: idle::IdleLock,
 }
 
 impl Default for BonkApp {
@@ -287,6 +289,7 @@ impl Default for BonkApp {
                 passphrase: String::new(),
                 error: None,
             },
+            idle: idle::IdleLock::new(idle::configured_timeout(), std::time::Instant::now()),
         }
     }
 }
@@ -334,6 +337,9 @@ impl BonkApp {
         match opened {
             Ok(session) => match Workspace::new(&session) {
                 Ok(workspace) => {
+                    // A fresh unlock starts the idle clock, whatever happened
+                    // before it.
+                    self.idle.touch(std::time::Instant::now());
                     self.state = UiState::Unlocked {
                         session,
                         workspace: Box::new(workspace),
@@ -367,6 +373,23 @@ impl BonkApp {
 
 impl eframe::App for BonkApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        // Any event counts as activity: a pointer move, a key, a scroll, a focus
+        // change. The clock is checked before drawing, so a due lock shows the
+        // unlock screen on this frame rather than the next.
+        let now = std::time::Instant::now();
+        if ui.input(|input| !input.events.is_empty()) {
+            self.idle.touch(now);
+        }
+        if matches!(self.state, UiState::Unlocked { .. }) && self.idle.due(now) {
+            self.apply(Action::Lock);
+        }
+        // egui is reactive: without a scheduled repaint an idle window is never
+        // asked to draw, and the timeout would only be noticed on the next
+        // mouse move. Half the shortest useful check keeps the drift small.
+        if matches!(self.state, UiState::Unlocked { .. }) {
+            ui.ctx().request_repaint_after(std::time::Duration::from_secs(30));
+        }
+
         egui::CentralPanel::default().show(ui, |ui| {
             let mut action = None;
             match &mut self.state {

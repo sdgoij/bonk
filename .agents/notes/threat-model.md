@@ -133,8 +133,9 @@ the machine, not a machine an attacker is already logged into.
 - **R5 — Passphrase strength is the weak link.** Argon2id makes guessing
   expensive; it cannot make a guessable phrase safe. The strength meter (M6.1) is
   not built yet.
-- **R6 — No idle lock yet.** An unlocked workspace stays unlocked until the user
-  presses Lock. M6.2 is open.
+- **R6 — The idle lock is a timer, not a guarantee.** The workspace locks after
+  a configurable idle period (15 minutes by default), but a hung process locks
+  nothing, and the limit can be raised to a day.
 - **R7 — Secrets in memory are only partly wiped.** DEK and KEK are zeroised;
   passphrases and recovery-key strings are not.
 - **R8 — File permissions are the OS default.** Anyone who can read the user's
@@ -170,7 +171,9 @@ the machine, not a machine an attacker is already logged into.
 ## 8. Open items
 
 - **O1** Passphrase strength meter and the GUI prompts for recovery (M6.1).
-- **O2** Idle lock and zeroisation tests (M6.2).
+- **O2** Zeroisation of passphrase strings (M6.2). The DEK and KEK already live in
+  `Zeroizing` buffers; resolved passphrases are still plain `String`s, and a
+  passphrase passed as a flag stays in the parser for the run.
 - **O3** Optional OS-keychain wrap of the same DEK, for “remember me”.
 - **O4** libFuzzer targets once the runner has nightly and `cargo-fuzz`; the
   property tests are the gate until then.

@@ -317,6 +317,10 @@ blobs as wasted space rather than corruption. It waits to be asked because the
 audit is a full pass over the archive, and a screen that freezes on open is one
 people learn to avoid.
 
+The workspace **locks itself after 15 minutes without input** — any pointer or key
+event resets the clock — and the unlock screen asks for the passphrase again.
+`BONK_IDLE_MINUTES` overrides the limit, clamped to 1–1440.
+
 ## Layout
 
 | Crate | Role | Milestone |

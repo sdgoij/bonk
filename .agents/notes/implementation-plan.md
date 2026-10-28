@@ -341,7 +341,7 @@ buyer and order reference from the document they correct, so the copied draft
 still passes R003.
 
 Remaining in M2: nothing blocking. Explicit deliver-to address fields beyond the
-buyer country remain for a later slice. Workspace tests: 316 encrypted, 314 plain.
+buyer country remain for a later slice. Workspace tests: 320 encrypted, 318 plain.
 
 Exit criteria:
 
@@ -601,6 +601,14 @@ counted. Damage shows as an error rather than a tick; orphans show as a warning
 because they are wasted space, not corruption. Unit tests cover a damaged payload,
 the newest-backup rule, and a short chain head; the headless draw test now draws
 the panel contents even though the header is collapsed.
+
+M6.2's idle lock is in. `app::idle` is a fire-once timer with the clock passed in,
+so its behaviour is tested without a window: it fires once at the limit, re-arms
+on activity, saturates a backwards clock, and clamps `BONK_IDLE_MINUTES` (default
+15, allowed 1–1440). The app counts any egui event as activity and schedules a
+repaint every 30 seconds while unlocked, because a reactive UI with no scheduled
+frame would only notice the timeout on the next mouse move. Zeroisation of
+passphrase strings is still open; the DEK and KEK already use `Zeroizing`.
 
 The threat model is written: [`threat-model.md`](threat-model.md) covers assets,
 trust boundaries, assumptions, threats by category with their residual risk,
