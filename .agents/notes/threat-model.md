@@ -181,13 +181,12 @@ the machine, not a machine an attacker is already logged into.
 | Creating needs the phrase twice | `a_new_archive_is_confirmed_before_it_is_written` |
 | A recovery key added in the window opens the archive | `a_recovery_key_from_the_app_opens_the_archive` |
 | A passphrase change in the window keeps it openable | `changing_the_passphrase_from_the_app_keeps_the_archive_openable` |
+| A reset with the recovery key works from the window | `a_forgotten_passphrase_is_reset_from_the_lock_screen` |
+| A wrong recovery key changes nothing | `a_wrong_recovery_key_leaves_the_archive_alone` |
 | Parsers survive hostile bytes | `arbitrary_bytes_never_panic`, `a_mutated_container_never_panics`, `a_stream_that_inflates_past_the_limit_is_refused` |
 
 ## 8. Open items
 
-- **O1** The unlock screen has no recovery route: a lost passphrase is reset with
-  `bonk passphrase-reset`, not from the window. Adding a key and changing a
-  passphrase are in the workspace (M6.1).
 - **O3** Optional OS-keychain wrap of the same DEK, for “remember me”.
 - **O4** libFuzzer targets once the runner has nightly and `cargo-fuzz`; the
   property tests are the gate until then.
@@ -197,5 +196,6 @@ the machine, not a machine an attacker is already logged into.
 
 Changes to a decision recorded here need an ADR, like any other.
 
-O2 (zeroisation of passphrase strings) was closed in M6.2. The numbering of the
-remaining items is left as it was, so references in other notes still resolve.
+O2 (zeroisation of passphrase strings) was closed in M6.2, and O1 (a recovery
+route in the window) in M6.1. The numbering of the remaining items is left as it
+was, so references in other notes still resolve.

@@ -161,6 +161,54 @@ impl Session {
         }
         Ok(())
     }
+
+    /// Replaces a forgotten passphrase using the recovery key.
+    ///
+    /// Returns the session and the replacement recovery key. The key that was
+    /// used is spent: it has now been typed somewhere, and leaving it valid would
+    /// keep a second route open.
+    pub fn reset_passphrase(
+        database_path: impl AsRef<Path>,
+        keystore_path: impl AsRef<Path>,
+        recovery_key: &str,
+        new_passphrase: &str,
+    ) -> Result<(Self, String), StoreError> {
+        let database_path = database_path.as_ref().to_path_buf();
+        let keystore_path = keystore_path.as_ref().to_path_buf();
+        // Open the database first: a wrong key or a mismatched archive must
+        // leave the keystore exactly as it was.
+        let mut keystore = KeyStore::open_with_recovery(&keystore_path, recovery_key).map_err(|error| match error {
+            StoreError::WrongPassphrase => {
+                StoreError::Rejected("that recovery key does not open this archive".to_owned())
+            }
+            other => other,
+        })?;
+        let database = Database::open(&database_path, &keystore)?;
+
+        keystore.change_passphrase(new_passphrase)?;
+        let replacement = keystore.enable_recovery(new_passphrase)?;
+        if let Err(error) = store::audit::record_passphrase_reset(
+            database.connection(),
+            &store::now_rfc3339(),
+            "gui",
+            &keystore.path().display().to_string(),
+            true,
+        ) {
+            return Err(StoreError::Rejected(format!(
+                "the passphrase was reset, but recording it in the audit chain failed: {error}. \
+                 The new recovery key is {replacement}; write it down now."
+            )));
+        }
+
+        Ok((
+            Self {
+                database,
+                database_path,
+                keystore_path,
+            },
+            replacement,
+        ))
+    }
 }
 
 /// Renders a document to UBL for the issue transaction.
@@ -320,6 +368,15 @@ enum LockForm {
     Unlock { passphrase: String },
     /// Create a new one, which takes the phrase twice.
     Create { passphrase: String, confirmation: String },
+    /// Replace a forgotten passphrase with the recovery key.
+    Reset {
+        recovery_key: String,
+        new_passphrase: String,
+        repeat: String,
+        /// The replacement key, once the reset has happened. Shown until the
+        /// user says they have written it down.
+        replacement: Option<String>,
+    },
 }
 
 /// The egui application.
@@ -355,6 +412,10 @@ enum Action {
     BeginCreate,
     Create,
     CancelCreate,
+    BeginReset,
+    Reset,
+    CancelReset,
+    FinishReset,
     Lock,
 }
 
@@ -405,6 +466,86 @@ impl BonkApp {
         self.finish(opened);
     }
 
+    /// Replaces a forgotten passphrase with the recovery key.
+    ///
+    /// The session that comes back is dropped on purpose: the user still has to
+    /// acknowledge the replacement key, and unlocking afterwards re-derives
+    /// everything from the new passphrase.
+    fn reset(&mut self) {
+        let UiState::Locked {
+            form:
+                LockForm::Reset {
+                    recovery_key,
+                    new_passphrase,
+                    repeat,
+                    replacement,
+                },
+            ..
+        } = &self.state
+        else {
+            return;
+        };
+        if replacement.is_some() {
+            return;
+        }
+        if let Err(reason) = check_reset(recovery_key, new_passphrase, repeat) {
+            self.set_error(reason.to_owned());
+            return;
+        }
+
+        let database_path = PathBuf::from(self.database_path.trim());
+        let keystore_path = PathBuf::from(self.keystore_path.trim());
+        let key = Zeroizing::new(recovery_key.clone());
+        let phrase = Zeroizing::new(new_passphrase.clone());
+
+        match Session::reset_passphrase(&database_path, &keystore_path, &key, &phrase) {
+            Ok((_, replacement_key)) => {
+                if let UiState::Locked {
+                    form:
+                        LockForm::Reset {
+                            recovery_key,
+                            replacement,
+                            ..
+                        },
+                    error,
+                } = &mut self.state
+                {
+                    // The used key is spent; the new one is all the user has to
+                    // write down, so it stays on screen until acknowledged.
+                    recovery_key.zeroize();
+                    *replacement = Some(replacement_key);
+                    *error = None;
+                }
+            }
+            Err(cause) => self.set_error(cause.to_string()),
+        }
+    }
+
+    /// Leaves the reset screen with the new phrase, and unlocks with it.
+    fn finish_reset(&mut self) {
+        let UiState::Locked {
+            form:
+                LockForm::Reset {
+                    new_passphrase,
+                    replacement,
+                    ..
+                },
+            ..
+        } = &mut self.state
+        else {
+            return;
+        };
+        if let Some(mut key) = replacement.take() {
+            key.zeroize();
+        }
+        let passphrase = std::mem::take(new_passphrase);
+        self.state = UiState::Locked {
+            form: LockForm::Unlock { passphrase },
+            error: None,
+        };
+        self.unlock();
+    }
+
     fn finish(&mut self, opened: Result<Session, StoreError>) {
         match opened {
             Ok(session) => {
@@ -444,6 +585,19 @@ impl BonkApp {
                 } => {
                     passphrase.zeroize();
                     confirmation.zeroize();
+                }
+                LockForm::Reset {
+                    recovery_key,
+                    new_passphrase,
+                    repeat,
+                    replacement,
+                } => {
+                    recovery_key.zeroize();
+                    new_passphrase.zeroize();
+                    repeat.zeroize();
+                    if let Some(replacement) = replacement {
+                        replacement.zeroize();
+                    }
                 }
             }
         }
@@ -497,6 +651,50 @@ impl BonkApp {
                 };
                 *error = None;
             }
+            Action::BeginReset => {
+                let UiState::Locked { form, error } = &mut self.state else {
+                    return;
+                };
+                let LockForm::Unlock { passphrase } = form else {
+                    return;
+                };
+                // The phrase that was tried is not carried over: it did not
+                // work, and the reset is about the key instead.
+                passphrase.zeroize();
+                *form = LockForm::Reset {
+                    recovery_key: String::new(),
+                    new_passphrase: String::new(),
+                    repeat: String::new(),
+                    replacement: None,
+                };
+                *error = None;
+            }
+            Action::Reset => self.reset(),
+            Action::CancelReset => {
+                let UiState::Locked { form, error } = &mut self.state else {
+                    return;
+                };
+                let LockForm::Reset {
+                    recovery_key,
+                    new_passphrase,
+                    repeat,
+                    replacement,
+                } = form
+                else {
+                    return;
+                };
+                recovery_key.zeroize();
+                new_passphrase.zeroize();
+                repeat.zeroize();
+                if let Some(mut replacement) = replacement.take() {
+                    replacement.zeroize();
+                }
+                *form = LockForm::Unlock {
+                    passphrase: String::new(),
+                };
+                *error = None;
+            }
+            Action::FinishReset => self.finish_reset(),
             Action::Lock => {
                 self.state = UiState::Locked {
                     form: LockForm::Unlock {
@@ -520,6 +718,20 @@ fn confirm(passphrase: &str, confirmation: &str) -> Result<(), &'static str> {
     }
     if passphrase != confirmation {
         return Err("the passphrases do not match");
+    }
+    Ok(())
+}
+
+/// Whether a reset is well formed, with the reason when it is not.
+fn check_reset(recovery_key: &str, new_passphrase: &str, repeat: &str) -> Result<(), &'static str> {
+    if recovery_key.trim().is_empty() {
+        return Err("enter the recovery key");
+    }
+    if new_passphrase.trim().is_empty() {
+        return Err("enter a new passphrase");
+    }
+    if new_passphrase != repeat {
+        return Err("the new passphrases do not match");
     }
     Ok(())
 }
@@ -623,7 +835,62 @@ impl eframe::App for BonkApp {
                                     action = Some(Action::BeginCreate);
                                 }
                             });
+                            if ui.button("Forgotten the passphrase?").clicked() {
+                                action = Some(Action::BeginReset);
+                            }
                         }
+                        LockForm::Reset {
+                            recovery_key,
+                            new_passphrase,
+                            repeat,
+                            replacement,
+                        } => match replacement {
+                            Some(key) => {
+                                ui.label("Passphrase replaced. The recovery key that was used no longer works.");
+                                ui.add_space(8.0);
+                                ui.label("New recovery key, shown once:");
+                                ui.label(egui::RichText::new(key.as_str()).monospace());
+                                ui.add_space(8.0);
+                                ui.colored_label(
+                                    egui::Color32::from_rgb(190, 140, 40),
+                                    "Write it down and keep it apart from the database and the passphrase.",
+                                );
+                                ui.add_space(8.0);
+                                if ui.button("I have written it down").clicked() {
+                                    action = Some(Action::FinishReset);
+                                }
+                            }
+                            None => {
+                                ui.label(
+                                    "A recovery key opens this archive without the passphrase. The key \
+                                     used here is replaced by the reset, because it has now been typed \
+                                     somewhere.",
+                                );
+                                ui.add_space(12.0);
+
+                                ui.label("Recovery key");
+                                ui.add(egui::TextEdit::singleline(recovery_key).password(true));
+
+                                ui.add_space(8.0);
+                                ui.label("New passphrase");
+                                ui.add(egui::TextEdit::singleline(new_passphrase).password(true));
+                                strength_row(ui, new_passphrase.as_str());
+
+                                ui.add_space(8.0);
+                                ui.label("Repeat the new passphrase");
+                                ui.add(egui::TextEdit::singleline(repeat).password(true));
+
+                                ui.add_space(8.0);
+                                ui.horizontal(|ui| {
+                                    if ui.button("Reset passphrase").clicked() {
+                                        action = Some(Action::Reset);
+                                    }
+                                    if ui.button("Back").clicked() {
+                                        action = Some(Action::CancelReset);
+                                    }
+                                });
+                            }
+                        },
                     }
 
                     if let Some(message) = error {
@@ -888,6 +1155,132 @@ mod tests {
         session.change_passphrase("old passphrase", "new passphrase").unwrap();
         assert!(Session::unlock(&database, &keystore, "old passphrase").is_err());
         assert!(Session::unlock(&database, &keystore, "new passphrase").is_ok());
+    }
+
+    #[test]
+    fn a_forgotten_passphrase_is_reset_from_the_lock_screen() {
+        let dir = TempDir::new().unwrap();
+        let database = dir.path().join("bonk.db");
+        let keystore = dir.path().join("keystore.bin");
+        let forgotten = "correct horse battery staple";
+        let replacement = "a fresh and rather long phrase";
+
+        let recovery_key = {
+            let session = Session::create(&database, &keystore, forgotten).unwrap();
+            session.add_recovery_key(forgotten).unwrap()
+        };
+
+        let mut app = BonkApp {
+            database_path: database.display().to_string(),
+            keystore_path: keystore.display().to_string(),
+            state: UiState::Locked {
+                form: LockForm::Reset {
+                    recovery_key,
+                    new_passphrase: replacement.to_owned(),
+                    repeat: replacement.to_owned(),
+                    replacement: None,
+                },
+                error: None,
+            },
+            ..Default::default()
+        };
+
+        app.apply(Action::Reset);
+
+        let UiState::Locked {
+            form: LockForm::Reset {
+                replacement: new_key, ..
+            },
+            error,
+        } = &app.state
+        else {
+            panic!("a successful reset stays on the screen until the key is acknowledged");
+        };
+        assert!(error.is_none());
+        assert!(new_key.is_some(), "the replacement key must be shown");
+
+        app.apply(Action::FinishReset);
+        assert!(matches!(app.state, UiState::Unlocked { .. }));
+
+        // The forgotten phrase is gone and the new one opens the archive.
+        assert!(Session::unlock(&database, &keystore, forgotten).is_err());
+        assert!(Session::unlock(&database, &keystore, replacement).is_ok());
+    }
+
+    #[test]
+    fn a_wrong_recovery_key_leaves_the_archive_alone() {
+        let dir = TempDir::new().unwrap();
+        let database = dir.path().join("bonk.db");
+        let keystore = dir.path().join("keystore.bin");
+        let passphrase = "correct horse battery staple";
+
+        {
+            let session = Session::create(&database, &keystore, passphrase).unwrap();
+            session.add_recovery_key(passphrase).unwrap();
+        }
+
+        let mut app = BonkApp {
+            database_path: database.display().to_string(),
+            keystore_path: keystore.display().to_string(),
+            state: UiState::Locked {
+                form: LockForm::Reset {
+                    recovery_key: "AAAA-BBBB-CCCC-DDDD-EEEE-FFFF-GGGG-HHHH".to_owned(),
+                    new_passphrase: "a fresh and rather long phrase".to_owned(),
+                    repeat: "a fresh and rather long phrase".to_owned(),
+                    replacement: None,
+                },
+                error: None,
+            },
+            ..Default::default()
+        };
+
+        app.apply(Action::Reset);
+
+        assert!(matches!(
+            &app.state,
+            UiState::Locked {
+                form: LockForm::Reset { replacement: None, .. },
+                error: Some(message),
+            } if message.contains("does not open")
+        ));
+        assert!(Session::unlock(&database, &keystore, passphrase).is_ok());
+    }
+
+    #[test]
+    fn a_reset_must_be_well_formed() {
+        assert_eq!(check_reset("", "new", "new"), Err("enter the recovery key"));
+        assert_eq!(check_reset("key", " ", " "), Err("enter a new passphrase"));
+        assert_eq!(
+            check_reset("key", "new", "other"),
+            Err("the new passphrases do not match")
+        );
+        assert_eq!(check_reset("key", "new", "new"), Ok(()));
+    }
+
+    #[test]
+    fn backing_out_of_a_reset_returns_to_the_unlock_form() {
+        let mut app = BonkApp {
+            state: UiState::Locked {
+                form: LockForm::Reset {
+                    recovery_key: "key-canary".to_owned(),
+                    new_passphrase: "phrase-canary".to_owned(),
+                    repeat: "phrase-canary".to_owned(),
+                    replacement: None,
+                },
+                error: Some("that recovery key does not open this archive".to_owned()),
+            },
+            ..Default::default()
+        };
+
+        app.apply(Action::CancelReset);
+
+        assert!(matches!(
+            &app.state,
+            UiState::Locked {
+                form: LockForm::Unlock { passphrase },
+                error: None,
+            } if passphrase.is_empty()
+        ));
     }
 
     #[test]

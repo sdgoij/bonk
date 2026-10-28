@@ -342,6 +342,12 @@ the workspace never holds the data key. A new recovery key is shown once, in
 monospace, with a warning to keep it apart from the database; the panel forgets it
 when you press Done, and the fields are wiped when the workspace is locked.
 
+**Forgotten the passphrase?** on the unlock screen takes a recovery key and a new
+passphrase instead. The reset replaces the recovery key and shows the replacement
+before it unlocks, because the key that was typed has now been somewhere else and
+leaving it valid would keep a second way in. The same two steps exist in the CLI
+as `recovery-add` and `passphrase-reset`.
+
 ## Layout
 
 | Crate | Role | Milestone |

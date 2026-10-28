@@ -341,7 +341,7 @@ buyer and order reference from the document they correct, so the copied draft
 still passes R003.
 
 Remaining in M2: nothing blocking. Explicit deliver-to address fields beyond the
-buyer country remain for a later slice. Workspace tests: 345 encrypted, 343 plain.
+buyer country remain for a later slice. Workspace tests: 349 encrypted, 347 plain.
 
 Exit criteria:
 
@@ -572,7 +572,7 @@ same key before writing, and records `recovery_key_added`. A passphrase change
 carries the recovery wrap over without holding the secret. `passphrase-reset`
 uses the key to install a new passphrase when the old one is gone, then rotates
 the key and prints the replacement, because the used key has now been typed
-somewhere. Still open in M6.1: the unlock screen's recovery route.
+somewhere. Still open in M6.1: nothing.
 
 M6.1's workspace prompts are in. A collapsed **Security** panel changes the
 passphrase and adds a recovery key through `Session::add_recovery_key` and
@@ -580,9 +580,14 @@ passphrase and adds a recovery key through `Session::add_recovery_key` and
 again instead of relying on the unlocked session, then append the same audit
 events the CLI does. A new key is shown once in monospace and forgotten on Done;
 the panel's fields are wiped after a successful change and when the workspace is
-dropped, which locking does. Still open: a recovery route on the unlock screen,
-so a forgotten passphrase is reset with `bonk passphrase-reset` rather than from
-the window.
+dropped, which locking does.
+
+M6.1's recovery route on the lock screen is in too. **Forgotten the passphrase?**
+asks for the recovery key and a new passphrase, calls
+`Session::reset_passphrase` — which opens the database before rewrapping so a
+wrong key changes nothing — and then shows the replacement key until it is
+acknowledged, because the used key has been typed somewhere. Acknowledging unlocks
+with the new phrase.
 
 M6.1's strength estimate and confirmation are in. `app::strength` scores a phrase
 on length, character variety, and a short list of common phrases, collapses a
@@ -655,9 +660,9 @@ indistinguishable from the original without an outside record of a head; an
 unlocked archive is readable by anything running as the user; and a recovery key
 stored beside the archive turns two credentials into one.
 
-Remaining in M6: the unlock screen's recovery route, and the integrity screen's
-rendering, whose engine already exists. The threat model also lists O5–O6 as
-open: tighter file permissions at creation, and a decision on recording chain
+Remaining in M6: the integrity screen's rendering, whose engine already exists.
+The threat model also lists O3–O6 as open: an optional keychain wrap, fuzz
+targets, tighter file permissions at creation, and a decision on recording chain
 heads somewhere durable.
 
 Exit criteria:
