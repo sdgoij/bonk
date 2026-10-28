@@ -15,6 +15,7 @@ use crate::audit::{self, ChainHead};
 use crate::db::{Database, apply_key};
 use crate::error::StoreError;
 use crate::keystore::KeyStore;
+use crate::permissions;
 
 /// How many backups a directory keeps by default.
 pub const RETENTION: usize = 10;
@@ -43,10 +44,13 @@ pub fn backup(
     keep: usize,
 ) -> Result<BackupReport, StoreError> {
     let directory = directory.as_ref();
-    std::fs::create_dir_all(directory)?;
+    permissions::private_directory(directory)?;
 
     let path = directory.join(file_name(stamp)?);
     database.backup_to(&path)?;
+    // A copy holds the whole archive; it must not be readable by more accounts
+    // than the original.
+    permissions::restrict_quietly(&path);
     verify(&path, keystore.dek())?;
     let bytes = std::fs::metadata(&path)?.len();
 

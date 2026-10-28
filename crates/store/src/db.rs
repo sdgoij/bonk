@@ -59,6 +59,10 @@ impl Database {
              PRAGMA temp_store = MEMORY;
              PRAGMA secure_delete = ON;",
         )?;
+        // Narrow the file as soon as it exists. SQLite gives the write-ahead log
+        // and shared-memory file the same mode as the database, so this covers
+        // the siblings it creates later as well.
+        crate::permissions::restrict_archive(path);
 
         // Exercise the key before anything else: a wrong key fails here with
         // "file is not a database" rather than later with a confusing error.

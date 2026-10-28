@@ -147,8 +147,12 @@ the machine, not a machine an attacker is already logged into.
   no code can fix is a passphrase passed as a flag: it is in the process's argv,
   which belongs to the operating system and is readable by other processes
   running as the user for as long as the process lives.
-- **R8 — File permissions are the OS default.** Anyone who can read the user's
-  profile can copy the keystore and archive.
+- **R8 — File permissions are the OS default on Windows.** On Unix the archive
+directory is created `0700`, the keystore, database, write-ahead log, and backups
+land `0600`, and opening an archive tightens what was left open. On Windows a
+file under `%APPDATA%` inherits an ACL that grants the user, the system, and
+administrators — which is the intended boundary — but nothing here narrows it
+further, and an archive placed in a shared folder keeps that folder's ACL.
 
 ## 6. Out of scope for v1.0
 
@@ -177,6 +181,8 @@ the machine, not a machine an attacker is already logged into.
 | Support bundles leak nothing | `a_bundle_has_counts_and_no_business_facts` |
 | A used passphrase does not print itself | CLI `a_new_passphrase_is_never_empty_or_printable` |
 | A used passphrase is not left in the form | `a_wrong_passphrase_stays_for_a_retry_and_a_used_buffer_is_wiped` |
+| A new archive lands private (Unix) | `a_new_archive_lands_private` |
+| Opening an archive tightens its modes (Unix) | `opening_an_archive_tightens_what_was_left_open` |
 | A weak passphrase is reported, not refused | CLI `a_weak_passphrase_is_reported_but_not_refused` |
 | Creating needs the phrase twice | `a_new_archive_is_confirmed_before_it_is_written` |
 | A recovery key added in the window opens the archive | `a_recovery_key_from_the_app_opens_the_archive` |
@@ -190,12 +196,11 @@ the machine, not a machine an attacker is already logged into.
 - **O3** Optional OS-keychain wrap of the same DEK, for “remember me”.
 - **O4** libFuzzer targets once the runner has nightly and `cargo-fuzz`; the
   property tests are the gate until then.
-- **O5** Tighten file permissions on the keystore and archive at creation.
 - **O6** Decide whether `bonk verify` should print a head that the user can record
   somewhere durable; today it prints the head and stops there.
 
 Changes to a decision recorded here need an ADR, like any other.
 
-O2 (zeroisation of passphrase strings) was closed in M6.2, and O1 (a recovery
-route in the window) in M6.1. The numbering of the remaining items is left as it
-was, so references in other notes still resolve.
+O2 (zeroisation of passphrase strings) was closed in M6.2, O1 (a recovery route
+in the window) in M6.1, and O5 (file permissions) in M6.2. The numbering of the
+remaining items is left as it was, so references in other notes still resolve.

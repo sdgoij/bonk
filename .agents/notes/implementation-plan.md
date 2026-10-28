@@ -341,7 +341,7 @@ buyer and order reference from the document they correct, so the copied draft
 still passes R003.
 
 Remaining in M2: nothing blocking. Explicit deliver-to address fields beyond the
-buyer country remain for a later slice. Workspace tests: 366 encrypted, 364 plain.
+buyer country remain for a later slice. Workspace tests: 368 encrypted, 366 plain.
 
 Exit criteria:
 
@@ -682,6 +682,17 @@ passphrase passed as a flag is still in the process's argv, which belongs to the
 operating system; the threat model records that as residual risk rather than as
 something the code can fix.
 
+O5 is in. `store::permissions` creates the archive directory `0700`, restricts the
+keystore, the database with its write-ahead log and shared-memory file, and the
+backups to `0600`, and tightens an archive that was left open when it is opened
+again — a keystore restored from a share arrives with whatever mode it had. An
+existing directory is deliberately left alone, because `--db /tmp/x.db` must not
+chmod `/tmp`. Windows is a no-op with a reason: a file under `%APPDATA%` already
+inherits a per-user ACL, and narrowing it further means an explicit DACL through
+an external crate or unsafe code, which this crate does not do. The mode
+assertions are Unix tests, so they run in the Linux and macOS CI jobs rather than
+on the Windows development host; the module's shape is checked everywhere.
+
 The threat model is written: [`threat-model.md`](threat-model.md) covers assets,
 trust boundaries, assumptions, threats by category with their residual risk,
 what is out of scope, a claim-to-test table, and open items O1 and O3–O6. It is
@@ -691,9 +702,9 @@ indistinguishable from the original without an outside record of a head; an
 unlocked archive is readable by anything running as the user; and a recovery key
 stored beside the archive turns two credentials into one.
 
-Remaining in M6: nothing. The threat model still lists O3–O6 as open: an optional
-keychain wrap, fuzz targets, tighter file permissions at creation, and a decision
-on recording chain heads somewhere durable.
+Remaining in M6: nothing. The threat model still lists O3, O4, and O6 as open: an
+optional keychain wrap, fuzz targets, and a decision on recording chain heads
+somewhere durable.
 
 Exit criteria:
 

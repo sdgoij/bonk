@@ -62,10 +62,10 @@ impl Session {
             return Err(StoreError::InvalidKeystore);
         }
         if let Some(parent) = database_path.parent() {
-            std::fs::create_dir_all(parent)?;
+            store::permissions::private_directory(parent)?;
         }
         if let Some(parent) = keystore_path.parent() {
-            std::fs::create_dir_all(parent)?;
+            store::permissions::private_directory(parent)?;
         }
 
         let keystore = KeyStore::create(&keystore_path, passphrase, KdfParams::DEFAULT)?;

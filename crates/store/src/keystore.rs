@@ -38,6 +38,7 @@ use argon2::{Algorithm, Argon2, Params, Version};
 use zeroize::Zeroizing;
 
 use crate::error::StoreError;
+use crate::permissions;
 
 const MAGIC: &[u8; 8] = b"BNKKEY01";
 /// A passphrase wrap on its own: keystores written before recovery keys.
@@ -126,6 +127,7 @@ impl KeyStore {
         };
         let bytes = store.render(passphrase, &nonce_bytes)?;
         write_atomic(&store.path, &bytes)?;
+        permissions::restrict_quietly(&store.path);
         Ok(store)
     }
 
@@ -133,6 +135,7 @@ impl KeyStore {
     pub fn open(path: impl AsRef<Path>, passphrase: &str) -> Result<Self, StoreError> {
         let path = path.as_ref().to_path_buf();
         let bytes = fs::read(&path)?;
+        permissions::restrict_quietly(&path);
         Self::from_bytes(path, &bytes, passphrase)
     }
 
@@ -143,6 +146,7 @@ impl KeyStore {
     pub fn open_with_recovery(path: impl AsRef<Path>, recovery_key: &str) -> Result<Self, StoreError> {
         let path = path.as_ref().to_path_buf();
         let bytes = fs::read(&path)?;
+        permissions::restrict_quietly(&path);
         let head = Layout::parse(&bytes)?;
         let block = head.recovery.ok_or(StoreError::NoRecoveryKey)?;
 
@@ -578,6 +582,9 @@ fn read_u32(bytes: &[u8], cursor: &mut usize) -> u32 {
 fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), StoreError> {
     let temporary = path.with_extension("tmp");
     fs::write(&temporary, bytes)?;
+    // A rewritten keystore must land with the same narrow mode as a new one; the
+    // rename carries the inode, so setting it here covers the destination.
+    crate::permissions::restrict_quietly(&temporary);
 
     // Unix renames over the destination atomically. Windows refuses, and the
     // usual remove-then-rename would leave a window in which the keystore does

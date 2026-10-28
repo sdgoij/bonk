@@ -23,6 +23,7 @@ pub mod evidence;
 pub mod integrity;
 pub mod keystore;
 pub mod migrations;
+pub mod permissions;
 pub mod repo;
 pub mod saved;
 pub mod support;
