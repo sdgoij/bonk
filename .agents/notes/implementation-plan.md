@@ -341,7 +341,7 @@ buyer and order reference from the document they correct, so the copied draft
 still passes R003.
 
 Remaining in M2: nothing blocking. Explicit deliver-to address fields beyond the
-buyer country remain for a later slice. Workspace tests: 252 encrypted, 250 plain.
+buyer country remain for a later slice. Workspace tests: 258 encrypted, 256 plain.
 
 Exit criteria:
 
@@ -416,6 +416,14 @@ input, the attachment count, the name-tree depth, and every decoded stream; the
 page content is never read. The blob keeps the PDF as received and the
 provenance records `source_kind = 'pdf'`, so the same invoice arriving as XML and
 as PDF is one record by supplier number.
+
+M3.7's invariant is now enforced in the suite rather than only in a fuzz run:
+property tests feed arbitrary bytes and structured token soup to both XML
+readers and to the PDF extractor, a mutated real container and a truncation sweep
+cover the container path, and a compressed stream that claims to inflate past the
+limit must be refused. The parsers answer or refuse, never panic. libFuzzer
+targets are not wired yet because they need nightly plus `cargo-fuzz` on the CI
+runner; the property tests are the gate until that exists.
 
 M3.5 is in as well. `bonk received` lists inbound documents with supplier, dates,
 amount, and status; `bonk approve` and `bonk mark-paid` move a document forward.

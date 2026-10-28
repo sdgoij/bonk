@@ -428,10 +428,52 @@ mod tests {
     use std::io::Write;
 
     use lopdf::{Document, Object, Stream, dictionary};
+    use proptest::prelude::*;
 
     use super::*;
 
     const XML: &str = "<Invoice><ID>SUP-1</ID></Invoice>";
+
+    /// A container whose single attachment is stored with `/FlateDecode`.
+    fn compressed_container(payload: &[u8]) -> Vec<u8> {
+        let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::best());
+        encoder.write_all(payload).expect("compress");
+        let compressed = encoder.finish().expect("finish");
+
+        let mut document = Document::with_version("1.7");
+        let stream_id = document.add_object(Stream::new(
+            dictionary! {
+                "Type" => "EmbeddedFile",
+                "Subtype" => "text/xml",
+                "Filter" => "FlateDecode",
+            },
+            compressed,
+        ));
+        let specification_id = document.add_object(dictionary! {
+            "Type" => "Filespec",
+            "UF" => Object::string_literal("factur-x.xml"),
+            "EF" => dictionary! { "F" => stream_id },
+        });
+        let names_id = document.add_object(dictionary! {
+            "EmbeddedFiles" => dictionary! {
+                "Names" => vec![Object::string_literal("factur-x.xml"), Object::Reference(specification_id)],
+            },
+        });
+        let pages_id = document.add_object(dictionary! {
+            "Type" => "Pages",
+            "Kids" => Vec::<Object>::new(),
+            "Count" => 0,
+        });
+        let catalog_id = document.add_object(dictionary! {
+            "Type" => "Catalog",
+            "Pages" => pages_id,
+            "Names" => names_id,
+        });
+        document.trailer.set("Root", catalog_id);
+        let mut bytes = Vec::new();
+        document.save_to(&mut bytes).expect("save");
+        bytes
+    }
 
     #[test]
     fn finds_the_embedded_invoice() {
@@ -516,45 +558,53 @@ mod tests {
 
     #[test]
     fn decodes_a_compressed_attachment() {
-        let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::best());
-        encoder.write_all(XML.as_bytes()).expect("compress");
-        let compressed = encoder.finish().expect("finish");
-
-        let mut document = Document::with_version("1.7");
-        let stream_id = document.add_object(Stream::new(
-            dictionary! {
-                "Type" => "EmbeddedFile",
-                "Subtype" => "text/xml",
-                "Filter" => "FlateDecode",
-            },
-            compressed,
-        ));
-        let specification_id = document.add_object(dictionary! {
-            "Type" => "Filespec",
-            "UF" => Object::string_literal("factur-x.xml"),
-            "EF" => dictionary! { "F" => stream_id },
-        });
-        let names_id = document.add_object(dictionary! {
-            "EmbeddedFiles" => dictionary! {
-                "Names" => vec![Object::string_literal("factur-x.xml"), Object::Reference(specification_id)],
-            },
-        });
-        let pages_id = document.add_object(dictionary! {
-            "Type" => "Pages",
-            "Kids" => Vec::<Object>::new(),
-            "Count" => 0,
-        });
-        let catalog_id = document.add_object(dictionary! {
-            "Type" => "Catalog",
-            "Pages" => pages_id,
-            "Names" => names_id,
-        });
-        document.trailer.set("Root", catalog_id);
-        let mut bytes = Vec::new();
-        document.save_to(&mut bytes).expect("save");
-
-        let extracted = extract_invoice(&bytes).expect("extract");
+        let pdf = compressed_container(XML.as_bytes());
+        let extracted = extract_invoice(&pdf).expect("extract");
         assert_eq!(extracted.xml, XML.as_bytes());
+    }
+
+    #[test]
+    fn a_stream_that_inflates_past_the_limit_is_refused() {
+        // A few kilobytes of zeros that claim to be ten megabytes of XML.
+        let bomb = vec![0u8; MAX_EMBEDDED_BYTES + 1];
+        let pdf = compressed_container(&bomb);
+        assert!(
+            matches!(extract_invoice(&pdf), Err(PdfError::EmbeddedTooLarge { .. })),
+            "a decompression bomb is refused, not decoded"
+        );
+    }
+
+    #[test]
+    fn truncated_containers_are_refused_without_panicking() {
+        let metadata = fixtures::xmp("factur-x.xml", "INVOICE");
+        let pdf = fixtures::container(XML, Some(&metadata));
+        for cut in (0..pdf.len()).step_by(37) {
+            let _ = extract_invoice(&pdf[..cut]);
+        }
+        assert!(
+            extract_invoice(&pdf[..pdf.len() / 2]).is_err(),
+            "a container cut in half is not silently accepted"
+        );
+    }
+
+    proptest! {
+        /// Any bytes at all: the extractor answers or refuses, never panics.
+        #[test]
+        fn arbitrary_bytes_never_panic(bytes in proptest::collection::vec(any::<u8>(), 0..4096)) {
+            let _ = extract_invoice(&bytes);
+        }
+
+        /// A real container with one byte damaged is the likeliest hostile case.
+        #[test]
+        fn a_mutated_container_never_panics(
+            position in any::<usize>(),
+            byte in any::<u8>(),
+        ) {
+            let mut pdf = fixtures::container(XML, None);
+            let index = position % pdf.len();
+            pdf[index] = byte;
+            let _ = extract_invoice(&pdf);
+        }
     }
 
     #[test]

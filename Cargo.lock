@@ -2192,6 +2192,7 @@ dependencies = [
  "crux",
  "flate2",
  "lopdf",
+ "proptest",
  "store",
  "syntax",
  "tempfile",
@@ -4125,6 +4126,7 @@ name = "syntax"
 version = "0.0.0"
 dependencies = [
  "crux",
+ "proptest",
  "quick-xml 0.42.0",
 ]
 

@@ -463,6 +463,7 @@ fn invalid(field: &'static str, detail: String) -> ImportError {
 #[cfg(test)]
 mod tests {
     use crux::{TaxBreakdown, VatRate};
+    use proptest::prelude::*;
 
     use super::*;
     use crate::ubl::{UblInvoice, UblLine, UblPrecedingInvoice, write_invoice};
@@ -643,5 +644,50 @@ mod tests {
         );
         let xml = xml.replace("</Invoice>", "</ubl:Invoice>");
         assert!(read_invoice(&xml).is_ok(), "a prefixed root is still UBL");
+    }
+
+    // ----------------------------------------------------- hostile input
+
+    /// Fragments that steer a document towards a valid shape without being one.
+    const TOKENS: &[&str] = &[
+        "<",
+        ">",
+        "</",
+        "/>",
+        "<?xml version=\"1.0\"?>",
+        "<rsm:CrossIndustryInvoice",
+        "<Invoice",
+        "<CreditNote",
+        " xmlns=\"urn:oasis:names:specification:ubl:schema:xsd:Invoice-2\"",
+        " xmlns:rsm=\"urn:un:unece:uncefact:data:standard:CrossIndustryInvoice:100\"",
+        "<cbc:ID>",
+        "</cbc:ID>",
+        "<ram:ID>",
+        "</ram:ID>",
+        "<cbc:IssueDate>2026-10-27</cbc:IssueDate>",
+        "<cbc:DocumentCurrencyCode>EUR</cbc:DocumentCurrencyCode>",
+        "1",
+        "&#0;",
+        "<![CDATA[",
+        "]]>",
+        "\u{0}",
+    ];
+
+    proptest! {
+        /// Whatever arrives, a reader answers or refuses; it never panics.
+        #[test]
+        fn arbitrary_bytes_never_panic(bytes in proptest::collection::vec(any::<u8>(), 0..1024)) {
+            let text = String::from_utf8_lossy(&bytes);
+            let _ = read_document(&text);
+            let _ = read_invoice(&text);
+        }
+
+        /// Structure without meaning is the common shape of a hostile document.
+        #[test]
+        fn token_soup_never_panics(
+            fragments in proptest::collection::vec(proptest::sample::select(TOKENS), 0..64),
+        ) {
+            let _ = read_document(&fragments.concat());
+        }
     }
 }
