@@ -18,6 +18,7 @@ pub mod backup;
 pub mod db;
 mod dto;
 pub mod error;
+pub mod integrity;
 pub mod keystore;
 pub mod migrations;
 pub mod repo;
@@ -26,6 +27,7 @@ pub use audit::ChainHead;
 pub use backup::{BackupReport, BackupSummary, RETENTION};
 pub use db::Database;
 pub use error::StoreError;
+pub use integrity::IntegrityReport;
 pub use keystore::{KdfParams, KeyStore};
 pub use repo::{
     CustomerRecord, Direction, DocumentRecord, DocumentStatus, ImportSource, IssueRequest, IssueView, IssuedReference,

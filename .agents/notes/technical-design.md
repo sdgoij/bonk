@@ -941,10 +941,17 @@ BEGIN
 END;
 ```
 
-Equivalent triggers guard `document_line`, `audit_event`, and `artefact`. The
-repositories never issue those statements, so a trigger firing is always a bug.
-Status changes (sent, paid, approved) are append-only events, never updates to
-the document row.
+Equivalent triggers guard `document_line`, `audit_event`, `artefact`, and `blob`.
+The repositories never issue those statements, so a trigger firing is always a
+bug. Status changes (sent, paid, approved) are append-only events, never updates
+to the document row.
+
+`verify` re-hashes every blob and compares it with the digest recorded beside it,
+cross-checks each artefact's `bytes_hash` against its blob, confirms every import
+record still has a payload, and runs `PRAGMA foreign_key_check`. An unreferenced
+blob is reported as wasted space rather than corruption, because nothing depends
+on it; a hash mismatch or a missing payload is corruption, because the archive
+would be claiming evidence it no longer holds.
 
 ### 7.4 Search
 

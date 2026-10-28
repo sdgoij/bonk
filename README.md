@@ -199,7 +199,8 @@ Line format: `name|quantity|unit_price|rate[|category[|unit[|exemption_code[|exe
 Intra-community supply also needs `--delivery YYYY-MM-DD`; the deliver-to country
 is taken from the customer address. `issue` writes `<number>.xml` and, when Typst
 is installed, `<number>.pdf`; both are stored as artefacts. `verify` recomputes
-the audit chain and every artefact hash.
+the audit chain, every artefact hash, and every stored payload — imported files
+included — and reports unreferenced blobs without failing on them.
 
 PDF rendering shells out to `typst` 0.14 (override with `BONK_TYPST`). If Typst
 is unavailable, issuing still succeeds and prints a warning; the UBL artefact is

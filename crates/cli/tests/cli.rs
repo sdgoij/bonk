@@ -430,6 +430,11 @@ fn full_slice_through_the_cli() {
     let verified = bonk_ok(&args);
     assert!(verified.contains("audit:    8 events verified"), "{verified}");
     assert!(verified.contains("head:"), "{verified}");
+    assert!(verified.contains("payloads verified"), "{verified}");
+    assert!(
+        !verified.contains("orphans:"),
+        "every stored payload is referenced: {verified}"
+    );
 
     // A backup must verify and be restorable with the same keystore.
     let backups = dir.path().join("backups");

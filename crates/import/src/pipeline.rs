@@ -903,6 +903,21 @@ mod tests {
     }
 
     #[test]
+    fn an_imported_payload_is_covered_by_the_integrity_audit() {
+        let (_dir, database, seller_id) = database();
+        let bytes = ubl("Stranger BV", None, "X-12");
+        import_bytes(&database, seller_id, None, &bytes, "2026-10-27T00:00:00Z").unwrap();
+
+        let report = store::integrity::audit(database.connection()).unwrap();
+        assert_eq!(report.imports, 1);
+        assert_eq!(report.blobs, 1);
+        assert_eq!(
+            report.orphaned_blobs, 0,
+            "the payload is linked by the hash the import recorded"
+        );
+    }
+
+    #[test]
     fn a_non_ubl_file_is_reported_with_its_reason() {
         let (_dir, database, seller_id) = database();
         let error = import_bytes(

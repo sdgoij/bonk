@@ -180,6 +180,21 @@ BEGIN
     SELECT RAISE(ABORT, 'artefacts cannot be deleted');
 END;
 
+-- Payloads are evidence too. Both writers (`record_received`, `attach_artefact`)
+-- only insert, and every recorded hash points at these bytes, so a rewrite would
+-- turn a verifiable archive into an unverifiable one.
+CREATE TRIGGER blob_no_update
+BEFORE UPDATE ON blob
+BEGIN
+    SELECT RAISE(ABORT, 'stored payloads are immutable');
+END;
+
+CREATE TRIGGER blob_no_delete
+BEFORE DELETE ON blob
+BEGIN
+    SELECT RAISE(ABORT, 'stored payloads cannot be deleted');
+END;
+
 -- Search is a cache over `document`, kept in step by triggers, never the source
 -- of truth. The columns are what someone types into a search box: the number
 -- they are looking for, the party on the other side, a reference, and the note.

@@ -14,7 +14,7 @@ use crux::{
 use store::{
     CustomerRecord, DocumentStatus, IssueRequest, KeyStore, SearchRequest, SellerRecord, StoreError, advance_status,
     credit_note_for, first_seller, insert_customer, insert_draft, insert_seller, issue_draft, list_received,
-    load_customer, load_draft, load_seller, resolve_customer, resolve_received, set_supplier_match, verify_artefacts,
+    load_customer, load_draft, load_seller, resolve_customer, resolve_received, set_supplier_match,
 };
 
 #[derive(Parser)]
@@ -335,7 +335,7 @@ fn run(cli: Cli) -> Result<(), CliError> {
             session.integrity_check()?;
             let summary = session.summary()?;
             let audit_events = store::audit::verify_chain(session.database().connection())?;
-            let artefacts = verify_artefacts(session.database().connection())?;
+            let report = store::integrity::audit(session.database().connection())?;
 
             println!("ok:       integrity check passed");
             println!("schema:   {}", summary.schema_version);
@@ -347,7 +347,17 @@ fn run(cli: Cli) -> Result<(), CliError> {
                 Some(head) => println!("head:     {} {} ({})", head.seq, head.hash, head.at),
                 None => println!("head:     empty chain"),
             }
-            println!("artefacts: {artefacts} hashes verified");
+            println!("artefacts: {} hashes verified", report.artefacts);
+            println!(
+                "blobs:    {} payloads verified ({} imports)",
+                report.blobs, report.imports
+            );
+            if report.orphaned_blobs > 0 {
+                println!(
+                    "orphans:  {} unreferenced blob(s); the archive is intact, this is wasted space",
+                    report.orphaned_blobs
+                );
+            }
             Ok(())
         }
         Some(Command::MigrateDown { to, yes }) => {
