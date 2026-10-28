@@ -12,7 +12,7 @@ use crux::{
     validate_draft,
 };
 use store::{
-    CustomerRecord, DocumentStatus, IssueRequest, SearchRequest, SellerRecord, StoreError, advance_status,
+    CustomerRecord, DocumentStatus, IssueRequest, KeyStore, SearchRequest, SellerRecord, StoreError, advance_status,
     credit_note_for, first_seller, insert_customer, insert_draft, insert_seller, issue_draft, list_received,
     load_customer, load_draft, load_seller, resolve_customer, resolve_received, set_supplier_match, verify_artefacts,
 };
@@ -42,6 +42,21 @@ enum Command {
     Init,
     /// Check integrity, the audit chain, and every stored artefact.
     Verify,
+    /// Write a verified, encrypted backup and prune older ones.
+    Backup {
+        /// Directory for backups. Defaults to `backups` beside the database.
+        #[arg(long)]
+        to: Option<PathBuf>,
+        /// How many backups to keep.
+        #[arg(long, default_value_t = store::backup::RETENTION)]
+        keep: usize,
+    },
+    /// Verify a backup without opening it as the live database.
+    #[command(name = "verify-backup")]
+    VerifyBackup {
+        /// Backup file to check.
+        path: PathBuf,
+    },
     /// Roll back reversible migrations. Refuses to cross an irreversible one.
     #[command(name = "migrate-down")]
     MigrateDown {
@@ -273,6 +288,33 @@ fn run(cli: Cli) -> Result<(), CliError> {
     let passphrase = cli.passphrase.clone();
     match cli.command {
         None | Some(Command::Gui) => app::run().map_err(|error| CliError::Gui(error.to_string())),
+        Some(Command::Backup { to, keep }) => {
+            let passphrase = resolve_passphrase(passphrase)?;
+            let key_store = KeyStore::open(&keystore, &passphrase)?;
+            let session = Session::unlock(&database, &keystore, &passphrase)?;
+            let directory = to.unwrap_or_else(|| {
+                database
+                    .parent()
+                    .map(|parent| parent.join("backups"))
+                    .unwrap_or_else(|| PathBuf::from("backups"))
+            });
+
+            let report =
+                store::backup::backup(session.database(), &key_store, &directory, &store::now_rfc3339(), keep)?;
+            println!("backup: {} ({} bytes, verified)", report.path.display(), report.bytes);
+            for removed in &report.removed {
+                println!("pruned: {}", removed.display());
+            }
+            Ok(())
+        }
+        Some(Command::VerifyBackup { path }) => {
+            let passphrase = resolve_passphrase(passphrase)?;
+            let key_store = KeyStore::open(&keystore, &passphrase)?;
+            let events = store::backup::verify(&path, key_store.dek())?;
+            println!("backup verified: {}", path.display());
+            println!("audit:           {events} events verified");
+            Ok(())
+        }
         Some(Command::Init) => {
             let passphrase = resolve_passphrase(passphrase.clone())?;
             let session = Session::create(&database, &keystore, &passphrase)?;

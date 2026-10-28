@@ -633,6 +633,15 @@ random DEK (32 B) ─────────── AES-256-GCM wrap ───�
 Backups use `VACUUM INTO '<path>'` (inherits encryption), and the app verifies a
 restored copy's audit chain before declaring success.
 
+Rotation is deliberate rather than left to a folder sync: `store::backup` writes
+`backup-<compact stamp>.db` into a directory, opens the copy read-only and checks
+`PRAGMA integrity_check` plus the audit chain, and only then prunes the oldest
+copies beyond the retention limit. A copy that fails verification is kept and
+reported — it may still be the only evidence of what went wrong. Verification
+never opens the copy writable, so judging a backup cannot repair it. Restore is a
+file copy onto a clean machine plus the same keystore; `bonk verify-backup`
+checks a copy without touching the live database.
+
 ### 7.3 Core schema
 
 ```sql

@@ -137,7 +137,7 @@ impl Database {
 }
 
 #[cfg(feature = "sqlcipher")]
-fn apply_key(conn: &Connection, dek: &[u8; 32]) -> Result<(), StoreError> {
+pub(crate) fn apply_key(conn: &Connection, dek: &[u8; 32]) -> Result<(), StoreError> {
     use std::fmt::Write as _;
 
     let mut hex = String::with_capacity(64);
@@ -151,13 +151,13 @@ fn apply_key(conn: &Connection, dek: &[u8; 32]) -> Result<(), StoreError> {
 }
 
 #[cfg(all(not(feature = "sqlcipher"), feature = "plain"))]
-fn apply_key(_conn: &Connection, _dek: &[u8; 32]) -> Result<(), StoreError> {
+pub(crate) fn apply_key(_conn: &Connection, _dek: &[u8; 32]) -> Result<(), StoreError> {
     // Test-only: the keystore still works, the file is not encrypted.
     Ok(())
 }
 
 #[cfg(all(not(feature = "sqlcipher"), not(feature = "plain")))]
-fn apply_key(_conn: &Connection, _dek: &[u8; 32]) -> Result<(), StoreError> {
+pub(crate) fn apply_key(_conn: &Connection, _dek: &[u8; 32]) -> Result<(), StoreError> {
     Err(StoreError::FeatureDisabled("sqlcipher"))
 }
 

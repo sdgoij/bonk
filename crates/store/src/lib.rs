@@ -14,6 +14,7 @@
 #![forbid(unsafe_code)]
 
 pub mod audit;
+pub mod backup;
 pub mod db;
 mod dto;
 pub mod error;
@@ -21,6 +22,7 @@ pub mod keystore;
 pub mod migrations;
 pub mod repo;
 
+pub use backup::{BackupReport, RETENTION};
 pub use db::Database;
 pub use error::StoreError;
 pub use keystore::{KdfParams, KeyStore};

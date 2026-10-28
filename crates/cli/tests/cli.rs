@@ -429,6 +429,25 @@ fn full_slice_through_the_cli() {
     args.extend(common);
     let verified = bonk_ok(&args);
     assert!(verified.contains("audit:    8 events verified"), "{verified}");
+
+    // A backup must verify and be restorable with the same keystore.
+    let backups = dir.path().join("backups");
+    let mut args = vec!["backup", "--to", backups.to_str().expect("utf-8")];
+    args.extend(common);
+    let said = bonk_ok(&args);
+    assert!(said.contains("verified"), "{said}");
+
+    let backup_file = std::fs::read_dir(&backups)
+        .expect("backup directory")
+        .next()
+        .expect("one backup")
+        .expect("readable entry")
+        .path();
+    let mut args = vec!["verify-backup", backup_file.to_str().expect("utf-8")];
+    args.extend(common);
+    let said = bonk_ok(&args);
+    assert!(said.contains("backup verified"), "{said}");
+    assert!(said.contains("events verified"), "{said}");
 }
 
 #[test]

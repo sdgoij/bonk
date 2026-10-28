@@ -119,6 +119,8 @@ bonk export --format csv --out invoices.csv
 bonk approve 2026-0001
 bonk mark-paid 2026-0001
 bonk verify
+bonk backup --to ./backups --keep 10
+bonk verify-backup ./backups/backup-20261028T120000Z.db
 ```
 
 Peppol BIS 3.0 requires an endpoint identifier for both parties and a buyer or
@@ -156,6 +158,13 @@ JSON (for tooling), with the same filters and an optional query. Amounts are
 decimal strings in both formats, and an empty export is a header or an empty
 array rather than an error. Standard output is the default; `--out` writes a
 file.
+
+`backup` takes a verified encrypted copy (`VACUUM INTO`, so it inherits the key)
+and prunes older copies beyond `--keep`; nothing is pruned until the new copy has
+passed an integrity check and the audit chain. `verify-backup` checks a copy
+without opening the live database. Restoring is a file copy onto the clean
+machine plus the same keystore — stop the application first, replace the database
+file, then run `bonk verify`.
 
 `credit-note` copies an issued invoice into a credit-note draft: same customer,
 currency, and lines, with BG-3 naming the invoice it corrects. Credit notes use
