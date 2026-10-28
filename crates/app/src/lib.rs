@@ -305,15 +305,21 @@ fn data_dir() -> PathBuf {
 /// The application's UI state.
 enum UiState {
     Locked {
-        passphrase: String,
-        /// Set while the user is confirming a new archive's passphrase.
-        confirmation: Option<String>,
+        form: LockForm,
         error: Option<String>,
     },
     Unlocked {
         session: Session,
         workspace: Box<Workspace>,
     },
+}
+
+/// What the lock screen is asking for.
+enum LockForm {
+    /// Open an existing archive.
+    Unlock { passphrase: String },
+    /// Create a new one, which takes the phrase twice.
+    Create { passphrase: String, confirmation: String },
 }
 
 /// The egui application.
@@ -331,8 +337,9 @@ impl Default for BonkApp {
             database_path: database.display().to_string(),
             keystore_path: keystore.display().to_string(),
             state: UiState::Locked {
-                passphrase: String::new(),
-                confirmation: None,
+                form: LockForm::Unlock {
+                    passphrase: String::new(),
+                },
                 error: None,
             },
             idle: idle::IdleLock::new(idle::configured_timeout(), std::time::Instant::now()),
@@ -358,7 +365,11 @@ impl BonkApp {
     }
 
     fn unlock(&mut self) {
-        let UiState::Locked { passphrase, .. } = &self.state else {
+        let UiState::Locked {
+            form: LockForm::Unlock { passphrase },
+            ..
+        } = &self.state
+        else {
             return;
         };
         // The copy is wiped when it drops; the form's own buffer is wiped by
@@ -373,16 +384,13 @@ impl BonkApp {
 
     fn create(&mut self) {
         let UiState::Locked {
-            passphrase,
-            confirmation,
+            form: LockForm::Create {
+                passphrase,
+                confirmation,
+            },
             ..
         } = &self.state
         else {
-            return;
-        };
-        // Creating is a two-step flow: without a confirmation there is nothing
-        // to compare against, so the action is ignored.
-        let Some(confirmation) = confirmation else {
             return;
         };
         if let Err(reason) = confirm(passphrase, confirmation) {
@@ -421,21 +429,22 @@ impl BonkApp {
         }
     }
 
-    /// Wipes the unlock form's editor buffer.
+    /// Wipes the lock screen's editor buffers.
     ///
-    /// egui's `TextEdit` writes into a plain `String`, so the buffer is wiped
-    /// here rather than on drop; dropping it would leave the bytes in the
+    /// egui's `TextEdit` writes into a plain `String`, so the buffers are wiped
+    /// here rather than on drop; dropping them would leave the bytes in the
     /// allocator.
     fn wipe_passphrase_buffer(&mut self) {
-        if let UiState::Locked {
-            passphrase,
-            confirmation,
-            ..
-        } = &mut self.state
-        {
-            passphrase.zeroize();
-            if let Some(confirmation) = confirmation {
-                confirmation.zeroize();
+        if let UiState::Locked { form, .. } = &mut self.state {
+            match form {
+                LockForm::Unlock { passphrase } => passphrase.zeroize(),
+                LockForm::Create {
+                    passphrase,
+                    confirmation,
+                } => {
+                    passphrase.zeroize();
+                    confirmation.zeroize();
+                }
             }
         }
     }
@@ -450,36 +459,49 @@ impl BonkApp {
         match action {
             Action::Unlock => self.unlock(),
             Action::BeginCreate => {
-                if let UiState::Locked {
-                    passphrase,
-                    confirmation,
-                    error,
-                } = &mut self.state
-                {
-                    if passphrase.trim().is_empty() {
-                        *error = Some("enter a passphrase first".to_owned());
-                    } else {
-                        *confirmation = Some(String::new());
-                        *error = None;
-                    }
+                let UiState::Locked { form, error } = &mut self.state else {
+                    return;
+                };
+                let LockForm::Unlock { passphrase } = form else {
+                    return;
+                };
+                if passphrase.trim().is_empty() {
+                    *error = Some("enter a passphrase first".to_owned());
+                } else {
+                    // The phrase typed for unlocking is the one being
+                    // confirmed, so it moves into the new form rather than
+                    // being copied and left behind.
+                    let passphrase = std::mem::take(passphrase);
+                    *form = LockForm::Create {
+                        passphrase,
+                        confirmation: String::new(),
+                    };
+                    *error = None;
                 }
             }
             Action::Create => self.create(),
             Action::CancelCreate => {
-                if let UiState::Locked {
-                    confirmation, error, ..
-                } = &mut self.state
-                {
-                    if let Some(mut abandoned) = confirmation.take() {
-                        abandoned.zeroize();
-                    }
-                    *error = None;
-                }
+                let UiState::Locked { form, error } = &mut self.state else {
+                    return;
+                };
+                let LockForm::Create {
+                    passphrase,
+                    confirmation,
+                } = form
+                else {
+                    return;
+                };
+                confirmation.zeroize();
+                *form = LockForm::Unlock {
+                    passphrase: std::mem::take(passphrase),
+                };
+                *error = None;
             }
             Action::Lock => {
                 self.state = UiState::Locked {
-                    passphrase: String::new(),
-                    confirmation: None,
+                    form: LockForm::Unlock {
+                        passphrase: String::new(),
+                    },
                     error: None,
                 };
             }
@@ -547,14 +569,13 @@ impl eframe::App for BonkApp {
         egui::CentralPanel::default().show(ui, |ui| {
             let mut action = None;
             match &mut self.state {
-                UiState::Locked {
-                    passphrase,
-                    confirmation,
-                    error,
-                } => {
+                UiState::Locked { form, error } => {
                     ui.heading("Bonk");
-                    match confirmation {
-                        Some(confirmation) => {
+                    match form {
+                        LockForm::Create {
+                            passphrase,
+                            confirmation,
+                        } => {
                             ui.label(
                                 "A new archive is created empty and sealed with this passphrase. \
                                  Nothing else can open it, so type it twice.",
@@ -579,7 +600,7 @@ impl eframe::App for BonkApp {
                                 }
                             });
                         }
-                        None => {
+                        LockForm::Unlock { passphrase } => {
                             ui.label("Local-first invoicing. Nothing leaves this machine unless you send it.");
                             ui.add_space(12.0);
 
@@ -673,8 +694,9 @@ mod tests {
             database_path: database.display().to_string(),
             keystore_path: keystore.display().to_string(),
             state: UiState::Locked {
-                passphrase: "wrong-canary".to_owned(),
-                confirmation: None,
+                form: LockForm::Unlock {
+                    passphrase: "wrong-canary".to_owned(),
+                },
                 error: None,
             },
             ..Default::default()
@@ -683,7 +705,11 @@ mod tests {
         app.apply(Action::Unlock);
 
         {
-            let UiState::Locked { passphrase, error, .. } = &app.state else {
+            let UiState::Locked {
+                form: LockForm::Unlock { passphrase },
+                error,
+            } = &app.state
+            else {
                 panic!("a wrong passphrase must not unlock the archive");
             };
             assert_eq!(passphrase, "wrong-canary", "a retry needs the text still there");
@@ -692,7 +718,11 @@ mod tests {
 
         app.wipe_passphrase_buffer();
 
-        let UiState::Locked { passphrase, .. } = &app.state else {
+        let UiState::Locked {
+            form: LockForm::Unlock { passphrase },
+            ..
+        } = &app.state
+        else {
             panic!("wiping the buffer must not change the state");
         };
         assert!(passphrase.is_empty(), "a used buffer must hold no passphrase");
@@ -710,8 +740,9 @@ mod tests {
     fn a_creation_without_a_passphrase_does_not_start() {
         let mut app = BonkApp {
             state: UiState::Locked {
-                passphrase: "   ".to_owned(),
-                confirmation: None,
+                form: LockForm::Unlock {
+                    passphrase: "   ".to_owned(),
+                },
                 error: None,
             },
             ..Default::default()
@@ -722,9 +753,8 @@ mod tests {
         assert!(matches!(
             &app.state,
             UiState::Locked {
-                confirmation: None,
+                form: LockForm::Unlock { .. },
                 error: Some(message),
-                ..
             } if message.contains("enter a passphrase")
         ));
     }
@@ -739,8 +769,9 @@ mod tests {
             database_path: database.display().to_string(),
             keystore_path: keystore.display().to_string(),
             state: UiState::Locked {
-                passphrase: "first-canary".to_owned(),
-                confirmation: None,
+                form: LockForm::Unlock {
+                    passphrase: "first-canary".to_owned(),
+                },
                 error: None,
             },
             ..Default::default()
@@ -751,16 +782,20 @@ mod tests {
             matches!(
                 &app.state,
                 UiState::Locked {
-                    confirmation: Some(entry),
+                    form: LockForm::Create { passphrase, confirmation },
                     ..
-                } if entry.is_empty()
+                } if passphrase == "first-canary" && confirmation.is_empty()
             ),
-            "beginning a creation asks for the passphrase again"
+            "beginning a creation keeps the phrase and asks for it again"
         );
 
         // A different entry creates nothing and says why.
-        if let UiState::Locked { confirmation, .. } = &mut app.state {
-            *confirmation = Some("second-canary".to_owned());
+        if let UiState::Locked {
+            form: LockForm::Create { confirmation, .. },
+            ..
+        } = &mut app.state
+        {
+            *confirmation = "second-canary".to_owned();
         }
         app.apply(Action::Create);
         assert!(!database.exists(), "a mismatched confirmation must not write");
@@ -773,8 +808,12 @@ mod tests {
         ));
 
         // The same entry twice writes the archive and unlocks it.
-        if let UiState::Locked { confirmation, .. } = &mut app.state {
-            *confirmation = Some("first-canary".to_owned());
+        if let UiState::Locked {
+            form: LockForm::Create { confirmation, .. },
+            ..
+        } = &mut app.state
+        {
+            *confirmation = "first-canary".to_owned();
         }
         app.apply(Action::Create);
         assert!(database.exists());
@@ -785,8 +824,10 @@ mod tests {
     fn backing_out_of_a_creation_wipes_the_confirmation() {
         let mut app = BonkApp {
             state: UiState::Locked {
-                passphrase: "first-canary".to_owned(),
-                confirmation: Some("first-canary".to_owned()),
+                form: LockForm::Create {
+                    passphrase: "first-canary".to_owned(),
+                    confirmation: "first-canary".to_owned(),
+                },
                 error: Some("the passphrases do not match".to_owned()),
             },
             ..Default::default()
@@ -797,10 +838,9 @@ mod tests {
         assert!(matches!(
             &app.state,
             UiState::Locked {
-                confirmation: None,
+                form: LockForm::Unlock { passphrase },
                 error: None,
-                ..
-            }
+            } if passphrase == "first-canary"
         ));
     }
 
