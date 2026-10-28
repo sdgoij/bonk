@@ -193,6 +193,36 @@ pub mod workspace {
     pub fn unencrypted_warning(_: Language) -> &'static str {
         "UNENCRYPTED BUILD - test only, never store real data"
     }
+
+    /// Hides the last message.
+    pub fn dismiss_action(_: Language) -> &'static str {
+        "Dismiss"
+    }
+}
+
+/// The navigation rail. The rail shows icons; these are the names they carry.
+pub mod tabs {
+    use super::Language;
+
+    /// Find documents.
+    pub fn search(_: Language) -> &'static str {
+        "Search"
+    }
+
+    /// Start an invoice.
+    pub fn create(_: Language) -> &'static str {
+        "Create"
+    }
+
+    /// The party list.
+    pub fn customers(_: Language) -> &'static str {
+        "Customers"
+    }
+
+    /// Archive settings.
+    pub fn settings(_: Language) -> &'static str {
+        "Settings"
+    }
 }
 
 /// The find screen and the document it opens.
@@ -208,6 +238,11 @@ pub mod find {
     /// The keyboard hint beside the heading.
     pub fn shortcut(_: Language) -> &'static str {
         "Ctrl+F"
+    }
+
+    /// Hint in the search field.
+    pub fn hint(_: Language) -> &'static str {
+        "Search number, party, reference, or note"
     }
 
     /// Runs the query.
@@ -298,9 +333,14 @@ pub mod find {
     pub fn footer(language: Language, count: usize, limit: u32) -> String {
         match language {
             Language::English => {
-                format!("{count} document(s), best match or newest first, at most {limit}. Click a number to read it.")
+                format!("{count} document(s), best match or newest first, at most {limit}. Select a row to read it.")
             }
         }
+    }
+
+    /// Above the results, for the first visit.
+    pub fn sort_hint(_: Language) -> &'static str {
+        "Click a heading to sort; drag the edge between headings to resize."
     }
 
     /// The heading of an opened document.
@@ -399,6 +439,190 @@ pub mod find {
     }
 }
 
+/// The customer tab.
+pub mod customers {
+    use super::Language;
+
+    /// The tab heading.
+    pub fn title(_: Language) -> &'static str {
+        "Customers"
+    }
+
+    /// Hint in the filter field.
+    pub fn filter_hint(_: Language) -> &'static str {
+        "Filter by name, city, or VAT"
+    }
+
+    /// Opens the new-customer form.
+    pub fn new_customer_action(_: Language) -> &'static str {
+        "New customer"
+    }
+
+    /// Closes the new-customer form.
+    pub fn cancel_action(_: Language) -> &'static str {
+        "Cancel"
+    }
+
+    /// Table headings, in order.
+    pub fn columns(_: Language) -> [&'static str; 5] {
+        ["Name", "City", "Country", "VAT", "Peppol"]
+    }
+
+    /// Nothing on file.
+    pub fn empty(_: Language) -> &'static str {
+        "No customers yet. Add one below, or import a CSV."
+    }
+
+    /// The filter found nothing.
+    pub fn no_matches(_: Language) -> &'static str {
+        "No customers match that filter."
+    }
+
+    /// Label above the CSV path.
+    pub fn path_label(_: Language) -> &'static str {
+        "CSV file"
+    }
+
+    /// Reads the CSV.
+    pub fn import_action(_: Language) -> &'static str {
+        "Import"
+    }
+
+    /// Writes the CSV.
+    pub fn export_action(_: Language) -> &'static str {
+        "Export"
+    }
+
+    /// What the file holds.
+    pub fn csv_note(_: Language) -> &'static str {
+        "Columns: name, street, postal, city, country, vat, peppol, contact, email."
+    }
+
+    /// A successful export.
+    pub fn exported(language: Language, count: usize, path: &str) -> String {
+        match language {
+            Language::English => format!("Exported {count} customer(s) to {path}."),
+        }
+    }
+
+    /// A successful import.
+    pub fn imported(language: Language, imported: usize, skipped: usize, errors: usize) -> String {
+        match language {
+            Language::English => {
+                let mut text = format!("Imported {imported} customer(s); {skipped} already on file");
+                if errors > 0 {
+                    text.push_str(&format!(", {errors} row(s) skipped with an error"));
+                }
+                text.push('.');
+                text
+            }
+        }
+    }
+
+    /// Why a file operation failed.
+    pub fn failed(language: Language, error: &str) -> String {
+        match language {
+            Language::English => format!("The customer file could not be read: {error}"),
+        }
+    }
+}
+
+/// The settings tab.
+pub mod settings {
+    use super::Language;
+
+    /// The tab heading.
+    pub fn title(_: Language) -> &'static str {
+        "Settings"
+    }
+
+    /// The appearance card.
+    pub fn appearance(_: Language) -> &'static str {
+        "Appearance"
+    }
+
+    /// Follow the operating system.
+    pub fn theme_system(_: Language) -> &'static str {
+        "System"
+    }
+
+    /// The light theme.
+    pub fn theme_light(_: Language) -> &'static str {
+        "Light"
+    }
+
+    /// The dark theme.
+    pub fn theme_dark(_: Language) -> &'static str {
+        "Dark"
+    }
+
+    /// What the choice means.
+    pub fn theme_note(_: Language) -> &'static str {
+        "Follows the operating system unless you choose otherwise."
+    }
+
+    /// The archive card.
+    pub fn archive(_: Language) -> &'static str {
+        "Archive"
+    }
+
+    /// The database path.
+    pub fn database(_: Language) -> &'static str {
+        "Database"
+    }
+
+    /// The encryption label.
+    pub fn encryption(_: Language) -> &'static str {
+        "Encryption"
+    }
+
+    /// The health card.
+    pub fn health(_: Language) -> &'static str {
+        "Archive health"
+    }
+
+    /// The backup card.
+    pub fn backup(_: Language) -> &'static str {
+        "Backup"
+    }
+
+    /// What a backup is.
+    pub fn backup_note(_: Language) -> &'static str {
+        "A verified, encrypted copy kept beside the archive."
+    }
+
+    /// Runs a backup now.
+    pub fn backup_now(_: Language) -> &'static str {
+        "Back up now"
+    }
+
+    /// Where backups go.
+    pub fn backup_directory(language: Language, path: &str) -> String {
+        match language {
+            Language::English => format!("Backups: {path}"),
+        }
+    }
+
+    /// A successful backup.
+    pub fn backup_done(language: Language, path: &str, kilobytes: u64) -> String {
+        match language {
+            Language::English => format!("Backed up to {path} ({kilobytes} KB), verified."),
+        }
+    }
+
+    /// Why a backup failed.
+    pub fn backup_failed(language: Language, error: &str) -> String {
+        match language {
+            Language::English => format!("The backup could not be written: {error}"),
+        }
+    }
+
+    /// The credentials card.
+    pub fn credentials(_: Language) -> &'static str {
+        "Credentials"
+    }
+}
+
 /// The seller and customer forms, the invoice editor, and what follows issuing.
 pub mod editor {
     use super::Language;
@@ -474,6 +698,16 @@ pub mod editor {
     /// Nothing has been started yet.
     pub fn empty_editor(_: Language) -> &'static str {
         "Open a new invoice to start. Existing drafts are not listed yet."
+    }
+
+    /// The editor needs a party to bill.
+    pub fn no_customers(_: Language) -> &'static str {
+        "Add a customer before starting an invoice."
+    }
+
+    /// Switches to the customer tab.
+    pub fn go_to_customers(_: Language) -> &'static str {
+        "Go to customers"
     }
 
     /// The name of the seller the workspace belongs to.

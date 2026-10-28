@@ -7,12 +7,18 @@
 
 #![forbid(unsafe_code)]
 
+pub mod customers;
 pub mod export;
 pub mod health;
 pub mod idle;
 pub mod strength;
+mod table;
 pub mod text;
+pub mod theme;
 mod workspace;
+
+/// Marks the context as styled, so installing is not repeated every frame.
+const THEME_INSTALLED: &str = "bonk.theme-installed";
 
 use std::path::{Path, PathBuf};
 
@@ -47,6 +53,9 @@ pub struct Session {
     database: Database,
     database_path: PathBuf,
     keystore_path: PathBuf,
+    /// The data key, kept so the window can write a verified backup without
+    /// asking for the passphrase again. It is the same key SQLCipher is using.
+    dek: Zeroizing<[u8; 32]>,
 }
 
 impl Session {
@@ -69,11 +78,13 @@ impl Session {
         }
 
         let keystore = KeyStore::create(&keystore_path, passphrase, KdfParams::DEFAULT)?;
+        let dek = Zeroizing::new(*keystore.dek());
         let database = Database::create(&database_path, &keystore)?;
         Ok(Self {
             database,
             database_path,
             keystore_path,
+            dek,
         })
     }
 
@@ -86,11 +97,13 @@ impl Session {
         let database_path = database_path.as_ref().to_path_buf();
         let keystore_path = keystore_path.as_ref().to_path_buf();
         let keystore = KeyStore::open(&keystore_path, passphrase)?;
+        let dek = Zeroizing::new(*keystore.dek());
         let database = Database::open(&database_path, &keystore)?;
         Ok(Self {
             database,
             database_path,
             keystore_path,
+            dek,
         })
     }
 
@@ -225,16 +238,17 @@ impl Session {
     ) -> Result<Self, StoreError> {
         let database_path = database_path.as_ref().to_path_buf();
         let keystore_path = keystore_path.as_ref().to_path_buf();
-        let key = store::device::recall(store, &keystore_path)?.ok_or_else(|| {
-            StoreError::Rejected(
+        let Some(dek) = store::device::recall(store, &keystore_path)? else {
+            return Err(StoreError::Rejected(
                 "this device has no key for that archive; unlock with the passphrase once and remember it".to_owned(),
-            )
-        })?;
-        let database = Database::open_with_key(&database_path, &key)?;
+            ));
+        };
+        let database = Database::open_with_key(&database_path, &dek)?;
         Ok(Self {
             database,
             database_path,
             keystore_path,
+            dek,
         })
     }
 
@@ -260,6 +274,7 @@ impl Session {
             other => other,
         })?;
         let database = Database::open(&database_path, &keystore)?;
+        let dek = Zeroizing::new(*keystore.dek());
 
         keystore.change_passphrase(new_passphrase)?;
         let replacement = keystore.enable_recovery(new_passphrase)?;
@@ -281,9 +296,20 @@ impl Session {
                 database,
                 database_path,
                 keystore_path,
+                dek,
             },
             replacement,
         ))
+    }
+
+    /// Writes a verified, encrypted backup using the key this session opened with.
+    pub fn backup(
+        &self,
+        directory: impl AsRef<Path>,
+        stamp: &str,
+        keep: usize,
+    ) -> Result<store::BackupReport, StoreError> {
+        store::backup::backup_with_key(&self.database, &self.dek, directory, stamp, keep)
     }
 }
 
@@ -484,6 +510,8 @@ pub struct BonkApp {
     language: text::Language,
     /// True when this device holds the key for the configured archive.
     device_ready: bool,
+    /// The chosen appearance, kept so `save` can write it down.
+    appearance: egui::ThemePreference,
 }
 
 impl Default for BonkApp {
@@ -501,6 +529,7 @@ impl Default for BonkApp {
             idle: idle::IdleLock::new(idle::configured_timeout(), std::time::Instant::now()),
             language: text::Language::default(),
             device_ready: Self::device_ready_for(&keystore.display().to_string()),
+            appearance: egui::ThemePreference::System,
         }
     }
 }
@@ -525,6 +554,19 @@ impl BonkApp {
     /// Creates the app with its default paths.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Creates the app, installs the theme, and restores the appearance choice.
+    fn new_with_context(context: &eframe::CreationContext<'_>) -> Self {
+        theme::install(&context.egui_ctx);
+        let mut app = Self::default();
+        if let Some(storage) = context.storage
+            && let Some(name) = storage.get_string(theme::STORAGE_KEY)
+        {
+            app.appearance = theme::from_name(&name).unwrap_or_default();
+        }
+        theme::set(&context.egui_ctx, app.appearance);
+        app
     }
 
     fn unlock(&mut self) {
@@ -861,11 +903,12 @@ pub(crate) fn strength_row(ui: &mut egui::Ui, language: text::Language, passphra
     if passphrase.is_empty() {
         return;
     }
+    let tokens = theme::palette(ui.ctx());
     let assessment = strength::assess(passphrase);
     let colour = match assessment.strength {
-        strength::Strength::Weak => ui.visuals().error_fg_color,
-        strength::Strength::Fair => ui.visuals().warn_fg_color,
-        strength::Strength::Strong => egui::Color32::from_rgb(76, 175, 80),
+        strength::Strength::Weak => tokens.error,
+        strength::Strength::Fair => tokens.warning,
+        strength::Strength::Strong => tokens.success,
     };
     ui.add_space(2.0);
     ui.horizontal(|ui| {
@@ -878,6 +921,16 @@ pub(crate) fn strength_row(ui: &mut egui::Ui, language: text::Language, passphra
 
 impl eframe::App for BonkApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        // A window created outside `run` has not been styled yet; do it once.
+        let installed = ui
+            .ctx()
+            .data(|data| data.get_temp::<bool>(egui::Id::unique(THEME_INSTALLED)));
+        if installed != Some(true) {
+            theme::install(ui.ctx());
+            ui.ctx()
+                .data_mut(|data| data.insert_temp(egui::Id::unique(THEME_INSTALLED), true));
+        }
+
         // Any event counts as activity: a pointer move, a key, a scroll, a focus
         // change. The clock is checked before drawing, so a due lock shows the
         // unlock screen on this frame rather than the next.
@@ -971,7 +1024,7 @@ impl eframe::App for BonkApp {
                                 ui.label(egui::RichText::new(key.as_str()).monospace());
                                 ui.add_space(8.0);
                                 ui.colored_label(
-                                    egui::Color32::from_rgb(190, 140, 40),
+                                    theme::palette(ui.ctx()).warning,
                                     text::shell::keep_key_note(language),
                                 );
                                 ui.add_space(8.0);
@@ -1010,11 +1063,11 @@ impl eframe::App for BonkApp {
 
                     if let Some(message) = error {
                         ui.add_space(8.0);
-                        ui.colored_label(egui::Color32::from_rgb(200, 60, 60), message);
+                        ui.colored_label(theme::palette(ui.ctx()).error, message);
                     }
                 }
                 UiState::Unlocked { session, workspace } => {
-                    if workspace.ui(ui, session) == WorkspaceAction::Lock {
+                    if workspace.ui(ui, session, &mut self.appearance) == WorkspaceAction::Lock {
                         action = Some(Action::Lock);
                     }
                 }
@@ -1025,12 +1078,25 @@ impl eframe::App for BonkApp {
             }
         });
     }
+
+    fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        storage.set_string(theme::STORAGE_KEY, self.appearance.name().to_owned());
+    }
 }
 
 /// Launches the desktop window.
 pub fn run() -> eframe::Result {
-    let options = eframe::NativeOptions::default();
-    eframe::run_native("Bonk", options, Box::new(|_cc| Ok(Box::new(BonkApp::new()))))
+    let options = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default()
+            .with_inner_size([1280.0, 820.0])
+            .with_min_inner_size([900.0, 560.0]),
+        ..Default::default()
+    };
+    eframe::run_native(
+        "Bonk",
+        options,
+        Box::new(|context| Ok(Box::new(BonkApp::new_with_context(context)))),
+    )
 }
 
 #[cfg(test)]
@@ -1054,6 +1120,23 @@ mod tests {
         let session = Session::unlock(&database, &keystore, "passphrase").unwrap();
         assert_eq!(session.summary().unwrap().sellers, 0);
         assert!(Session::unlock(&database, &keystore, "wrong").is_err());
+    }
+
+    #[test]
+    fn a_session_writes_a_verified_backup() {
+        let dir = TempDir::new().unwrap();
+        let session = Session::create(
+            dir.path().join("bonk.db"),
+            dir.path().join("keystore.bin"),
+            "passphrase",
+        )
+        .unwrap();
+        let report = session
+            .backup(dir.path().join("backups"), "2026-10-28T12:00:00Z", 5)
+            .unwrap();
+        assert!(report.path.exists());
+        assert!(report.bytes > 0);
+        assert!(report.removed.is_empty());
     }
 
     #[test]

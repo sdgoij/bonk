@@ -156,6 +156,15 @@ existing archive unless `--force` is given. The data is deterministic: the same
 the same repository functions the rest of the app uses, so `bonk verify` passes
 on it.
 
+### The window
+
+The window is a four-tab shell: a thin icon rail on the left switches **Search**,
+**Create**, **Customers**, and **Settings**. Search is a continuous table over
+the archive; typing or changing a filter re-runs it, a row opens in place with the
+stored document, and headings sort when clicked and resize when dragged. Settings
+holds appearance (System, Light, Dark), archive health, verified backups, and
+credentials. Labels are not selectable, and light and dark share one layout.
+
 Peppol BIS 3.0 requires an endpoint identifier for both parties and a buyer or
 order reference, and a Dutch seller also needs a street, a post code, and a KvK
 number. Omitting them is a blocking finding, not a warning, because the recipient

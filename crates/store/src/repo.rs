@@ -1135,9 +1135,10 @@ pub fn list_received(conn: &Connection, owner_id: SellerId) -> Result<Vec<Receiv
 
 /// Most results one search returns.
 ///
-/// A search box is not a report: the caller narrows with filters rather than
-/// scrolling. The cap keeps a one-letter query from loading the archive.
-pub const SEARCH_LIMIT: u32 = 100;
+/// The window lists the archive on an empty query, so this is high enough that
+/// a normal SME archive is shown whole; it is still a bound, because drawing
+/// every row of a very large archive in one frame is not a browse view.
+pub const SEARCH_LIMIT: u32 = 1_000;
 
 /// Which side of the books a document is on.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

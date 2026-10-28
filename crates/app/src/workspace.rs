@@ -3,6 +3,12 @@
 //! The UI never touches SQL directly; it builds a domain draft, asks the domain
 //! for totals and findings, and calls the same store functions as the CLI.
 
+// Panel and column geometry is floating point. Amounts are integers from `crux`
+// and never pass through this arithmetic.
+#![allow(clippy::float_arithmetic)]
+
+use std::path::{Path, PathBuf};
+
 use crux::{
     Address, CountryCode, Currency, CustomerId, DocType, DocumentId, DraftLine, Finding, InvoiceDraft, LineId,
     LocalDate, Money, Party, PrecedingInvoice, Quantity, SavedSearchId, SellerId, Severity, TaxTreatment, UnitCode,
@@ -17,14 +23,13 @@ use store::{
 use zeroize::Zeroize;
 
 use crate::Session;
+use crate::customers;
 use crate::health::Health;
+use crate::table::{Cell, Table};
 use crate::text::editor::Field;
 use crate::text::find::Fact;
 use crate::text::{self, Language};
-
-const ERROR_COLOR: egui::Color32 = egui::Color32::from_rgb(200, 60, 60);
-const WARN_COLOR: egui::Color32 = egui::Color32::from_rgb(190, 140, 40);
-const OK_COLOR: egui::Color32 = egui::Color32::from_rgb(70, 150, 90);
+use crate::theme;
 
 const CATEGORIES: [VatCategory; 6] = [
     VatCategory::Standard,
@@ -34,6 +39,20 @@ const CATEGORIES: [VatCategory; 6] = [
     VatCategory::IntraCommunity,
     VatCategory::Export,
 ];
+
+/// The four places the window can be.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+enum Tab {
+    /// Find and read documents.
+    #[default]
+    Search,
+    /// Write a new invoice.
+    Create,
+    /// The party list.
+    Customers,
+    /// Archive health, backups, and credentials.
+    Settings,
+}
 
 /// What the shell should do after drawing the workspace.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -51,6 +70,8 @@ pub struct Workspace {
     seller_form: SellerForm,
     customer_form: CustomerForm,
     show_customer_form: bool,
+    customers_view: CustomersView,
+    tab: Tab,
     editor: Option<Editor>,
     issued: Option<DocumentRecord>,
     pdf: Option<PdfDocument>,
@@ -69,15 +90,20 @@ pub struct Workspace {
 }
 
 /// The find panel's state, kept apart from the drawing code so it can be tested.
-#[derive(Default)]
 struct SearchView {
     query: String,
     direction: Option<Direction>,
     status: Option<DocumentStatus>,
     results: Vec<SearchHit>,
+    /// Column shares and the chosen sort.
+    table: Table,
+    /// The request the visible results came from, so a change can re-run it.
+    last_request: Option<(String, Option<Direction>, Option<DocumentStatus>)>,
     /// True once a query has run, which is what separates "nothing found" from
     /// "nothing asked yet".
     ran: bool,
+    /// Why the last query failed, if it did.
+    query_error: Option<String>,
     /// The result the user opened, read back from the archive.
     opened: Option<DocumentView>,
     /// Why the last attempt to open a result failed, if it did.
@@ -92,7 +118,41 @@ struct SearchView {
     saved_error: Option<String>,
 }
 
+impl Default for SearchView {
+    fn default() -> Self {
+        Self {
+            query: String::new(),
+            direction: None,
+            status: None,
+            results: Vec::new(),
+            table: Table::new(&[1.2, 0.8, 2.6, 1.0, 1.1, 1.0]),
+            last_request: None,
+            ran: false,
+            query_error: None,
+            opened: None,
+            open_error: None,
+            saved: Vec::new(),
+            save_name: String::new(),
+            applied: None,
+            saved_error: None,
+        }
+    }
+}
+
+/// What the customer tab holds between frames.
+struct CustomersView {
+    filter: String,
+    table: Table,
+    /// Where import reads and export writes.
+    path: String,
+}
+
 impl SearchView {
+    /// The filters currently on screen. A query re-runs when this changes.
+    fn request_key(&self) -> (String, Option<Direction>, Option<DocumentStatus>) {
+        (self.query.trim().to_owned(), self.direction, self.status)
+    }
+
     /// Runs what the panel describes and keeps the result, empty or not.
     fn run(&mut self, database: &store::Database, owner: SellerId) -> Result<(), StoreError> {
         let query = self.query.trim();
@@ -103,9 +163,30 @@ impl SearchView {
             to: None,
             status: self.status,
         };
-        self.results = search(database.connection(), owner, &request)?;
-        self.ran = true;
-        Ok(())
+        let outcome = match search(database.connection(), owner, &request) {
+            Ok(results) => {
+                self.results = results;
+                self.ran = true;
+                self.query_error = None;
+                Ok(())
+            }
+            Err(error) => {
+                self.query_error = Some(error.to_string());
+                Err(error)
+            }
+        };
+        // Record the request even on failure: retrying the same impossible
+        // query every frame would turn one error into a busy loop.
+        self.last_request = Some(self.request_key());
+        self.sort_results();
+        outcome
+    }
+
+    /// Re-applies the chosen sort to the current results.
+    fn sort_results(&mut self) {
+        if let Some((column, descending)) = self.table.sort {
+            sort_hits(&mut self.results, column, descending);
+        }
     }
 
     /// Reads a result back from the archive and shows it.
@@ -403,12 +484,25 @@ impl Workspace {
     /// Loads the seller and customer list for a freshly unlocked session.
     pub fn new(session: &Session) -> Result<Self, StoreError> {
         let connection = session.database().connection();
+        let csv_path = session
+            .database_path()
+            .parent()
+            .unwrap_or(Path::new("."))
+            .join("customers.csv")
+            .display()
+            .to_string();
         let mut workspace = Self {
             seller: first_seller(connection)?,
             customers: list_customers(connection)?,
             seller_form: SellerForm::default(),
             customer_form: CustomerForm::default(),
             show_customer_form: false,
+            customers_view: CustomersView {
+                filter: String::new(),
+                table: Table::new(&[2.6, 1.4, 0.8, 1.6, 1.6]),
+                path: csv_path,
+            },
+            tab: Tab::Search,
             editor: None,
             issued: None,
             pdf: None,
@@ -431,57 +525,73 @@ impl Workspace {
     }
 
     /// Draws the workspace.
-    pub fn ui(&mut self, ui: &mut egui::Ui, session: &mut Session) -> WorkspaceAction {
+    pub fn ui(
+        &mut self,
+        ui: &mut egui::Ui,
+        session: &mut Session,
+        appearance: &mut egui::ThemePreference,
+    ) -> WorkspaceAction {
         let mut lock = false;
         let mut focus = self.focus_request.take();
-        if ui.input(|input| input.modifiers.command && input.key_pressed(egui::Key::F)) {
-            focus = Some("search.query".to_owned());
-        }
-
-        ui.horizontal(|ui| {
-            ui.heading(text::shell::PRODUCT);
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button(text::workspace::lock_action(self.language)).clicked() {
-                    lock = true;
+        let mut requested = None;
+        ui.input(|input| {
+            if input.modifiers.command {
+                if input.key_pressed(egui::Key::F) {
+                    requested = Some(Tab::Search);
+                    focus = Some("search.query".to_owned());
+                } else if input.key_pressed(egui::Key::Num1) {
+                    requested = Some(Tab::Search);
+                } else if input.key_pressed(egui::Key::Num2) {
+                    requested = Some(Tab::Create);
+                } else if input.key_pressed(egui::Key::Num3) {
+                    requested = Some(Tab::Customers);
+                } else if input.key_pressed(egui::Key::Num4) {
+                    requested = Some(Tab::Settings);
                 }
-            });
-        });
-        ui.label(text::workspace::database_line(
-            self.language,
-            &session.database_path().display().to_string(),
-        ));
-        if !store::cipher_enabled() {
-            ui.colored_label(ERROR_COLOR, text::workspace::unencrypted_warning(self.language));
-        }
-        ui.separator();
-
-        if let Some(message) = &self.message {
-            let color = if message.error { ERROR_COLOR } else { OK_COLOR };
-            ui.colored_label(color, message.text.as_str());
-            ui.separator();
-        }
-
-        if !self.conformance_findings.is_empty() {
-            if let Some(action) = show_findings(ui, self.language, &self.conformance_findings) {
-                self.apply_finding_action(action);
             }
-            ui.separator();
+        });
+        if let Some(tab) = requested {
+            self.select_tab(tab);
         }
 
-        if self.seller.is_some() {
-            self.search_ui(ui, session, focus.as_deref());
-            ui.separator();
-        }
+        let rail_frame = egui::Frame::new()
+            .fill(theme::palette(ui.ctx()).rail)
+            .inner_margin(egui::Margin::symmetric(6, 8));
+        egui::Panel::left("workspace-rail")
+            .exact_size(56.0)
+            .resizable(false)
+            .frame(rail_frame)
+            .show(ui, |ui| {
+                lock = self.rail_ui(ui);
+            });
 
-        if self.seller.is_none() {
-            self.seller_onboarding(ui, session, focus.as_deref());
-        } else {
-            self.unlocked_ui(ui, session, focus.as_deref());
-        }
+        self.header_ui(ui);
+        self.message_ui(ui);
 
-        ui.add_space(8.0);
-        self.health_ui(ui, session);
-        self.security_ui(ui, session);
+        match self.tab {
+            Tab::Search => {
+                if self.seller.is_none() {
+                    self.seller_onboarding(ui, session, focus.as_deref());
+                } else {
+                    self.search_ui(ui, session, focus.as_deref());
+                }
+            }
+            Tab::Create => {
+                if self.seller.is_none() {
+                    self.seller_onboarding(ui, session, focus.as_deref());
+                } else {
+                    if !self.conformance_findings.is_empty() {
+                        if let Some(action) = show_findings(ui, self.language, &self.conformance_findings) {
+                            self.apply_finding_action(action);
+                        }
+                        ui.add_space(4.0);
+                    }
+                    self.unlocked_ui(ui, session, focus.as_deref());
+                }
+            }
+            Tab::Customers => self.customers_ui(ui, session, focus.as_deref()),
+            Tab::Settings => self.settings_ui(ui, session, appearance),
+        }
 
         self.suppression_dialog(ui, session);
 
@@ -492,136 +602,272 @@ impl Workspace {
         }
     }
 
-    /// Draws the find panel and runs the query when the user asks for it.
-    ///
-    /// Nothing runs while typing: a search reads the whole index, and a key
-    /// press per character would be work the user did not ask for. Enter or the
-    /// button runs it, and an empty query lists what the filters allow.
+    /// The icon rail: tabs at the top, lock at the bottom.
+    fn rail_ui(&mut self, ui: &mut egui::Ui) -> bool {
+        let language = self.language;
+        ui.vertical_centered(|ui| {
+            ui.add_space(2.0);
+            ui.label(
+                egui::RichText::new("B")
+                    .strong()
+                    .size(18.0)
+                    .color(theme::palette(ui.ctx()).accent),
+            );
+        });
+        ui.add_space(10.0);
+
+        let tabs = [
+            (Tab::Search, theme::Icon::Search, text::tabs::search(language)),
+            (Tab::Create, theme::Icon::Create, text::tabs::create(language)),
+            (Tab::Customers, theme::Icon::Customers, text::tabs::customers(language)),
+            (Tab::Settings, theme::Icon::Settings, text::tabs::settings(language)),
+        ];
+        for (tab, icon, label) in tabs {
+            if theme::rail_button(ui, icon, self.tab == tab, label).clicked() {
+                self.select_tab(tab);
+            }
+            ui.add_space(2.0);
+        }
+
+        let mut lock = false;
+        ui.with_layout(egui::Layout::bottom_up(egui::Align::Center), |ui| {
+            ui.add_space(2.0);
+            if theme::rail_button(ui, theme::Icon::Lock, false, text::workspace::lock_action(language)).clicked() {
+                lock = true;
+            }
+        });
+        lock
+    }
+
+    /// Switches tabs, starting an invoice when Create is entered for the first
+    /// time. Re-entering the tab never discards work already there.
+    fn select_tab(&mut self, tab: Tab) {
+        if tab == Tab::Create && self.tab != Tab::Create && self.editor.is_none() && self.issued.is_none() {
+            let customer = self.customers.first().map(|customer| customer.id);
+            self.editor = Some(Editor::new(customer, self.default_document_language()));
+            self.suppressions.clear();
+            self.suppress_target = None;
+            self.suppression_reason.clear();
+        }
+        self.tab = tab;
+    }
+
+    /// The tab title, the seller, and nothing that scrolls.
+    fn header_ui(&mut self, ui: &mut egui::Ui) {
+        let language = self.language;
+        let title = match self.tab {
+            Tab::Search => text::tabs::search(language),
+            Tab::Create => text::tabs::create(language),
+            Tab::Customers => text::tabs::customers(language),
+            Tab::Settings => text::tabs::settings(language),
+        };
+        ui.horizontal(|ui| {
+            ui.heading(title);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if let Some(seller) = &self.seller {
+                    ui.weak(seller.party.legal_name.as_str());
+                }
+            });
+        });
+        ui.add_space(2.0);
+    }
+
+    /// The archive-wide banner and the last result of an action.
+    fn message_ui(&mut self, ui: &mut egui::Ui) {
+        let language = self.language;
+        let tokens = *theme::palette(ui.ctx());
+        if !store::cipher_enabled() {
+            ui.colored_label(tokens.error, text::workspace::unencrypted_warning(language));
+        }
+        let Some((message, error)) = self
+            .message
+            .as_ref()
+            .map(|message| (message.text.clone(), message.error))
+        else {
+            return;
+        };
+        let colour = if error { tokens.error } else { tokens.success };
+        ui.horizontal(|ui| {
+            ui.colored_label(colour, message.as_str());
+            if ui
+                .small_button("×")
+                .on_hover_text(text::workspace::dismiss_action(language))
+                .clicked()
+            {
+                self.message = None;
+            }
+        });
+        ui.add_space(2.0);
+    }
+
+    /// Draws the find screen. A blank query lists everything; changing any
+    /// filter re-runs the query without a button.
     fn search_ui(&mut self, ui: &mut egui::Ui, session: &Session, focus: Option<&str>) {
         let language = self.language;
-        let mut run = false;
-        let mut clear = false;
-        let mut opened = None;
-        let mut apply_saved = None;
-        let mut save_current = false;
-        let mut delete_saved = false;
-        ui.group(|ui| {
-            ui.horizontal(|ui| {
-                ui.strong(text::find::title(language));
-                ui.weak(text::find::shortcut(language));
-            });
-            ui.horizontal(|ui| {
-                let response = text_field(ui, &mut self.search.query, "search.query", 300.0, focus);
-                if response.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter)) {
-                    run = true;
-                }
-                direction_combo(ui, language, &mut self.search.direction);
-                status_combo(ui, language, &mut self.search.status);
-                if ui.button(text::find::search_action(language)).clicked() {
-                    run = true;
-                }
-                if ui.button(text::find::clear_action(language)).clicked() {
-                    clear = true;
-                }
-            });
+        let Some(owner) = self.seller.as_ref().map(|seller| seller.id) else {
+            return;
+        };
+        let tokens = *theme::palette(ui.ctx());
 
-            ui.horizontal(|ui| {
-                ui.label(text::find::saved_label(language));
-                let selected = self
-                    .search
-                    .applied
-                    .clone()
-                    .unwrap_or_else(|| text::find::no_saved(language).to_owned());
-                egui::ComboBox::from_id_salt("search.saved")
-                    .selected_text(selected)
-                    .show_ui(ui, |ui| {
-                        for search in &self.search.saved {
-                            let chosen = self.search.applied.as_deref() == Some(search.name.as_str());
-                            if ui.selectable_label(chosen, search.name.as_str()).clicked() {
-                                apply_saved = Some(search.name.clone());
-                            }
-                        }
-                    });
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.search.save_name)
-                        .hint_text(text::find::save_name_hint(language))
-                        .desired_width(140.0),
-                );
-                if ui.button(text::find::save_current_action(language)).clicked() {
-                    save_current = true;
-                }
-                let deletable = self.search.applied.is_some();
-                if ui
-                    .add_enabled(deletable, egui::Button::new(text::find::delete_action(language)))
-                    .clicked()
-                {
-                    delete_saved = true;
-                }
-            });
-
-            if let Some(message) = &self.search.saved_error {
-                ui.colored_label(ERROR_COLOR, message.as_str());
+        ui.horizontal(|ui| {
+            let width = (ui.available_width() - 240.0).max(220.0);
+            let response = ui.add(
+                egui::TextEdit::singleline(&mut self.search.query)
+                    .id(egui::Id::unique("search.query"))
+                    .hint_text(text::find::hint(language))
+                    .desired_width(width),
+            );
+            if focus == Some("search.query") {
+                response.request_focus();
             }
-
-            if self.search.ran {
-                if self.search.results.is_empty() {
-                    ui.label(if self.search.query.trim().is_empty() {
-                        text::find::empty_archive(language)
-                    } else {
-                        text::find::no_matches(language)
-                    });
-                } else {
-                    let selected = self.search.opened.as_ref().map(|view| view.id);
-                    if let Some(id) = search_results_ui(ui, language, &self.search.results, selected) {
-                        opened = Some(id);
-                    }
-                }
-            } else {
-                ui.label(text::find::prompt(language));
-            }
-
-            if let Some(message) = &self.search.open_error {
-                ui.colored_label(ERROR_COLOR, message.as_str());
-            }
-
-            let mut close = false;
-            if let Some(view) = &self.search.opened {
-                ui.add_space(8.0);
-                egui::ScrollArea::vertical()
-                    .max_height(360.0)
-                    .id_salt("opened-document")
-                    .show(ui, |ui| {
-                        ui.group(|ui| close = document_panel(ui, language, view));
-                    });
-            }
-            if close {
-                self.search.opened = None;
+            direction_combo(ui, language, &mut self.search.direction);
+            status_combo(ui, language, &mut self.search.status);
+            if ui.button(text::find::clear_action(language)).clicked() {
+                self.search.query.clear();
+                self.search.direction = None;
+                self.search.status = None;
             }
         });
 
-        let owner = self.seller.as_ref().map(|seller| seller.id);
-        if let Some(id) = opened {
-            self.search.open(session.database(), id);
-        }
-        if clear {
-            self.search = SearchView::default();
-        }
-        if run {
-            let Some(owner) = owner else {
-                return;
-            };
-            if let Err(error) = self.search.run(session.database(), owner) {
-                self.message = Some(Message::error(error.to_string()));
+        let mut apply_saved = None;
+        let mut save_current = false;
+        let mut delete_saved = false;
+        ui.horizontal(|ui| {
+            ui.label(text::find::saved_label(language));
+            let selected = self
+                .search
+                .applied
+                .clone()
+                .unwrap_or_else(|| text::find::no_saved(language).to_owned());
+            egui::ComboBox::from_id_salt("search.saved")
+                .selected_text(selected)
+                .show_ui(ui, |ui| {
+                    for saved in &self.search.saved {
+                        let chosen = self.search.applied.as_deref() == Some(saved.name.as_str());
+                        if ui.selectable_label(chosen, saved.name.as_str()).clicked() {
+                            apply_saved = Some(saved.name.clone());
+                        }
+                    }
+                });
+            ui.add(
+                egui::TextEdit::singleline(&mut self.search.save_name)
+                    .hint_text(text::find::save_name_hint(language))
+                    .desired_width(140.0),
+            );
+            if ui.button(text::find::save_current_action(language)).clicked() {
+                save_current = true;
             }
-        }
-        if let (Some(name), Some(owner)) = (apply_saved, owner) {
+            let deletable = self.search.applied.is_some();
+            if ui
+                .add_enabled(deletable, egui::Button::new(text::find::delete_action(language)))
+                .clicked()
+            {
+                delete_saved = true;
+            }
+            if let Some(message) = &self.search.saved_error {
+                ui.colored_label(tokens.error, message.as_str());
+            }
+        });
+
+        if let Some(name) = apply_saved {
             self.search.apply_saved(&name, session.database(), owner);
         }
-        if save_current && let Some(owner) = owner {
+        if save_current {
             self.search.save_current(session.database(), owner);
         }
-        if delete_saved && let (Some(owner), Some(name)) = (owner, self.search.applied.clone()) {
+        if delete_saved && let Some(name) = self.search.applied.clone() {
             self.search.delete_saved(&name, session.database(), owner);
+        }
+
+        if self.search.last_request.as_ref() != Some(&self.search.request_key()) {
+            let _ = self.search.run(session.database(), owner);
+        }
+        if let Some(error) = &self.search.query_error {
+            ui.colored_label(tokens.error, error.as_str());
+        }
+
+        let width = (ui.available_width() - ui.spacing().scroll.bar_width).max(320.0);
+        if self
+            .search
+            .table
+            .header(ui, "find", &text::find::columns(language), width)
+        {
+            self.search.sort_results();
+        }
+
+        let mut toggle = None;
+        let mut close = false;
+        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+            ui.set_width(width);
+            if self.search.results.is_empty() {
+                ui.add_space(10.0);
+                ui.weak(if self.search.query.trim().is_empty() {
+                    text::find::empty_archive(language)
+                } else {
+                    text::find::no_matches(language)
+                });
+            }
+
+            for (index, hit) in self.search.results.iter().enumerate() {
+                let selected = self.search.opened.as_ref().is_some_and(|view| view.id == hit.id);
+                let cells = [
+                    Cell::left(hit.number.as_str()).strong(),
+                    Cell::left(text::find::direction(language, hit.direction)).muted(),
+                    Cell::left(hit.party.as_str()),
+                    Cell::left(hit.issue_date.to_iso_string()),
+                    Cell::right(format!("{} {}", money_text(hit.gross), hit.currency.as_str())),
+                    Cell::left(text::find::status(language, hit.status)),
+                ];
+                if self
+                    .search
+                    .table
+                    .row(ui, width, &cells, selected, index % 2 == 1)
+                    .clicked()
+                {
+                    toggle = Some(hit.id);
+                }
+                if selected {
+                    ui.add_space(2.0);
+                    let closed = egui::Frame::new()
+                        .fill(tokens.surface_alt)
+                        .stroke(egui::Stroke::new(1.0, tokens.border))
+                        .corner_radius(6)
+                        .inner_margin(egui::Margin::same(12))
+                        .show(ui, |ui| {
+                            self.search
+                                .opened
+                                .as_ref()
+                                .is_some_and(|view| document_panel(ui, language, view))
+                        })
+                        .inner;
+                    if closed {
+                        close = true;
+                    }
+                    ui.add_space(4.0);
+                }
+            }
+
+            if let Some(error) = &self.search.open_error {
+                ui.colored_label(tokens.error, error.as_str());
+            }
+            ui.add_space(8.0);
+            ui.weak(text::find::sort_hint(language));
+            ui.weak(text::find::footer(
+                language,
+                self.search.results.len(),
+                store::SEARCH_LIMIT,
+            ));
+        });
+
+        if let Some(id) = toggle {
+            if self.search.opened.as_ref().is_some_and(|view| view.id == id) {
+                self.search.opened = None;
+            } else {
+                self.search.open(session.database(), id);
+            }
+        }
+        if close {
+            self.search.opened = None;
         }
     }
 
@@ -633,34 +879,293 @@ impl Workspace {
         })
     }
 
-    /// Draws the health panel: cheap facts always, the payload audit on request.
-    fn health_ui(&mut self, ui: &mut egui::Ui, session: &Session) {
-        let mut check = false;
-        egui::CollapsingHeader::new(text::health::panel_title(self.language))
-            .default_open(false)
-            .show(ui, |ui| {
-                check = self.health_details_ui(ui);
+    /// Draws the customer list and its import/export controls.
+    fn customers_ui(&mut self, ui: &mut egui::Ui, session: &Session, focus: Option<&str>) {
+        let language = self.language;
+        let mut import = false;
+        let mut export = false;
+        let mut toggle_form = false;
+        let mut create = false;
+
+        ui.horizontal(|ui| {
+            ui.add(
+                egui::TextEdit::singleline(&mut self.customers_view.filter)
+                    .hint_text(text::customers::filter_hint(language))
+                    .desired_width(260.0),
+            );
+            if ui.button(text::customers::new_customer_action(language)).clicked() {
+                toggle_form = true;
+            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.button(text::customers::export_action(language)).clicked() {
+                    export = true;
+                }
+                if ui.button(text::customers::import_action(language)).clicked() {
+                    import = true;
+                }
+                ui.add(egui::TextEdit::singleline(&mut self.customers_view.path).desired_width(300.0));
+                ui.label(text::customers::path_label(language));
             });
+        });
+        ui.weak(text::customers::csv_note(language));
+        ui.add_space(4.0);
+
+        if toggle_form {
+            self.show_customer_form = !self.show_customer_form;
+        }
+        if self.show_customer_form {
+            self.customer_form_ui(ui, focus, &mut create);
+        }
+        if create {
+            self.create_customer(session);
+        }
+
+        let width = (ui.available_width() - ui.spacing().scroll.bar_width).max(320.0);
+        self.customers_view
+            .table
+            .header(ui, "customers", &text::customers::columns(language), width);
+
+        let needle = self.customers_view.filter.trim().to_lowercase();
+        let mut visible: Vec<&CustomerRecord> = self
+            .customers
+            .iter()
+            .filter(|customer| matches_filter(&customer.party, &needle))
+            .collect();
+        if let Some((column, descending)) = self.customers_view.table.sort {
+            sort_customers(&mut visible, column, descending);
+        }
+
+        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+            ui.set_width(width);
+            if visible.is_empty() {
+                ui.add_space(10.0);
+                ui.weak(if self.customers.is_empty() {
+                    text::customers::empty(language)
+                } else {
+                    text::customers::no_matches(language)
+                });
+            }
+            for (index, customer) in visible.iter().enumerate() {
+                let party = &customer.party;
+                let cells = [
+                    Cell::left(party.legal_name.as_str()),
+                    Cell::left(party.address.city.as_str()),
+                    Cell::left(party.address.country.as_str()),
+                    Cell::left(party.vat_id.as_deref().unwrap_or("—")).muted(),
+                    Cell::left(party.peppol_id.as_deref().unwrap_or("—")).muted(),
+                ];
+                self.customers_view.table.row(ui, width, &cells, false, index % 2 == 1);
+            }
+            ui.add_space(8.0);
+            ui.weak(format!("{} customer(s)", visible.len()));
+        });
+
+        if import || export {
+            self.transfer_customers(session, import);
+        }
+    }
+
+    /// The new-customer form, shown inside the customer tab.
+    fn customer_form_ui(&mut self, ui: &mut egui::Ui, focus: Option<&str>, create: &mut bool) {
+        let language = self.language;
+        let tokens = *theme::palette(ui.ctx());
+        egui::Frame::new()
+            .fill(tokens.surface_alt)
+            .stroke(egui::Stroke::new(1.0, tokens.border))
+            .corner_radius(8)
+            .inner_margin(egui::Margin::same(12))
+            .show(ui, |ui| {
+                ui.strong(text::editor::new_customer_heading(language));
+                egui::Grid::new("customer-form").num_columns(2).show(ui, |ui| {
+                    ui.label(text::editor::field(language, Field::Name));
+                    text_field(ui, &mut self.customer_form.name, "customer.name", 200.0, focus);
+                    ui.end_row();
+                    ui.label(text::editor::field(language, Field::Street));
+                    text_field(ui, &mut self.customer_form.street, "customer.street", 200.0, focus);
+                    ui.end_row();
+                    ui.label(text::editor::field(language, Field::PostCode));
+                    text_field(ui, &mut self.customer_form.postal, "customer.postal_code", 200.0, focus);
+                    ui.end_row();
+                    ui.label(text::editor::field(language, Field::City));
+                    text_field(ui, &mut self.customer_form.city, "customer.city", 200.0, focus);
+                    ui.end_row();
+                    ui.label(text::editor::field(language, Field::Country));
+                    text_field(ui, &mut self.customer_form.country, "customer.country", 200.0, focus);
+                    ui.end_row();
+                    ui.label(text::editor::field(language, Field::VatId));
+                    text_field(ui, &mut self.customer_form.vat, "customer.vat_id", 200.0, focus);
+                    ui.end_row();
+                    ui.label(text::editor::field(language, Field::Peppol));
+                    text_field(ui, &mut self.customer_form.peppol, "customer.peppol", 200.0, focus);
+                    ui.end_row();
+                });
+                ui.horizontal(|ui| {
+                    if ui.button(text::editor::save_customer_action(language)).clicked() {
+                        *create = true;
+                    }
+                    if ui.button(text::customers::cancel_action(language)).clicked() {
+                        self.show_customer_form = false;
+                    }
+                });
+            });
+        ui.add_space(8.0);
+    }
+
+    /// Reads or writes the customer CSV named in the tab.
+    fn transfer_customers(&mut self, session: &Session, import: bool) {
+        let language = self.language;
+        let path = self.customers_view.path.trim().to_owned();
+        if path.is_empty() {
+            self.message = Some(Message::error(text::customers::failed(language, "the path is empty")));
+            return;
+        }
+
+        if import {
+            let parsed = std::fs::read_to_string(&path)
+                .map_err(|error| error.to_string())
+                .and_then(|text| customers::parse(&text));
+            match parsed {
+                Ok(rows) => match customers::import(session.database(), &rows, &store::now_rfc3339()) {
+                    Ok(report) => {
+                        if let Ok(list) = list_customers(session.database().connection()) {
+                            self.customers = list;
+                        }
+                        let summary =
+                            text::customers::imported(language, report.imported, report.skipped, report.errors.len());
+                        self.message = Some(if report.errors.is_empty() {
+                            Message::ok(summary)
+                        } else {
+                            let detail = report.errors.iter().take(3).cloned().collect::<Vec<_>>().join("; ");
+                            Message::error(format!("{summary} {detail}"))
+                        });
+                    }
+                    Err(error) => self.message = Some(Message::error(error.to_string())),
+                },
+                Err(error) => self.message = Some(Message::error(text::customers::failed(language, &error))),
+            }
+        } else {
+            match std::fs::write(&path, customers::export(&self.customers)) {
+                Ok(()) => {
+                    self.message = Some(Message::ok(text::customers::exported(
+                        language,
+                        self.customers.len(),
+                        &path,
+                    )));
+                }
+                Err(error) => {
+                    self.message = Some(Message::error(text::customers::failed(language, &error.to_string())))
+                }
+            }
+        }
+    }
+
+    /// Draws archive settings, health, backup, and credentials.
+    fn settings_ui(&mut self, ui: &mut egui::Ui, session: &Session, appearance: &mut egui::ThemePreference) {
+        let language = self.language;
+        let mut check = false;
+        let mut backup = false;
+
+        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+            ui.set_width(ui.available_width());
+
+            theme::card(ui, text::settings::appearance(language), |ui| {
+                let mut changed = false;
+                ui.horizontal(|ui| {
+                    changed |= ui
+                        .selectable_value(
+                            appearance,
+                            egui::ThemePreference::System,
+                            text::settings::theme_system(language),
+                        )
+                        .changed();
+                    changed |= ui
+                        .selectable_value(
+                            appearance,
+                            egui::ThemePreference::Light,
+                            text::settings::theme_light(language),
+                        )
+                        .changed();
+                    changed |= ui
+                        .selectable_value(
+                            appearance,
+                            egui::ThemePreference::Dark,
+                            text::settings::theme_dark(language),
+                        )
+                        .changed();
+                });
+                if changed {
+                    theme::set(ui.ctx(), *appearance);
+                }
+                ui.weak(text::settings::theme_note(language));
+            });
+            ui.add_space(8.0);
+
+            theme::card(ui, text::settings::archive(language), |ui| {
+                ui.horizontal(|ui| {
+                    ui.weak(text::settings::database(language));
+                    ui.label(egui::RichText::new(session.database_path().display().to_string()).monospace());
+                });
+                ui.horizontal(|ui| {
+                    ui.weak(text::settings::encryption(language));
+                    ui.label(store::encryption_label());
+                });
+            });
+            ui.add_space(8.0);
+
+            check = theme::card(ui, text::settings::health(language), |ui| self.health_details_ui(ui));
+            ui.add_space(8.0);
+
+            theme::card(ui, text::settings::backup(language), |ui| {
+                ui.weak(text::settings::backup_note(language));
+                ui.label(text::settings::backup_directory(
+                    language,
+                    &backup_directory(session).display().to_string(),
+                ));
+                if ui.button(text::settings::backup_now(language)).clicked() {
+                    backup = true;
+                }
+            });
+            ui.add_space(8.0);
+
+            theme::card(ui, text::settings::credentials(language), |ui| {
+                self.security_details_ui(ui, session);
+            });
+        });
 
         if check {
             self.run_health_check(session);
         }
+        if backup {
+            self.run_backup(session);
+        }
     }
 
-    /// Draws the security panel: credential changes, which ask for the current
-    /// passphrase rather than trusting the open window.
-    ///
-    /// Passphrase changes and recovery keys are the two things that protect the
-    /// archive from its own user, so they are here rather than only in the CLI.
-    fn security_ui(&mut self, ui: &mut egui::Ui, session: &Session) {
-        egui::CollapsingHeader::new(text::security::panel_title(self.language))
-            .default_open(false)
-            .show(ui, |ui| self.security_details_ui(ui, session));
+    /// Writes and verifies a backup beside the archive.
+    fn run_backup(&mut self, session: &Session) {
+        let language = self.language;
+        let directory = backup_directory(session);
+        match session.backup(&directory, &store::now_rfc3339(), store::backup::RETENTION) {
+            Ok(report) => {
+                self.message = Some(Message::ok(text::settings::backup_done(
+                    language,
+                    &report.path.display().to_string(),
+                    report.bytes / 1024,
+                )));
+                self.health = Health::snapshot(session.database(), session.database_path()).ok();
+            }
+            Err(error) => {
+                self.message = Some(Message::error(text::settings::backup_failed(
+                    language,
+                    &error.to_string(),
+                )))
+            }
+        }
     }
 
     /// The security panel's contents, drawn directly by the headless test.
     fn security_details_ui(&mut self, ui: &mut egui::Ui, session: &Session) {
         let language = self.language;
+        let tokens = *theme::palette(ui.ctx());
         let mut change = false;
         let mut add_key = false;
         let mut done = false;
@@ -693,7 +1198,7 @@ impl Workspace {
 
         if let Some(key) = &self.security.recovery_key {
             ui.add_space(6.0);
-            ui.colored_label(WARN_COLOR, text::shell::keep_key_note(language));
+            ui.colored_label(tokens.warning, text::shell::keep_key_note(language));
             ui.label(egui::RichText::new(key.as_str()).monospace());
             if ui.button(text::security::done_action(language)).clicked() {
                 done = true;
@@ -785,6 +1290,7 @@ impl Workspace {
     /// The panel's contents. Returns true when the user asked for a check.
     fn health_details_ui(&mut self, ui: &mut egui::Ui) -> bool {
         let language = self.language;
+        let tokens = *theme::palette(ui.ctx());
         let Some(health) = &self.health else {
             ui.label(text::health::unreadable(language));
             return false;
@@ -814,16 +1320,16 @@ impl Workspace {
 
         match (&health.report, &health.error) {
             (_, Some(error)) => {
-                ui.colored_label(ERROR_COLOR, text::health::integrity_failed(language, error));
+                ui.colored_label(tokens.error, text::health::integrity_failed(language, error));
             }
             (Some(report), None) if report.orphaned_blobs > 0 => {
                 ui.colored_label(
-                    WARN_COLOR,
+                    tokens.warning,
                     text::health::integrity_with_orphans(language, report.blobs, report.orphaned_blobs),
                 );
             }
             (Some(report), None) => {
-                ui.colored_label(OK_COLOR, text::health::integrity_ok(language, report.blobs));
+                ui.colored_label(tokens.success, text::health::integrity_ok(language, report.blobs));
             }
             (None, None) => {
                 ui.label(text::health::not_checked(language));
@@ -1058,42 +1564,13 @@ impl Workspace {
                 self.suppress_target = None;
                 self.suppression_reason.clear();
             }
-            if ui.button(text::editor::add_customer_action(language)).clicked() {
-                self.show_customer_form = !self.show_customer_form;
+            if self.customers.is_empty() {
+                ui.label(text::editor::no_customers(language));
+                if ui.button(text::editor::go_to_customers(language)).clicked() {
+                    self.tab = Tab::Customers;
+                }
             }
         });
-
-        if self.show_customer_form {
-            ui.group(|ui| {
-                ui.label(text::editor::new_customer_heading(language));
-                egui::Grid::new("customer-form").num_columns(2).show(ui, |ui| {
-                    ui.label(text::editor::field(language, Field::Name));
-                    text_field(ui, &mut self.customer_form.name, "customer.name", 200.0, focus);
-                    ui.end_row();
-                    ui.label(text::editor::field(language, Field::Street));
-                    text_field(ui, &mut self.customer_form.street, "customer.street", 200.0, focus);
-                    ui.end_row();
-                    ui.label(text::editor::field(language, Field::PostCode));
-                    text_field(ui, &mut self.customer_form.postal, "customer.postal_code", 200.0, focus);
-                    ui.end_row();
-                    ui.label(text::editor::field(language, Field::City));
-                    text_field(ui, &mut self.customer_form.city, "customer.city", 200.0, focus);
-                    ui.end_row();
-                    ui.label(text::editor::field(language, Field::Country));
-                    text_field(ui, &mut self.customer_form.country, "customer.country", 200.0, focus);
-                    ui.end_row();
-                    ui.label(text::editor::field(language, Field::VatId));
-                    text_field(ui, &mut self.customer_form.vat, "customer.vat_id", 200.0, focus);
-                    ui.end_row();
-                    ui.label(text::editor::field(language, Field::Peppol));
-                    text_field(ui, &mut self.customer_form.peppol, "customer.peppol", 200.0, focus);
-                    ui.end_row();
-                });
-                if ui.button(text::editor::save_customer_action(language)).clicked() {
-                    self.create_customer(session);
-                }
-            });
-        }
 
         if self.editor.is_some() {
             self.editor_ui(ui, session, focus);
@@ -1105,6 +1582,7 @@ impl Workspace {
 
     fn editor_ui(&mut self, ui: &mut egui::Ui, session: &mut Session, focus: Option<&str>) {
         let language = self.language;
+        let tokens = *theme::palette(ui.ctx());
         let Some(seller) = self.seller.clone() else {
             return;
         };
@@ -1125,7 +1603,7 @@ impl Workspace {
                     .as_ref()
                     .map(|preceding| preceding.number.as_str())
                     .unwrap_or_default();
-                ui.colored_label(OK_COLOR, text::editor::credit_note_banner(language, number));
+                ui.colored_label(tokens.success, text::editor::credit_note_banner(language, number));
             }
             ui.horizontal(|ui| {
                 ui.label(text::editor::customer_label(language));
@@ -1246,7 +1724,7 @@ impl Workspace {
                             ));
                         }
                         Err(error) => {
-                            ui.colored_label(ERROR_COLOR, error.to_string());
+                            ui.colored_label(tokens.error, error.to_string());
                         }
                     }
 
@@ -1270,12 +1748,12 @@ impl Workspace {
                             }
                         }
                         None => {
-                            ui.colored_label(ERROR_COLOR, text::editor::select_customer_to_validate(language));
+                            ui.colored_label(tokens.error, text::editor::select_customer_to_validate(language));
                         }
                     }
                 }
                 Err(error) => {
-                    ui.colored_label(ERROR_COLOR, error);
+                    ui.colored_label(tokens.error, error);
                 }
             }
         }
@@ -1580,6 +2058,73 @@ fn default_pdf_path(session: &Session, number: &str) -> String {
     directory.join(format!("{number}.pdf")).display().to_string()
 }
 
+/// Where the window keeps its backups.
+fn backup_directory(session: &Session) -> PathBuf {
+    session
+        .database_path()
+        .parent()
+        .unwrap_or(Path::new("."))
+        .join("backups")
+}
+
+/// Case-insensitive match over the fields the customer table shows.
+fn matches_filter(party: &Party, needle: &str) -> bool {
+    if needle.is_empty() {
+        return true;
+    }
+    [
+        Some(party.legal_name.as_str()),
+        Some(party.address.city.as_str()),
+        Some(party.address.country.as_str()),
+        party.vat_id.as_deref(),
+        party.peppol_id.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .any(|value| value.to_lowercase().contains(needle))
+}
+
+/// Sorts find results by the clicked column.
+fn sort_hits(hits: &mut [SearchHit], column: usize, descending: bool) {
+    hits.sort_by(|left, right| {
+        let ordering = match column {
+            0 => left.number.cmp(&right.number),
+            1 => left.direction.code().cmp(right.direction.code()),
+            2 => left.party.cmp(&right.party),
+            3 => left.issue_date.cmp(&right.issue_date),
+            4 => left.gross.cmp(&right.gross),
+            5 => left.status.cmp(&right.status),
+            _ => std::cmp::Ordering::Equal,
+        };
+        if descending { ordering.reverse() } else { ordering }
+    });
+}
+
+/// Sorts the customer table by the clicked column.
+fn sort_customers(customers: &mut [&CustomerRecord], column: usize, descending: bool) {
+    customers.sort_by(|left, right| {
+        let ordering = match column {
+            0 => left.party.legal_name.cmp(&right.party.legal_name),
+            1 => left.party.address.city.cmp(&right.party.address.city),
+            2 => left.party.address.country.cmp(&right.party.address.country),
+            3 => left
+                .party
+                .vat_id
+                .as_deref()
+                .unwrap_or("")
+                .cmp(right.party.vat_id.as_deref().unwrap_or("")),
+            4 => left
+                .party
+                .peppol_id
+                .as_deref()
+                .unwrap_or("")
+                .cmp(right.party.peppol_id.as_deref().unwrap_or("")),
+            _ => std::cmp::Ordering::Equal,
+        };
+        if descending { ordering.reverse() } else { ordering }
+    });
+}
+
 fn build_draft(editor: &Editor, seller: &SellerRecord) -> Result<InvoiceDraft, String> {
     let customer_id = editor.customer.ok_or_else(|| "Select a customer.".to_owned())?;
     let issue_date = if editor.issue_date.trim().is_empty() {
@@ -1704,44 +2249,6 @@ fn status_combo(ui: &mut egui::Ui, language: Language, value: &mut Option<Docume
         });
 }
 
-fn search_results_ui(
-    ui: &mut egui::Ui,
-    language: Language,
-    results: &[SearchHit],
-    selected: Option<DocumentId>,
-) -> Option<DocumentId> {
-    let mut open = None;
-    egui::ScrollArea::vertical().max_height(220.0).show(ui, |ui| {
-        egui::Grid::new("search-results")
-            .num_columns(6)
-            .striped(true)
-            .show(ui, |ui| {
-                for heading in text::find::columns(language) {
-                    ui.strong(heading);
-                }
-                ui.end_row();
-                for hit in results {
-                    // The number is the handle: a whole row of labels cannot be
-                    // clicked, and a separate button would need a column.
-                    if ui
-                        .selectable_label(selected == Some(hit.id), hit.number.as_str())
-                        .clicked()
-                    {
-                        open = Some(hit.id);
-                    }
-                    ui.label(text::find::direction(language, hit.direction));
-                    ui.label(hit.party.as_str());
-                    ui.label(hit.issue_date.to_iso_string());
-                    ui.label(format!("{} {}", money_text(hit.gross), hit.currency.as_str()));
-                    ui.label(text::find::status(language, hit.status));
-                    ui.end_row();
-                }
-            });
-    });
-    ui.weak(text::find::footer(language, results.len(), store::SEARCH_LIMIT));
-    open
-}
-
 /// Draws a stored document read-only. Returns true when the user closes it.
 fn document_panel(ui: &mut egui::Ui, language: Language, view: &DocumentView) -> bool {
     let mut close = false;
@@ -1849,12 +2356,13 @@ fn fact(ui: &mut egui::Ui, language: Language, fact: Fact, value: &str) {
 }
 
 fn show_findings(ui: &mut egui::Ui, language: Language, findings: &[Finding]) -> Option<FindingAction> {
+    let tokens = *theme::palette(ui.ctx());
     let mut action = None;
     for finding in findings.iter().take(12) {
         let color = match finding.severity {
-            Severity::Blocking => ERROR_COLOR,
-            Severity::Warning => WARN_COLOR,
-            Severity::Info => egui::Color32::GRAY,
+            Severity::Blocking => tokens.error,
+            Severity::Warning => tokens.warning,
+            Severity::Info => tokens.muted,
         };
         let bt = finding.bt.unwrap_or("-");
         let text = format!("{} [{}] {}: {}", finding.code, bt, finding.field, finding.message);
@@ -2143,6 +2651,84 @@ mod tests {
     }
 
     #[test]
+    fn changing_a_filter_makes_the_request_dirty() {
+        let (_dir, database, seller_id) = seeded_archive();
+        let mut view = SearchView::default();
+
+        // The first frame runs an empty query, which lists the archive.
+        let before = view.request_key();
+        view.run(&database, seller_id).unwrap();
+        assert_eq!(view.last_request.as_ref(), Some(&before));
+
+        view.query = "acme".to_owned();
+        assert_ne!(&view.request_key(), view.last_request.as_ref().unwrap());
+        view.run(&database, seller_id).unwrap();
+        assert_eq!(view.last_request.as_ref(), Some(&view.request_key()));
+        assert_eq!(view.results.len(), 1);
+    }
+
+    #[test]
+    fn sorting_follows_the_clicked_column() {
+        let mut hits = vec![
+            SearchHit {
+                id: DocumentId::new(),
+                direction: Direction::Outbound,
+                number: "2026-0002".to_owned(),
+                party: "Zeta BV".to_owned(),
+                issue_date: LocalDate::from_ymd(2026, 10, 2).unwrap(),
+                currency: Currency::EUR,
+                gross: Money::from_major_units(20, Currency::EUR).unwrap(),
+                status: DocumentStatus::Issued,
+            },
+            SearchHit {
+                id: DocumentId::new(),
+                direction: Direction::Outbound,
+                number: "2026-0001".to_owned(),
+                party: "Alpha BV".to_owned(),
+                issue_date: LocalDate::from_ymd(2026, 10, 3).unwrap(),
+                currency: Currency::EUR,
+                gross: Money::from_major_units(10, Currency::EUR).unwrap(),
+                status: DocumentStatus::Issued,
+            },
+        ];
+
+        sort_hits(&mut hits, 0, false);
+        assert_eq!(hits[0].number, "2026-0001");
+        sort_hits(&mut hits, 4, true);
+        assert_eq!(hits[0].gross.micros(), 20_000_000);
+        sort_hits(&mut hits, 3, false);
+        assert_eq!(hits[0].issue_date.to_iso_string(), "2026-10-02");
+    }
+
+    #[test]
+    fn every_tab_draws_without_panicking() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let mut session = Session::create(
+            dir.path().join("bonk.db"),
+            dir.path().join("keystore.bin"),
+            "passphrase",
+        )
+        .unwrap();
+        insert_seller(session.database().connection(), &seller(), NOW).unwrap();
+        let customer = CustomerRecord {
+            id: CustomerId::new(),
+            party: Party::new("Acme BV", Address::new("Rotterdam", CountryCode::NL)),
+        };
+        insert_customer(session.database().connection(), &customer, NOW).unwrap();
+        let mut workspace = Workspace::new(&session).unwrap();
+
+        for tab in [Tab::Search, Tab::Create, Tab::Customers, Tab::Settings] {
+            workspace.tab = tab;
+            let context = egui::Context::default();
+            let mut appearance = egui::ThemePreference::System;
+            let output = context.run_ui(egui::RawInput::default(), |ui| {
+                let _ = workspace.ui(ui, &mut session, &mut appearance);
+            });
+            output.drop_without_applying_deltas();
+        }
+    }
+
+    #[test]
     fn the_workspace_draws_without_panicking() {
         let dir = tempfile::TempDir::new().unwrap();
         let mut session = Session::create(
@@ -2188,7 +2774,7 @@ mod tests {
         // Drawing is where duplicate widget ids and missing fonts show up as a
         // panic, so a headless frame is worth more than it looks.
         let output = context.run_ui(egui::RawInput::default(), |ui| {
-            action = workspace.ui(ui, &mut session);
+            action = workspace.ui(ui, &mut session, &mut egui::ThemePreference::System);
             // Panels are collapsed by default, so draw their contents directly:
             // a broken widget inside a closed header is still a broken widget.
             let _ = workspace.health_details_ui(ui);

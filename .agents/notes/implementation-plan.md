@@ -513,24 +513,9 @@ header or `[]`, not an error. `SearchHit.status` now comes from the latest event
 or, when there is none, from `document.state`, so an issued invoice reads as
 `issued` rather than borrowing the register's initial `received`.
 
-Remaining in M5: saved filters, keyboard shortcuts and empty states in the GUI,
-the i18n pass, document-language selection, and `bonk support-bundle`.
+Remaining in M5: the window redesign described below, and the i18n pass.
 
-**The find panel is in the workspace.** A group above the editor holds the query,
-a side filter, a status filter, and Search/Clear; Enter in the field runs the
-query and Ctrl+F focuses it. Nothing runs per keystroke: a search reads the whole
-index, and work the user did not ask for is the wrong default. A blank query
-lists what the filters allow, so the panel doubles as a browse view. The empty
-states are distinct — "nothing asked yet", "nothing in this archive", and
-"nothing matches, every word has to appear" — because the three mean different
-things. Clicking a number opens the stored document beneath the list: parties as
-snapshotted on the day, lines with their stored amounts, totals, status history,
-and artefact hashes. It is read-only because the archive is write-once, and
-`store::archive::load` rebuilds it from those rows rather than from today's
-customer table — a rename after issue must not rewrite what the invoice says.
-`SearchView` keeps the state apart from the drawing code, so a unit test drives
-the panel against a real database, and a headless egui frame proves the workspace
-draws without panicking, including with a result open.
+**The find panel is in the workspace.** The Search tab holds the query, a side filter, a status filter, and Clear; Ctrl+F switches to it and focuses the field. Every change — typing, a filter, clearing — re-runs the query, so there is no Search button; a blank query lists what the filters allow, so the panel doubles as a browse view. The results are a continuous table with resizable headers that sort on click (a second click reverses the order), and it always spans the window rather than a fixed panel. The empty states are distinct — "nothing in this archive" and "nothing matches, every word has to appear" — because the two mean different things. Clicking a row folds that row open with the stored document: parties as snapshotted on the day, lines with their stored amounts, totals, status history, and artefact hashes. One row is open at a time, and clicking it again closes it. It is read-only because the archive is write-once, and `store::archive::load` rebuilds it from those rows rather than from today's customer table — a rename after issue must not rewrite what the invoice says. `SearchView` keeps the state apart from the drawing code, so a unit test drives the panel against a real database, and a headless egui frame proves every tab draws without panicking, including with a result open.
 
 Saved views are in. `saved_search` sits in migration 0002 with `(owner_id, name)`
 unique, so saving under an existing name edits those filters instead of growing a
@@ -563,6 +548,22 @@ wording live in the text table at all, and status and side words come from the
 table rather than `Display`, so a translated screen is not half translated.
 `BonkApp` and `Workspace` each hold the language, chosen once; the seller's locale
 is the obvious source for a second table.
+
+**The window is a four-tab shell (2026-10-29).** A narrow icon rail on the left
+switches Search, Create, Customers, and Settings, and the content fills the rest
+of the window. The Customers tab filters the party table and creates, imports,
+and exports CSV through `app::customers`; an import skips parties already on file
+by VAT identifier, Peppol endpoint, or legal name and city, because the archive
+treats a party as an identity rather than a list entry. Settings holds appearance,
+the archive path and encryption state, health, verified backups, and credentials.
+`Session` keeps the data key from unlock so the window can write a verified
+backup through `store::backup::backup_with_key` without asking for the passphrase
+again. Both light and dark palettes live in `app::theme`; the choice is
+System/Light/Dark, applies live, and is saved through eframe storage. Labels are
+not selectable, and widget colours come from the palette rather than from the
+call site. The shared table in `app::table` stores column shares rather than
+pixels, so a window resize redistributes columns and a drag on a header edge
+moves width between its neighbours.
 
 Remaining in M5: the validation messages from `build_draft` and the domain errors
 from `crux` that they quote. Those are not widget strings: translating them means

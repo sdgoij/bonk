@@ -43,6 +43,21 @@ pub fn backup(
     stamp: &str,
     keep: usize,
 ) -> Result<BackupReport, StoreError> {
+    backup_with_key(database, keystore.dek(), directory, stamp, keep)
+}
+
+/// Writes a verified backup using a raw data key.
+///
+/// The window keeps the key from the unlock in memory, so it can back up
+/// without asking for the passphrase again. The copy is verified with the same
+/// key that wrote it; a keystore is not needed to make or check a copy.
+pub fn backup_with_key(
+    database: &Database,
+    dek: &[u8; 32],
+    directory: impl AsRef<Path>,
+    stamp: &str,
+    keep: usize,
+) -> Result<BackupReport, StoreError> {
     let directory = directory.as_ref();
     permissions::private_directory(directory)?;
 
@@ -51,7 +66,7 @@ pub fn backup(
     // A copy holds the whole archive; it must not be readable by more accounts
     // than the original.
     permissions::restrict_quietly(&path);
-    verify(&path, keystore.dek())?;
+    verify(&path, dek)?;
     let bytes = std::fs::metadata(&path)?.len();
 
     let removed = prune(directory, keep.max(1))?;
