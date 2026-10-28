@@ -11,6 +11,7 @@ pub mod export;
 pub mod health;
 pub mod idle;
 pub mod strength;
+pub mod text;
 mod workspace;
 
 use std::path::{Path, PathBuf};
@@ -385,6 +386,9 @@ pub struct BonkApp {
     keystore_path: String,
     state: UiState,
     idle: idle::IdleLock,
+    /// Interface language. English today, and set here rather than in each
+    /// screen so a second table has one place to be chosen.
+    language: text::Language,
 }
 
 impl Default for BonkApp {
@@ -400,6 +404,7 @@ impl Default for BonkApp {
                 error: None,
             },
             idle: idle::IdleLock::new(idle::configured_timeout(), std::time::Instant::now()),
+            language: text::Language::default(),
         }
     }
 }
@@ -737,7 +742,7 @@ fn check_reset(recovery_key: &str, new_passphrase: &str, repeat: &str) -> Result
 }
 
 /// Draws the strength estimate under a passphrase field.
-pub(crate) fn strength_row(ui: &mut egui::Ui, passphrase: &str) {
+pub(crate) fn strength_row(ui: &mut egui::Ui, language: text::Language, passphrase: &str) {
     if passphrase.is_empty() {
         return;
     }
@@ -749,13 +754,10 @@ pub(crate) fn strength_row(ui: &mut egui::Ui, passphrase: &str) {
     };
     ui.add_space(2.0);
     ui.horizontal(|ui| {
-        ui.label("Strength");
-        ui.colored_label(colour, assessment.strength.label());
-        ui.label(assessment.reason).on_hover_text(format!(
-            "At least {} bits by this estimate. Every guess costs the attacker one \
-             Argon2id run, so length is what makes a copied keystore expensive to open.",
-            assessment.bits
-        ));
+        ui.label(text::strength::label(language));
+        ui.colored_label(colour, text::strength::level(language, assessment.strength));
+        ui.label(text::strength::reason(language, assessment.reason))
+            .on_hover_text(text::strength::detail(language, assessment.bits));
     });
 }
 
@@ -780,62 +782,60 @@ impl eframe::App for BonkApp {
 
         egui::CentralPanel::default().show(ui, |ui| {
             let mut action = None;
+            let language = self.language;
             match &mut self.state {
                 UiState::Locked { form, error } => {
-                    ui.heading("Bonk");
+                    ui.heading(text::shell::PRODUCT);
                     match form {
                         LockForm::Create {
                             passphrase,
                             confirmation,
                         } => {
-                            ui.label(
-                                "A new archive is created empty and sealed with this passphrase. \
-                                 Nothing else can open it, so type it twice.",
-                            );
+                            ui.label(text::shell::create_note(language));
                             ui.add_space(12.0);
 
-                            ui.label("New passphrase");
+                            ui.label(text::shell::new_passphrase_label(language));
                             ui.add(egui::TextEdit::singleline(passphrase).password(true));
-                            strength_row(ui, passphrase.as_str());
+                            strength_row(ui, language, passphrase.as_str());
 
                             ui.add_space(8.0);
-                            ui.label("Repeat the passphrase");
+                            ui.label(text::shell::repeat_passphrase_label(language));
                             ui.add(egui::TextEdit::singleline(confirmation).password(true));
 
                             ui.add_space(8.0);
                             ui.horizontal(|ui| {
-                                if ui.button("Create").clicked() {
+                                if ui.button(text::shell::create_action(language)).clicked() {
                                     action = Some(Action::Create);
                                 }
-                                if ui.button("Back").clicked() {
+                                if ui.button(text::shell::back_action(language)).clicked() {
                                     action = Some(Action::CancelCreate);
                                 }
                             });
                         }
                         LockForm::Unlock { passphrase } => {
-                            ui.label("Local-first invoicing. Nothing leaves this machine unless you send it.");
+                            ui.label(text::shell::tagline(language));
                             ui.add_space(12.0);
 
-                            ui.label("Database");
+                            ui.label(text::shell::database_label(language));
                             ui.text_edit_singleline(&mut self.database_path);
-                            ui.label("Keystore");
+                            ui.label(text::shell::keystore_label(language));
                             ui.text_edit_singleline(&mut self.keystore_path);
                             ui.add_space(8.0);
 
-                            ui.label("Passphrase");
+                            ui.label(text::shell::passphrase_label(language));
                             ui.add(egui::TextEdit::singleline(passphrase).password(true));
-                            strength_row(ui, passphrase.as_str());
+                            strength_row(ui, language, passphrase.as_str());
 
                             ui.add_space(8.0);
                             ui.horizontal(|ui| {
-                                if ui.button("Unlock").clicked() {
+                                if ui.button(text::shell::unlock_action(language)).clicked() {
                                     action = Some(Action::Unlock);
                                 }
-                                if ui.button("Create new database").clicked() {
+                                if ui.button(text::shell::create_database_action(language)).clicked() {
                                     action = Some(Action::BeginCreate);
                                 }
                             });
-                            if ui.button("Forgotten the passphrase?").clicked() {
+                            if ui.button(text::shell::forgotten_action(language)).clicked() {
                                 action = Some(Action::BeginReset);
                             }
                         }
@@ -846,46 +846,42 @@ impl eframe::App for BonkApp {
                             replacement,
                         } => match replacement {
                             Some(key) => {
-                                ui.label("Passphrase replaced. The recovery key that was used no longer works.");
+                                ui.label(text::shell::reset_done_note(language));
                                 ui.add_space(8.0);
-                                ui.label("New recovery key, shown once:");
+                                ui.label(text::shell::new_recovery_key_label(language));
                                 ui.label(egui::RichText::new(key.as_str()).monospace());
                                 ui.add_space(8.0);
                                 ui.colored_label(
                                     egui::Color32::from_rgb(190, 140, 40),
-                                    "Write it down and keep it apart from the database and the passphrase.",
+                                    text::shell::keep_key_note(language),
                                 );
                                 ui.add_space(8.0);
-                                if ui.button("I have written it down").clicked() {
+                                if ui.button(text::shell::written_down_action(language)).clicked() {
                                     action = Some(Action::FinishReset);
                                 }
                             }
                             None => {
-                                ui.label(
-                                    "A recovery key opens this archive without the passphrase. The key \
-                                     used here is replaced by the reset, because it has now been typed \
-                                     somewhere.",
-                                );
+                                ui.label(text::shell::reset_note(language));
                                 ui.add_space(12.0);
 
-                                ui.label("Recovery key");
+                                ui.label(text::shell::recovery_key_label(language));
                                 ui.add(egui::TextEdit::singleline(recovery_key).password(true));
 
                                 ui.add_space(8.0);
-                                ui.label("New passphrase");
+                                ui.label(text::shell::new_passphrase_label(language));
                                 ui.add(egui::TextEdit::singleline(new_passphrase).password(true));
-                                strength_row(ui, new_passphrase.as_str());
+                                strength_row(ui, language, new_passphrase.as_str());
 
                                 ui.add_space(8.0);
-                                ui.label("Repeat the new passphrase");
+                                ui.label(text::shell::repeat_new_passphrase_label(language));
                                 ui.add(egui::TextEdit::singleline(repeat).password(true));
 
                                 ui.add_space(8.0);
                                 ui.horizontal(|ui| {
-                                    if ui.button("Reset passphrase").clicked() {
+                                    if ui.button(text::shell::reset_action(language)).clicked() {
                                         action = Some(Action::Reset);
                                     }
-                                    if ui.button("Back").clicked() {
+                                    if ui.button(text::shell::back_action(language)).clicked() {
                                         action = Some(Action::CancelReset);
                                     }
                                 });

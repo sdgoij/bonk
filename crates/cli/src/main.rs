@@ -4,7 +4,7 @@
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use app::{Session, strength};
+use app::{Session, strength, text};
 use clap::{Parser, Subcommand};
 use crux::{
     Address, CountryCode, Currency, CustomerId, DocumentId, DraftLine, Finding, InvoiceDraft, LineId, LocalDate, Money,
@@ -1251,7 +1251,8 @@ fn warn_if_weak(passphrase: &str) {
     if assessment.strength == strength::Strength::Weak {
         eprintln!(
             "warning: this passphrase is weak ({} bits): {}",
-            assessment.bits, assessment.reason
+            assessment.bits,
+            text::strength::reason(text::Language::default(), assessment.reason)
         );
     }
 }

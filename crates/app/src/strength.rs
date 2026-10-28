@@ -21,15 +21,24 @@ pub enum Strength {
     Strong,
 }
 
-impl Strength {
-    /// A short word for a label.
-    pub fn label(self) -> &'static str {
-        match self {
-            Strength::Weak => "weak",
-            Strength::Fair => "fair",
-            Strength::Strong => "strong",
-        }
-    }
+/// Why a phrase got the level it did.
+///
+/// A code rather than a sentence: the interface chooses the words, so they can
+/// be translated without touching the estimate.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Reason {
+    /// Nothing was typed.
+    Empty,
+    /// One of the phrases that are tried first.
+    Common,
+    /// A repeated pattern, worth its period rather than its length.
+    Repetition,
+    /// Too few bits to bother guessing.
+    TooShort,
+    /// Worth using, but only just.
+    Fair,
+    /// Long or varied enough.
+    Strong,
 }
 
 /// The result of [`assess`].
@@ -39,8 +48,8 @@ pub struct Assessment {
     pub strength: Strength,
     /// A floor on the search space, in bits.
     pub bits: u32,
-    /// One sentence the user can act on.
-    pub reason: &'static str,
+    /// Why it got that level.
+    pub reason: Reason,
 }
 
 /// Phrases that are tried before anything clever.
@@ -84,7 +93,7 @@ pub fn assess(passphrase: &str) -> Assessment {
         return Assessment {
             strength: Strength::Weak,
             bits: 0,
-            reason: "enter a passphrase",
+            reason: Reason::Empty,
         };
     }
 
@@ -92,7 +101,7 @@ pub fn assess(passphrase: &str) -> Assessment {
         return Assessment {
             strength: Strength::Weak,
             bits: 0,
-            reason: "this is one of the first phrases an attacker tries",
+            reason: Reason::Common,
         };
     }
 
@@ -105,27 +114,27 @@ pub fn assess(passphrase: &str) -> Assessment {
         return Assessment {
             strength: Strength::Weak,
             bits,
-            reason: "repeating a short pattern adds almost nothing",
+            reason: Reason::Repetition,
         };
     }
     if bits < WEAK_BELOW {
         return Assessment {
             strength: Strength::Weak,
             bits,
-            reason: "too short; a few unrelated words beat a short scramble",
+            reason: Reason::TooShort,
         };
     }
     if bits < STRONG_FROM {
         return Assessment {
             strength: Strength::Fair,
             bits,
-            reason: "acceptable; length helps more than clever substitutions",
+            reason: Reason::Fair,
         };
     }
     Assessment {
         strength: Strength::Strong,
         bits,
-        reason: "good: length and variety both count",
+        reason: Reason::Strong,
     }
 }
 
@@ -237,9 +246,7 @@ mod tests {
 
     #[test]
     fn labels_follow_the_level() {
-        assert_eq!(Strength::Weak.label(), "weak");
-        assert_eq!(Strength::Fair.label(), "fair");
-        assert_eq!(Strength::Strong.label(), "strong");
         assert!(Strength::Weak < Strength::Strong);
+        assert_ne!(Strength::Weak, Strength::Fair);
     }
 }

@@ -18,6 +18,7 @@ use zeroize::Zeroize;
 
 use crate::Session;
 use crate::health::Health;
+use crate::text::Language;
 
 const ERROR_COLOR: egui::Color32 = egui::Color32::from_rgb(200, 60, 60);
 const WARN_COLOR: egui::Color32 = egui::Color32::from_rgb(190, 140, 40);
@@ -60,6 +61,8 @@ pub struct Workspace {
     message: Option<Message>,
     search: SearchView,
     security: SecurityForm,
+    /// Interface language, chosen once per workspace.
+    language: Language,
     health: Option<Health>,
 }
 
@@ -412,6 +415,7 @@ impl Workspace {
             message: None,
             search: SearchView::default(),
             security: SecurityForm::default(),
+            language: Language::default(),
             health: Health::snapshot(session.database(), session.database_path()).ok(),
         };
         if let Some(seller) = workspace.seller.as_ref().map(|seller| seller.id) {
@@ -644,7 +648,7 @@ impl Workspace {
             ui.add(egui::TextEdit::singleline(&mut self.security.new_passphrase).password(true));
             ui.end_row();
             ui.label("");
-            crate::strength_row(ui, &self.security.new_passphrase);
+            crate::strength_row(ui, self.language, &self.security.new_passphrase);
             ui.end_row();
             ui.label("Repeat the new passphrase");
             ui.add(egui::TextEdit::singleline(&mut self.security.repeat).password(true));

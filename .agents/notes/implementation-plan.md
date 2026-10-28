@@ -341,7 +341,7 @@ buyer and order reference from the document they correct, so the copied draft
 still passes R003.
 
 Remaining in M2: nothing blocking. Explicit deliver-to address fields beyond the
-buyer country remain for a later slice. Workspace tests: 357 encrypted, 355 plain.
+buyer country remain for a later slice. Workspace tests: 361 encrypted, 359 plain.
 
 Exit criteria:
 
@@ -527,6 +527,17 @@ that lies. The panel's **Saved** list applies a view and runs it, so a stored vi
 shows results rather than only fields, and **Delete** removes the applied one.
 
 Remaining in M5: the i18n pass and document-language selection.
+
+The i18n groundwork is in, English first. `app::text` holds a `Language` enum and
+the strings for the lock screen and the strength estimate, grouped by screen; each
+function takes the language and ignores it today, so adding a second table changes
+one module and no call sites. The strength estimate now returns a `Reason` code
+rather than a sentence, which is what lets the wording live in the text table at
+all. `BonkApp` and `Workspace` each hold the language, chosen once, so a second
+table has a place to be selected from — the seller's locale is the obvious source.
+The workspace body still has literals in its widgets; moving them is the rest of
+the pass, and the boundary is deliberate rather than accidental: everything a
+user can read in the shell is in `text`, and what is left is the editor.
 
 ---
 
