@@ -18,6 +18,7 @@ use zeroize::Zeroize;
 
 use crate::Session;
 use crate::health::Health;
+use crate::text::editor::Field;
 use crate::text::find::Fact;
 use crate::text::{self, Language};
 
@@ -461,7 +462,7 @@ impl Workspace {
         }
 
         if !self.conformance_findings.is_empty() {
-            if let Some(action) = show_findings(ui, &self.conformance_findings) {
+            if let Some(action) = show_findings(ui, self.language, &self.conformance_findings) {
                 self.apply_finding_action(action);
             }
             ui.separator();
@@ -635,7 +636,7 @@ impl Workspace {
     /// Draws the health panel: cheap facts always, the payload audit on request.
     fn health_ui(&mut self, ui: &mut egui::Ui, session: &Session) {
         let mut check = false;
-        egui::CollapsingHeader::new("Archive health")
+        egui::CollapsingHeader::new(text::health::panel_title(self.language))
             .default_open(false)
             .show(ui, |ui| {
                 check = self.health_details_ui(ui);
@@ -652,49 +653,47 @@ impl Workspace {
     /// Passphrase changes and recovery keys are the two things that protect the
     /// archive from its own user, so they are here rather than only in the CLI.
     fn security_ui(&mut self, ui: &mut egui::Ui, session: &Session) {
-        egui::CollapsingHeader::new("Security")
+        egui::CollapsingHeader::new(text::security::panel_title(self.language))
             .default_open(false)
             .show(ui, |ui| self.security_details_ui(ui, session));
     }
 
     /// The security panel's contents, drawn directly by the headless test.
     fn security_details_ui(&mut self, ui: &mut egui::Ui, session: &Session) {
+        let language = self.language;
         let mut change = false;
         let mut add_key = false;
         let mut done = false;
 
-        ui.label("A credential change asks for the current passphrase again.");
+        ui.label(text::security::note(language));
         egui::Grid::new("security-form").num_columns(2).show(ui, |ui| {
-            ui.label("Current passphrase");
+            ui.label(text::security::current_label(language));
             ui.add(egui::TextEdit::singleline(&mut self.security.current).password(true));
             ui.end_row();
-            ui.label("New passphrase");
+            ui.label(text::shell::new_passphrase_label(language));
             ui.add(egui::TextEdit::singleline(&mut self.security.new_passphrase).password(true));
             ui.end_row();
             ui.label("");
             crate::strength_row(ui, self.language, &self.security.new_passphrase);
             ui.end_row();
-            ui.label("Repeat the new passphrase");
+            ui.label(text::shell::repeat_new_passphrase_label(language));
             ui.add(egui::TextEdit::singleline(&mut self.security.repeat).password(true));
             ui.end_row();
         });
         ui.horizontal(|ui| {
-            if ui.button("Change passphrase").clicked() {
+            if ui.button(text::security::change_action(language)).clicked() {
                 change = true;
             }
-            if ui.button("Add recovery key").clicked() {
+            if ui.button(text::security::add_key_action(language)).clicked() {
                 add_key = true;
             }
         });
 
         if let Some(key) = &self.security.recovery_key {
             ui.add_space(6.0);
-            ui.colored_label(
-                WARN_COLOR,
-                "This key is shown once. Write it down and keep it apart from the database and the passphrase.",
-            );
+            ui.colored_label(WARN_COLOR, text::shell::keep_key_note(language));
             ui.label(egui::RichText::new(key.as_str()).monospace());
-            if ui.button("Done").clicked() {
+            if ui.button(text::security::done_action(language)).clicked() {
                 done = true;
             }
         }
@@ -711,9 +710,7 @@ impl Workspace {
                 match session.change_passphrase(&self.security.current, &self.security.new_passphrase) {
                     Ok(()) => {
                         self.security.forget_secrets();
-                        self.message = Some(Message::ok(
-                            "Passphrase changed. Backups made before this change still need the old one.",
-                        ));
+                        self.message = Some(Message::ok(text::security::passphrase_changed(language)));
                     }
                     Err(error) => self.message = Some(Message::error(error.to_string())),
                 }
@@ -722,13 +719,13 @@ impl Workspace {
 
         if add_key {
             if self.security.current.trim().is_empty() {
-                self.message = Some(Message::error("Enter the current passphrase first."));
+                self.message = Some(Message::error(text::security::enter_current(language)));
             } else {
                 match session.add_recovery_key(&self.security.current) {
                     Ok(key) => {
                         self.security.recovery_key = Some(key);
                         self.security.forget_secrets();
-                        self.message = Some(Message::ok("Recovery key added."));
+                        self.message = Some(Message::ok(text::security::key_added(language)));
                     }
                     Err(error) => self.message = Some(Message::error(error.to_string())),
                 }
@@ -749,67 +746,65 @@ impl Workspace {
 
     /// The panel's contents. Returns true when the user asked for a check.
     fn health_details_ui(&mut self, ui: &mut egui::Ui) -> bool {
+        let language = self.language;
         let Some(health) = &self.health else {
-            ui.label("Health could not be read from this archive.");
+            ui.label(text::health::unreadable(language));
             return false;
         };
 
         ui.horizontal(|ui| {
-            ui.label(format!("schema {}", health.schema_version));
+            ui.label(text::health::schema(language, health.schema_version));
             ui.label("·");
             ui.label(health.encryption);
             ui.label("·");
-            ui.label(format!("{} KB", health.database_bytes / 1024));
+            ui.label(text::health::size(language, health.database_bytes / 1024));
         });
 
         match &health.chain {
             Some(head) => {
                 let short = health.short_head().unwrap_or_default();
                 ui.horizontal(|ui| {
-                    ui.label(format!("audit: {} events, head", head.seq));
+                    ui.label(text::health::chain(language, head.seq));
                     ui.label(egui::RichText::new(short).monospace())
                         .on_hover_text(head.hash.as_str());
                 });
             }
             None => {
-                ui.label("audit: empty chain");
+                ui.label(text::health::empty_chain(language));
             }
         }
 
         match (&health.report, &health.error) {
             (_, Some(error)) => {
-                ui.colored_label(ERROR_COLOR, format!("integrity: {error}"));
+                ui.colored_label(ERROR_COLOR, text::health::integrity_failed(language, error));
             }
             (Some(report), None) if report.orphaned_blobs > 0 => {
                 ui.colored_label(
-                    egui::Color32::from_rgb(190, 140, 40),
-                    format!(
-                        "integrity: {} payloads verified, {} unreferenced (wasted space only)",
-                        report.blobs, report.orphaned_blobs
-                    ),
+                    WARN_COLOR,
+                    text::health::integrity_with_orphans(language, report.blobs, report.orphaned_blobs),
                 );
             }
             (Some(report), None) => {
-                ui.colored_label(OK_COLOR, format!("integrity: {} payloads verified", report.blobs));
+                ui.colored_label(OK_COLOR, text::health::integrity_ok(language, report.blobs));
             }
             (None, None) => {
-                ui.label("integrity: not checked");
+                ui.label(text::health::not_checked(language));
             }
         }
         if let Some(checked) = &health.checked_at {
-            ui.weak(format!("checked {checked}"));
+            ui.weak(text::health::checked(language, checked));
         }
 
         match &health.last_backup {
             Some(backup) => {
-                ui.label(format!("last backup: {} ({} KB)", backup.name, backup.bytes / 1024));
+                ui.label(text::health::last_backup(language, &backup.name, backup.bytes / 1024));
             }
             None => {
-                ui.label("last backup: none — run bonk backup");
+                ui.label(text::health::no_backup(language));
             }
         }
 
-        ui.button("Check integrity now").clicked()
+        ui.button(text::health::check_action(language)).clicked()
     }
 
     fn run_health_check(&mut self, session: &Session) {
@@ -844,23 +839,24 @@ impl Workspace {
         let mut open = true;
         let mut record = false;
         let mut cancel = false;
-        egui::Window::new("Suppress warning")
+        let language = self.language;
+        egui::Window::new(text::editor::suppress_title(language))
             .collapsible(false)
             .resizable(false)
             .open(&mut open)
             .show(ui.ctx(), |ui| {
-                ui.label(format!("{} at {}", target.code, target.field));
-                ui.label("Reason");
+                ui.label(text::editor::suppress_target(language, &target.code, &target.field));
+                ui.label(text::editor::reason_label(language));
                 ui.add(
                     egui::TextEdit::multiline(&mut self.suppression_reason)
                         .desired_width(360.0)
                         .desired_rows(3),
                 );
                 ui.horizontal(|ui| {
-                    if ui.button("Record suppression").clicked() {
+                    if ui.button(text::editor::record_suppression_action(language)).clicked() {
                         record = true;
                     }
-                    if ui.button("Cancel").clicked() {
+                    if ui.button(text::editor::cancel_action(language)).clicked() {
                         cancel = true;
                     }
                 });
@@ -875,12 +871,13 @@ impl Workspace {
     }
 
     fn record_suppression(&mut self, session: &Session) {
+        let language = self.language;
         let Some(seller) = self.seller.clone() else {
-            self.message = Some(Message::error("Create the seller before suppressing findings."));
+            self.message = Some(Message::error(text::editor::seller_required_to_suppress(language)));
             return;
         };
         let Some(editor) = self.editor.clone() else {
-            self.message = Some(Message::error("Open an invoice before suppressing findings."));
+            self.message = Some(Message::error(text::editor::invoice_required_to_suppress(language)));
             return;
         };
         let Some(target) = self.suppress_target.clone() else {
@@ -888,7 +885,7 @@ impl Workspace {
         };
         let reason = self.suppression_reason.trim();
         if reason.is_empty() {
-            self.message = Some(Message::error("A suppression reason is required."));
+            self.message = Some(Message::error(text::editor::suppression_reason_required(language)));
             return;
         }
         let draft = match build_draft(&editor, &seller) {
@@ -919,7 +916,7 @@ impl Workspace {
                     self.suppressions = suppressions;
                     self.suppress_target = None;
                     self.suppression_reason.clear();
-                    self.message = Some(Message::ok("Warning suppressed with a recorded reason."));
+                    self.message = Some(Message::ok(text::editor::warning_suppressed(language)));
                 }
                 Err(error) => self.message = Some(Message::error(error.to_string())),
             },
@@ -928,76 +925,75 @@ impl Workspace {
     }
 
     fn seller_onboarding(&mut self, ui: &mut egui::Ui, session: &Session, focus: Option<&str>) {
-        ui.heading("Create your seller profile");
-        ui.label("One legal entity per database in v1.");
+        let language = self.language;
+        ui.heading(text::editor::seller_heading(language));
+        ui.label(text::editor::seller_note(language));
         ui.add_space(8.0);
 
         egui::Grid::new("seller-form").num_columns(2).show(ui, |ui| {
-            ui.label("Legal name");
+            ui.label(text::editor::field(language, Field::LegalName));
             text_field(ui, &mut self.seller_form.name, "seller.name", 200.0, focus);
             ui.end_row();
-            ui.label("Street");
+            ui.label(text::editor::field(language, Field::Street));
             text_field(ui, &mut self.seller_form.street, "seller.street", 200.0, focus);
             ui.end_row();
-            ui.label("Post code");
+            ui.label(text::editor::field(language, Field::PostCode));
             text_field(ui, &mut self.seller_form.postal, "seller.postal_code", 200.0, focus);
             ui.end_row();
-            ui.label("City");
+            ui.label(text::editor::field(language, Field::City));
             text_field(ui, &mut self.seller_form.city, "seller.city", 200.0, focus);
             ui.end_row();
-            ui.label("Country");
+            ui.label(text::editor::field(language, Field::Country));
             text_field(ui, &mut self.seller_form.country, "seller.country", 200.0, focus);
             ui.end_row();
-            ui.label("VAT ID");
+            ui.label(text::editor::field(language, Field::VatId));
             text_field(ui, &mut self.seller_form.vat, "seller.vat_id", 200.0, focus);
             ui.end_row();
-            ui.label("KvK number");
+            ui.label(text::editor::field(language, Field::Kvk));
             text_field(ui, &mut self.seller_form.kvk, "seller.kvk_number", 200.0, focus);
             ui.end_row();
-            ui.label("Peppol ID");
+            ui.label(text::editor::field(language, Field::Peppol));
             text_field(ui, &mut self.seller_form.peppol, "seller.peppol", 200.0, focus);
             ui.end_row();
         });
 
         ui.add_space(8.0);
-        if ui.button("Create seller").clicked() {
+        if ui.button(text::editor::create_seller_action(language)).clicked() {
             self.create_seller(session);
         }
     }
 
     fn unlocked_ui(&mut self, ui: &mut egui::Ui, session: &mut Session, focus: Option<&str>) {
+        let language = self.language;
         let mut start_credit = false;
         if let Some(issued) = &self.issued {
-            ui.heading(if issued.number.contains("-C") {
-                "Issued credit note"
-            } else {
-                "Issued"
-            });
-            ui.label(format!("Number: {}", issued.number));
-            ui.label(format!("Issue date: {}", issued.issue_date));
-            ui.label(format!("Payable: {}", money_text(issued.totals.gross)));
-            ui.label(format!("UBL SHA-256: {}", issued.ubl_sha256));
+            let credit_note = issued.number.contains("-C");
+            ui.heading(text::editor::issued_heading(credit_note));
+            ui.label(text::editor::number_line(language, &issued.number));
+            ui.label(text::editor::issue_date_line(language, &issued.issue_date.to_string()));
+            ui.label(text::editor::payable_line(language, &money_text(issued.totals.gross)));
+            ui.label(text::editor::ubl_hash_line(language, &issued.ubl_sha256));
         }
 
         if self.issued.is_some() {
             let is_credit_note = self.issued.as_ref().is_some_and(|issued| issued.number.contains("-C"));
             let mut save_pdf = false;
             if let Some(pdf) = &self.pdf {
-                ui.label(format!("PDF SHA-256: {}", pdf.hash));
+                ui.label(text::editor::pdf_hash_line(language, &pdf.hash));
                 ui.horizontal(|ui| {
-                    ui.label("Save PDF to");
+                    ui.label(text::editor::save_pdf_to(language));
                     ui.add(egui::TextEdit::singleline(&mut self.pdf_path).desired_width(420.0));
-                    save_pdf = ui.button("Save PDF").clicked();
+                    save_pdf = ui.button(text::editor::save_pdf_action(language)).clicked();
                 });
             }
 
             ui.add_space(8.0);
             let mut reset = false;
             ui.horizontal(|ui| {
-                if !is_credit_note && ui.button("Credit note").clicked() {
+                if !is_credit_note && ui.button(text::editor::credit_note_action(language)).clicked() {
                     start_credit = true;
                 }
-                if ui.button("New invoice").clicked() {
+                if ui.button(text::editor::new_invoice_action(language)).clicked() {
                     reset = true;
                 }
             });
@@ -1013,49 +1009,49 @@ impl Workspace {
         }
 
         if let Some(seller) = &self.seller {
-            ui.label(format!("Seller: {}", seller.party.legal_name));
+            ui.label(text::editor::seller_line(language, &seller.party.legal_name));
         }
 
         ui.horizontal(|ui| {
-            if ui.button("New invoice").clicked() {
+            if ui.button(text::editor::new_invoice_action(language)).clicked() {
                 let customer = self.customers.first().map(|customer| customer.id);
                 self.editor = Some(Editor::new(customer, self.default_document_language()));
                 self.suppressions.clear();
                 self.suppress_target = None;
                 self.suppression_reason.clear();
             }
-            if ui.button("Add customer").clicked() {
+            if ui.button(text::editor::add_customer_action(language)).clicked() {
                 self.show_customer_form = !self.show_customer_form;
             }
         });
 
         if self.show_customer_form {
             ui.group(|ui| {
-                ui.label("New customer");
+                ui.label(text::editor::new_customer_heading(language));
                 egui::Grid::new("customer-form").num_columns(2).show(ui, |ui| {
-                    ui.label("Name");
+                    ui.label(text::editor::field(language, Field::Name));
                     text_field(ui, &mut self.customer_form.name, "customer.name", 200.0, focus);
                     ui.end_row();
-                    ui.label("Street");
+                    ui.label(text::editor::field(language, Field::Street));
                     text_field(ui, &mut self.customer_form.street, "customer.street", 200.0, focus);
                     ui.end_row();
-                    ui.label("Post code");
+                    ui.label(text::editor::field(language, Field::PostCode));
                     text_field(ui, &mut self.customer_form.postal, "customer.postal_code", 200.0, focus);
                     ui.end_row();
-                    ui.label("City");
+                    ui.label(text::editor::field(language, Field::City));
                     text_field(ui, &mut self.customer_form.city, "customer.city", 200.0, focus);
                     ui.end_row();
-                    ui.label("Country");
+                    ui.label(text::editor::field(language, Field::Country));
                     text_field(ui, &mut self.customer_form.country, "customer.country", 200.0, focus);
                     ui.end_row();
-                    ui.label("VAT ID");
+                    ui.label(text::editor::field(language, Field::VatId));
                     text_field(ui, &mut self.customer_form.vat, "customer.vat_id", 200.0, focus);
                     ui.end_row();
-                    ui.label("Peppol ID");
+                    ui.label(text::editor::field(language, Field::Peppol));
                     text_field(ui, &mut self.customer_form.peppol, "customer.peppol", 200.0, focus);
                     ui.end_row();
                 });
-                if ui.button("Save customer").clicked() {
+                if ui.button(text::editor::save_customer_action(language)).clicked() {
                     self.create_customer(session);
                 }
             });
@@ -1065,11 +1061,12 @@ impl Workspace {
             self.editor_ui(ui, session, focus);
         } else {
             ui.add_space(8.0);
-            ui.label("Open a new invoice to start. Existing drafts are not listed yet.");
+            ui.label(text::editor::empty_editor(language));
         }
     }
 
     fn editor_ui(&mut self, ui: &mut egui::Ui, session: &mut Session, focus: Option<&str>) {
+        let language = self.language;
         let Some(seller) = self.seller.clone() else {
             return;
         };
@@ -1090,15 +1087,15 @@ impl Workspace {
                     .as_ref()
                     .map(|preceding| preceding.number.as_str())
                     .unwrap_or_default();
-                ui.colored_label(OK_COLOR, format!("Credit note for invoice {number}"));
+                ui.colored_label(OK_COLOR, text::editor::credit_note_banner(language, number));
             }
             ui.horizontal(|ui| {
-                ui.label("Customer");
+                ui.label(text::editor::customer_label(language));
                 let selected = editor
                     .customer
                     .and_then(|id| customers.iter().find(|customer| customer.id == id))
                     .map(|customer| customer.party.legal_name.clone())
-                    .unwrap_or_else(|| "Select customer".to_owned());
+                    .unwrap_or_else(|| text::editor::select_customer(language).to_owned());
                 egui::ComboBox::from_id_salt("customer")
                     .selected_text(selected)
                     .show_ui(ui, |ui| {
@@ -1113,19 +1110,19 @@ impl Workspace {
             });
 
             egui::Grid::new("header-form").num_columns(4).show(ui, |ui| {
-                ui.label("Issue date");
+                ui.label(text::editor::issue_date_label(language));
                 text_field(ui, &mut editor.issue_date, "issue_date", 110.0, focus);
-                ui.label("Due date");
+                ui.label(text::editor::due_date_label(language));
                 text_field(ui, &mut editor.due_date, "due_date", 110.0, focus);
                 ui.end_row();
-                ui.label("Buyer ref");
+                ui.label(text::editor::buyer_reference_label(language));
                 text_field(ui, &mut editor.buyer_reference, "buyer_reference", 110.0, focus);
-                ui.label("Order ref");
+                ui.label(text::editor::order_reference_label(language));
                 text_field(ui, &mut editor.order_reference, "order_reference", 110.0, focus);
                 ui.end_row();
-                ui.label("Delivery date");
+                ui.label(text::editor::delivery_date_label(language));
                 text_field(ui, &mut editor.delivery_date, "delivery_date", 110.0, focus);
-                ui.label("Document language");
+                ui.label(text::editor::document_language_label(language));
                 egui::ComboBox::from_id_salt("editor.language")
                     .selected_text(match editor.document_language {
                         render::Language::English => "English",
@@ -1138,7 +1135,7 @@ impl Workspace {
                 ui.end_row();
             });
             ui.horizontal(|ui| {
-                ui.label("Note");
+                ui.label(text::editor::note_label(language));
                 text_field(ui, &mut editor.note, "note", 420.0, focus);
             });
 
@@ -1148,11 +1145,9 @@ impl Workspace {
                     .num_columns(6)
                     .striped(true)
                     .show(ui, |ui| {
-                        ui.label("Item");
-                        ui.label("Qty");
-                        ui.label("Unit price");
-                        ui.label("Rate %");
-                        ui.label("VAT");
+                        for heading in text::editor::line_columns(language) {
+                            ui.label(heading);
+                        }
                         ui.label("");
                         ui.end_row();
 
@@ -1178,7 +1173,7 @@ impl Workspace {
                             if focus == Some(vat_field.as_str()) {
                                 combo.response.request_focus();
                             }
-                            if ui.button("Remove").clicked() {
+                            if ui.button(text::editor::remove_line_action(language)).clicked() {
                                 remove_line = Some(index);
                             }
                             ui.end_row();
@@ -1190,13 +1185,13 @@ impl Workspace {
             {
                 editor.lines.remove(index);
             }
-            if ui.button("Add line").clicked() {
+            if ui.button(text::editor::add_line_action(language)).clicked() {
                 editor.lines.push(LineForm::default());
             }
 
             ui.add_space(8.0);
-            save = ui.button("Save draft").clicked();
-            issue = ui.button("Issue").clicked();
+            save = ui.button(text::editor::save_draft_action(language)).clicked();
+            issue = ui.button(text::editor::issue_action(language)).clicked();
         }
 
         let mut finding_action = None;
@@ -1205,11 +1200,11 @@ impl Workspace {
                 Ok(draft) => {
                     match calculate_totals(&draft.lines) {
                         Ok(totals) => {
-                            ui.label(format!(
-                                "Net {}   VAT {}   Total {}",
-                                money_text(totals.net),
-                                money_text(totals.tax),
-                                money_text(totals.gross)
+                            ui.label(text::editor::totals(
+                                language,
+                                &money_text(totals.net),
+                                &money_text(totals.tax),
+                                &money_text(totals.gross),
                             ));
                         }
                         Err(error) => {
@@ -1229,7 +1224,7 @@ impl Workspace {
                                 .into_iter()
                                 .filter(|finding| !self.is_suppressed(finding))
                                 .collect();
-                            if let Some(action) = show_findings(ui, &visible) {
+                            if let Some(action) = show_findings(ui, language, &visible) {
                                 finding_action = Some(action);
                             }
                             if suppressed > 0 {
@@ -1237,7 +1232,7 @@ impl Workspace {
                             }
                         }
                         None => {
-                            ui.colored_label(ERROR_COLOR, "Select a customer to validate.");
+                            ui.colored_label(ERROR_COLOR, text::editor::select_customer_to_validate(language));
                         }
                     }
                 }
@@ -1281,10 +1276,11 @@ impl Workspace {
         let number = issued.number.clone();
         let seller_id = seller.id;
         // A correction speaks the same language as the document it corrects.
-        let language = self
+        let document_language = self
             .editor
             .as_ref()
             .map_or_else(render::Language::default, |editor| editor.document_language);
+        let language = self.language;
         let result = credit_note_for(
             session.database().connection(),
             seller_id,
@@ -1292,16 +1288,18 @@ impl Workspace {
             LocalDate::today_utc(),
         );
         match result {
-            Ok(Some(draft)) => match Editor::credit_note(&draft, language) {
+            Ok(Some(draft)) => match Editor::credit_note(&draft, document_language) {
                 Some(editor) => {
                     self.reset_document();
                     self.editor = Some(editor);
-                    self.message = Some(Message::ok(format!("Credit note for {number}")));
+                    self.message = Some(Message::ok(text::editor::credit_note_started(language, &number)));
                 }
-                None => self.message = Some(Message::error("the draft has no preceding invoice".to_owned())),
+                None => {
+                    self.message = Some(Message::error(text::editor::no_preceding_invoice(language)));
+                }
             },
             Ok(None) => {
-                self.message = Some(Message::error(format!("invoice {number} was not found")));
+                self.message = Some(Message::error(text::editor::invoice_not_found(language, &number)));
             }
             Err(error) => self.message = Some(Message::error(error.to_string())),
         }
@@ -1340,7 +1338,7 @@ impl Workspace {
             Ok(()) => {
                 self.seller = Some(record);
                 self.seller_form = SellerForm::default();
-                self.message = Some(Message::ok("Seller created."));
+                self.message = Some(Message::ok(text::editor::seller_created(self.language)));
             }
             Err(error) => self.message = Some(Message::error(error.to_string())),
         }
@@ -1381,7 +1379,7 @@ impl Workspace {
                 {
                     editor.customer = self.customers.last().map(|customer| customer.id);
                 }
-                self.message = Some(Message::ok("Customer created."));
+                self.message = Some(Message::ok(text::editor::customer_created(self.language)));
             }
             Err(error) => self.message = Some(Message::error(error.to_string())),
         }
@@ -1404,7 +1402,7 @@ impl Workspace {
 
         match save_draft(session.database().connection(), &draft, &store::now_rfc3339()) {
             Ok(()) => {
-                self.message = Some(Message::ok("Draft saved."));
+                self.message = Some(Message::ok(text::editor::draft_saved(self.language)));
             }
             Err(error) => self.message = Some(Message::error(error.to_string())),
         }
@@ -1429,7 +1427,7 @@ impl Workspace {
         let customer = match self.customers.iter().find(|customer| customer.id == draft.customer_id) {
             Some(customer) => customer.clone(),
             None => {
-                self.message = Some(Message::error("Select a customer."));
+                self.message = Some(Message::error(text::editor::select_customer_required(self.language)));
                 return;
             }
         };
@@ -1440,9 +1438,7 @@ impl Workspace {
                 .iter()
                 .filter(|finding| finding.severity == Severity::Blocking)
                 .count();
-            self.message = Some(Message::error(format!(
-                "{count} blocking finding(s); nothing was issued."
-            )));
+            self.message = Some(Message::error(text::editor::blocking_findings(self.language, count)));
             return;
         }
 
@@ -1489,7 +1485,10 @@ impl Workspace {
                     Err(error) => {
                         self.pdf = None;
                         self.pdf_path.clear();
-                        self.message = Some(Message::ok(format!("Issued. PDF not rendered: {error}")));
+                        self.message = Some(Message::ok(text::editor::issued_without_pdf(
+                            self.language,
+                            &error.to_string(),
+                        )));
                     }
                 }
 
@@ -1497,7 +1496,10 @@ impl Workspace {
                 self.editor = None;
                 self.conformance_findings.clear();
                 if let Some(error) = attach_error {
-                    self.message = Some(Message::error(format!("Issued, but the PDF was not attached: {error}")));
+                    self.message = Some(Message::error(text::editor::issued_with_unattached_pdf(
+                        self.language,
+                        &error,
+                    )));
                 } else if self.pdf.is_some() {
                     self.message = None;
                 }
@@ -1508,9 +1510,7 @@ impl Workspace {
                     .filter(|finding| finding.severity == Severity::Blocking)
                     .count();
                 self.conformance_findings = findings;
-                self.message = Some(Message::error(format!(
-                    "{count} conformance finding(s); nothing was issued."
-                )));
+                self.message = Some(Message::error(text::editor::conformance_findings(self.language, count)));
             }
             Err(error) => self.message = Some(Message::error(error.to_string())),
         }
@@ -1522,12 +1522,17 @@ impl Workspace {
         };
         let path = self.pdf_path.trim();
         if path.is_empty() {
-            self.message = Some(Message::error("Choose a file name for the PDF."));
+            self.message = Some(Message::error(text::editor::choose_pdf_path(self.language)));
             return;
         }
         match std::fs::write(path, &pdf.bytes) {
-            Ok(()) => self.message = Some(Message::ok(format!("PDF saved to {path}"))),
-            Err(error) => self.message = Some(Message::error(format!("Could not save the PDF: {error}"))),
+            Ok(()) => self.message = Some(Message::ok(text::editor::pdf_saved(self.language, path))),
+            Err(error) => {
+                self.message = Some(Message::error(text::editor::pdf_save_failed(
+                    self.language,
+                    &error.to_string(),
+                )))
+            }
         }
     }
 }
@@ -1805,7 +1810,7 @@ fn fact(ui: &mut egui::Ui, language: Language, fact: Fact, value: &str) {
     ui.end_row();
 }
 
-fn show_findings(ui: &mut egui::Ui, findings: &[Finding]) -> Option<FindingAction> {
+fn show_findings(ui: &mut egui::Ui, language: Language, findings: &[Finding]) -> Option<FindingAction> {
     let mut action = None;
     for finding in findings.iter().take(12) {
         let color = match finding.severity {
@@ -1820,10 +1825,10 @@ fn show_findings(ui: &mut egui::Ui, findings: &[Finding]) -> Option<FindingActio
         if can_focus || can_suppress {
             ui.horizontal(|ui| {
                 ui.colored_label(color, text);
-                if can_focus && ui.small_button("Focus").clicked() {
+                if can_focus && ui.small_button(text::editor::focus_action(language)).clicked() {
                     action = Some(FindingAction::Focus(finding.field.clone()));
                 }
-                if can_suppress && ui.small_button("Suppress").clicked() {
+                if can_suppress && ui.small_button(text::editor::suppress_action(language)).clicked() {
                     action = Some(FindingAction::Suppress {
                         code: finding.code.to_owned(),
                         field: finding.field.clone(),

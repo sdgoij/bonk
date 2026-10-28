@@ -394,6 +394,526 @@ pub mod find {
     }
 }
 
+/// The seller and customer forms, the invoice editor, and what follows issuing.
+pub mod editor {
+    use super::Language;
+
+    /// Labels a party form uses.
+    #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+    pub enum Field {
+        /// Registered name of a legal entity.
+        LegalName,
+        /// Name of a customer.
+        Name,
+        /// Street and number.
+        Street,
+        /// Post code.
+        PostCode,
+        /// City.
+        City,
+        /// Country code.
+        Country,
+        /// VAT identifier.
+        VatId,
+        /// Chamber of commerce number.
+        Kvk,
+        /// Peppol participant identifier.
+        Peppol,
+    }
+
+    /// The word for a party field.
+    pub fn field(_: Language, field: Field) -> &'static str {
+        match field {
+            Field::LegalName => "Legal name",
+            Field::Name => "Name",
+            Field::Street => "Street",
+            Field::PostCode => "Post code",
+            Field::City => "City",
+            Field::Country => "Country",
+            Field::VatId => "VAT ID",
+            Field::Kvk => "KvK number",
+            Field::Peppol => "Peppol ID",
+        }
+    }
+
+    /// Heading of the first-run seller form.
+    pub fn seller_heading(_: Language) -> &'static str {
+        "Create your seller profile"
+    }
+
+    /// What the first-run form promises.
+    pub fn seller_note(_: Language) -> &'static str {
+        "One legal entity per database in v1."
+    }
+
+    /// Stores the seller.
+    pub fn create_seller_action(_: Language) -> &'static str {
+        "Create seller"
+    }
+
+    /// Heading of the customer form.
+    pub fn new_customer_heading(_: Language) -> &'static str {
+        "New customer"
+    }
+
+    /// Stores the customer.
+    pub fn save_customer_action(_: Language) -> &'static str {
+        "Save customer"
+    }
+
+    /// Opens the customer form.
+    pub fn add_customer_action(_: Language) -> &'static str {
+        "Add customer"
+    }
+
+    /// Nothing has been started yet.
+    pub fn empty_editor(_: Language) -> &'static str {
+        "Open a new invoice to start. Existing drafts are not listed yet."
+    }
+
+    /// The name of the seller the workspace belongs to.
+    pub fn seller_line(language: Language, name: &str) -> String {
+        match language {
+            Language::English => format!("Seller: {name}"),
+        }
+    }
+
+    /// Heading after issuing.
+    pub fn issued_heading(credit_note: bool) -> &'static str {
+        if credit_note { "Issued credit note" } else { "Issued" }
+    }
+
+    /// Number of the issued document.
+    pub fn number_line(language: Language, number: &str) -> String {
+        match language {
+            Language::English => format!("Number: {number}"),
+        }
+    }
+
+    /// Issue date of the issued document.
+    pub fn issue_date_line(language: Language, date: &str) -> String {
+        match language {
+            Language::English => format!("Issue date: {date}"),
+        }
+    }
+
+    /// Amount payable.
+    pub fn payable_line(language: Language, amount: &str) -> String {
+        match language {
+            Language::English => format!("Payable: {amount}"),
+        }
+    }
+
+    /// Hash of the UBL artefact.
+    pub fn ubl_hash_line(language: Language, hash: &str) -> String {
+        match language {
+            Language::English => format!("UBL SHA-256: {hash}"),
+        }
+    }
+
+    /// Hash of the PDF artefact.
+    pub fn pdf_hash_line(language: Language, hash: &str) -> String {
+        match language {
+            Language::English => format!("PDF SHA-256: {hash}"),
+        }
+    }
+
+    /// Label above the PDF path field.
+    pub fn save_pdf_to(_: Language) -> &'static str {
+        "Save PDF to"
+    }
+
+    /// Writes the PDF to the named path.
+    pub fn save_pdf_action(_: Language) -> &'static str {
+        "Save PDF"
+    }
+
+    /// Starts a credit note for the issued invoice.
+    pub fn credit_note_action(_: Language) -> &'static str {
+        "Credit note"
+    }
+
+    /// Starts an empty invoice.
+    pub fn new_invoice_action(_: Language) -> &'static str {
+        "New invoice"
+    }
+
+    /// Banner at the top of a credit-note editor.
+    pub fn credit_note_banner(language: Language, number: &str) -> String {
+        match language {
+            Language::English => format!("Credit note for invoice {number}"),
+        }
+    }
+
+    /// Label above the customer picker.
+    pub fn customer_label(_: Language) -> &'static str {
+        "Customer"
+    }
+
+    /// Shown in the customer picker before one is chosen.
+    pub fn select_customer(_: Language) -> &'static str {
+        "Select customer"
+    }
+
+    /// Issue date field.
+    pub fn issue_date_label(_: Language) -> &'static str {
+        "Issue date"
+    }
+
+    /// Due date field.
+    pub fn due_date_label(_: Language) -> &'static str {
+        "Due date"
+    }
+
+    /// Buyer reference field.
+    pub fn buyer_reference_label(_: Language) -> &'static str {
+        "Buyer ref"
+    }
+
+    /// Order reference field.
+    pub fn order_reference_label(_: Language) -> &'static str {
+        "Order ref"
+    }
+
+    /// Delivery date field.
+    pub fn delivery_date_label(_: Language) -> &'static str {
+        "Delivery date"
+    }
+
+    /// Language picker for the printed document.
+    pub fn document_language_label(_: Language) -> &'static str {
+        "Document language"
+    }
+
+    /// Free-text note field.
+    pub fn note_label(_: Language) -> &'static str {
+        "Note"
+    }
+
+    /// Line entry columns, in order.
+    pub fn line_columns(_: Language) -> [&'static str; 5] {
+        ["Item", "Qty", "Unit price", "Rate %", "VAT"]
+    }
+
+    /// Removes a line.
+    pub fn remove_line_action(_: Language) -> &'static str {
+        "Remove"
+    }
+
+    /// Appends a line.
+    pub fn add_line_action(_: Language) -> &'static str {
+        "Add line"
+    }
+
+    /// Stores the draft without issuing it.
+    pub fn save_draft_action(_: Language) -> &'static str {
+        "Save draft"
+    }
+
+    /// Issues the draft.
+    pub fn issue_action(_: Language) -> &'static str {
+        "Issue"
+    }
+
+    /// Live totals under the lines.
+    pub fn totals(language: Language, net: &str, tax: &str, gross: &str) -> String {
+        match language {
+            Language::English => format!("Net {net}   VAT {tax}   Total {gross}"),
+        }
+    }
+
+    /// Title of the suppression dialog.
+    pub fn suppress_title(_: Language) -> &'static str {
+        "Suppress warning"
+    }
+
+    /// Which finding is being suppressed.
+    pub fn suppress_target(language: Language, code: &str, field: &str) -> String {
+        match language {
+            Language::English => format!("{code} at {field}"),
+        }
+    }
+
+    /// Label above the suppression reason.
+    pub fn reason_label(_: Language) -> &'static str {
+        "Reason"
+    }
+
+    /// Stores the suppression.
+    pub fn record_suppression_action(_: Language) -> &'static str {
+        "Record suppression"
+    }
+
+    /// Closes a dialog without acting.
+    pub fn cancel_action(_: Language) -> &'static str {
+        "Cancel"
+    }
+
+    /// Points the form at the field a finding names.
+    pub fn focus_action(_: Language) -> &'static str {
+        "Focus"
+    }
+
+    /// Records a reason for ignoring a warning.
+    pub fn suppress_action(_: Language) -> &'static str {
+        "Suppress"
+    }
+
+    /// The draft was stored.
+    pub fn draft_saved(_: Language) -> &'static str {
+        "Draft saved."
+    }
+
+    /// The seller record was stored.
+    pub fn seller_created(_: Language) -> &'static str {
+        "Seller created."
+    }
+
+    /// The customer record was stored.
+    pub fn customer_created(_: Language) -> &'static str {
+        "Customer created."
+    }
+
+    /// The editor has no customer yet.
+    pub fn select_customer_required(_: Language) -> &'static str {
+        "Select a customer."
+    }
+
+    /// The live totals cannot be calculated without a customer.
+    pub fn select_customer_to_validate(_: Language) -> &'static str {
+        "Select a customer to validate."
+    }
+
+    /// Suppressing a finding requires a seller.
+    pub fn seller_required_to_suppress(_: Language) -> &'static str {
+        "Create the seller before suppressing findings."
+    }
+
+    /// Suppressing a finding requires an open invoice.
+    pub fn invoice_required_to_suppress(_: Language) -> &'static str {
+        "Open an invoice before suppressing findings."
+    }
+
+    /// A suppression needs a reason.
+    pub fn suppression_reason_required(_: Language) -> &'static str {
+        "A suppression reason is required."
+    }
+
+    /// The suppression was recorded.
+    pub fn warning_suppressed(_: Language) -> &'static str {
+        "Warning suppressed with a recorded reason."
+    }
+
+    /// A credit note was started from an invoice.
+    pub fn credit_note_started(language: Language, number: &str) -> String {
+        match language {
+            Language::English => format!("Credit note for {number}"),
+        }
+    }
+
+    /// The number a credit note should correct was not found.
+    pub fn invoice_not_found(language: Language, number: &str) -> String {
+        match language {
+            Language::English => format!("invoice {number} was not found"),
+        }
+    }
+
+    /// A draft handed to `start_credit_note` had no preceding invoice.
+    pub fn no_preceding_invoice(_: Language) -> &'static str {
+        "the draft has no preceding invoice"
+    }
+
+    /// Counts the findings that stopped an issue.
+    pub fn blocking_findings(language: Language, count: usize) -> String {
+        match language {
+            Language::English => format!("{count} blocking finding(s); nothing was issued."),
+        }
+    }
+
+    /// Counts the conformance findings that stopped an issue.
+    pub fn conformance_findings(language: Language, count: usize) -> String {
+        match language {
+            Language::English => format!("{count} conformance finding(s); nothing was issued."),
+        }
+    }
+
+    /// The invoice was issued but no PDF could be made.
+    pub fn issued_without_pdf(language: Language, error: &str) -> String {
+        match language {
+            Language::English => format!("Issued. PDF not rendered: {error}"),
+        }
+    }
+
+    /// The PDF was made but could not be attached to the archive.
+    pub fn issued_with_unattached_pdf(language: Language, error: &str) -> String {
+        match language {
+            Language::English => format!("Issued, but the PDF was not attached: {error}"),
+        }
+    }
+
+    /// The PDF path field is empty.
+    pub fn choose_pdf_path(_: Language) -> &'static str {
+        "Choose a file name for the PDF."
+    }
+
+    /// The PDF was written.
+    pub fn pdf_saved(language: Language, path: &str) -> String {
+        match language {
+            Language::English => format!("PDF saved to {path}"),
+        }
+    }
+
+    /// The PDF could not be written.
+    pub fn pdf_save_failed(language: Language, error: &str) -> String {
+        match language {
+            Language::English => format!("Could not save the PDF: {error}"),
+        }
+    }
+}
+
+/// The archive health panel.
+pub mod health {
+    use super::Language;
+
+    /// Title of the archive health panel.
+    pub fn panel_title(_: Language) -> &'static str {
+        "Archive health"
+    }
+
+    /// The archive's facts could not be read.
+    pub fn unreadable(_: Language) -> &'static str {
+        "Health could not be read from this archive."
+    }
+
+    /// Schema version.
+    pub fn schema(language: Language, version: i64) -> String {
+        match language {
+            Language::English => format!("schema {version}"),
+        }
+    }
+
+    /// How large the archive is.
+    pub fn size(language: Language, kibibytes: u64) -> String {
+        match language {
+            Language::English => format!("{kibibytes} KB"),
+        }
+    }
+
+    /// The audit chain, when it has links.
+    pub fn chain(language: Language, events: i64) -> String {
+        match language {
+            Language::English => format!("audit: {events} events, head"),
+        }
+    }
+
+    /// An archive that has never recorded an event.
+    pub fn empty_chain(_: Language) -> &'static str {
+        "audit: empty chain"
+    }
+
+    /// The payload audit failed.
+    pub fn integrity_failed(language: Language, error: &str) -> String {
+        match language {
+            Language::English => format!("integrity: {error}"),
+        }
+    }
+
+    /// Every payload verified.
+    pub fn integrity_ok(language: Language, payloads: usize) -> String {
+        match language {
+            Language::English => format!("integrity: {payloads} payloads verified"),
+        }
+    }
+
+    /// Everything verified, but some blobs are unreferenced.
+    pub fn integrity_with_orphans(language: Language, payloads: usize, orphans: usize) -> String {
+        match language {
+            Language::English => {
+                format!("integrity: {payloads} payloads verified, {orphans} unreferenced (wasted space only)")
+            }
+        }
+    }
+
+    /// The audit has not been run.
+    pub fn not_checked(_: Language) -> &'static str {
+        "integrity: not checked"
+    }
+
+    /// When the audit last ran.
+    pub fn checked(language: Language, at: &str) -> String {
+        match language {
+            Language::English => format!("checked {at}"),
+        }
+    }
+
+    /// The newest backup beside the archive.
+    pub fn last_backup(language: Language, name: &str, kibibytes: u64) -> String {
+        match language {
+            Language::English => format!("last backup: {name} ({kibibytes} KB)"),
+        }
+    }
+
+    /// There is no backup yet.
+    pub fn no_backup(_: Language) -> &'static str {
+        "last backup: none — run bonk backup"
+    }
+
+    /// Runs the payload audit now.
+    pub fn check_action(_: Language) -> &'static str {
+        "Check integrity now"
+    }
+}
+
+/// The security panel.
+pub mod security {
+    use super::Language;
+
+    /// Title of the security panel.
+    pub fn panel_title(_: Language) -> &'static str {
+        "Security"
+    }
+
+    /// Why the current passphrase is asked for again.
+    pub fn note(_: Language) -> &'static str {
+        "A credential change asks for the current passphrase again."
+    }
+
+    /// The current passphrase.
+    pub fn current_label(_: Language) -> &'static str {
+        "Current passphrase"
+    }
+
+    /// Rewraps the data key.
+    pub fn change_action(_: Language) -> &'static str {
+        "Change passphrase"
+    }
+
+    /// Adds or replaces the recovery key.
+    pub fn add_key_action(_: Language) -> &'static str {
+        "Add recovery key"
+    }
+
+    /// Acknowledges a shown key.
+    pub fn done_action(_: Language) -> &'static str {
+        "Done"
+    }
+
+    /// The key was added.
+    pub fn key_added(_: Language) -> &'static str {
+        "Recovery key added."
+    }
+
+    /// The passphrase was changed.
+    pub fn passphrase_changed(_: Language) -> &'static str {
+        "Passphrase changed. Backups made before this change still need the old one."
+    }
+
+    /// The passphrase field is empty when a key is requested.
+    pub fn enter_current(_: Language) -> &'static str {
+        "Enter the current passphrase first."
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -460,6 +980,41 @@ mod tests {
     fn the_detail_mentions_the_number_it_was_given() {
         let detail = strength::detail(Language::English, 72);
         assert!(detail.contains("72"), "{detail}");
+    }
+
+    #[test]
+    fn editor_text_covers_its_fields_and_columns() {
+        let language = Language::default();
+        for field in [
+            editor::Field::LegalName,
+            editor::Field::Name,
+            editor::Field::Street,
+            editor::Field::PostCode,
+            editor::Field::City,
+            editor::Field::Country,
+            editor::Field::VatId,
+            editor::Field::Kvk,
+            editor::Field::Peppol,
+        ] {
+            assert!(!editor::field(language, field).is_empty(), "{field:?}");
+        }
+        assert_eq!(editor::line_columns(language).len(), 5);
+        assert!(editor::blocking_findings(language, 2).contains('2'));
+        assert!(editor::pdf_saved(language, "/tmp/x.pdf").contains("/tmp/x.pdf"));
+        assert!(editor::credit_note_banner(language, "2026-0001").contains("2026-0001"));
+    }
+
+    #[test]
+    fn panel_text_names_its_numbers() {
+        let language = Language::default();
+        assert!(health::schema(language, 3).contains('3'));
+        assert!(health::chain(language, 7).contains('7'));
+        assert!(health::integrity_with_orphans(language, 4, 1).contains('1'));
+        assert!(health::last_backup(language, "2026-10.db", 12).contains("2026-10.db"));
+        assert!(!security::note(language).is_empty());
+        assert!(!security::passphrase_changed(language).is_empty());
+        assert!(!health::panel_title(language).is_empty());
+        assert!(!security::panel_title(language).is_empty());
     }
 
     #[test]

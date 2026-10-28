@@ -341,7 +341,7 @@ buyer and order reference from the document they correct, so the copied draft
 still passes R003.
 
 Remaining in M2: nothing blocking. Explicit deliver-to address fields beyond the
-buyer country remain for a later slice. Workspace tests: 369 encrypted, 367 plain.
+buyer country remain for a later slice. Workspace tests: 371 encrypted, 369 plain.
 
 Exit criteria:
 
@@ -538,18 +538,21 @@ EN 16931 has no label field, so the language is a rendering choice frozen into
 the PDF artefact.
 
 The i18n groundwork is in, English first. `app::text` holds a `Language` enum and
-the strings for the lock screen, the strength estimate, the workspace chrome, and
-the find screen, grouped by screen; each function takes the language and ignores it
-today, so adding a second table changes one module and no call sites. The strength
+the strings for every screen the window draws — lock screen, strength estimate,
+workspace chrome, find screen, seller and customer forms, the invoice editor, the
+issued screen, the health and security panels, and the messages those actions
+report — grouped by screen, each function taking the language it will be selected
+by. Adding a second table changes one module and no call sites. The strength
 estimate now returns a `Reason` code rather than a sentence, which is what lets the
-wording live in the text table at all. `BonkApp` and `Workspace` each hold the
-language, chosen once, so a second table has a place to be selected from — the
-seller's locale is the obvious source. Status and side words come from the table
-too rather than `Display`, so a translated panel is not half translated. What is
-left is the editor and the panels below it.
+wording live in the text table at all, and status and side words come from the
+table rather than `Display`, so a translated screen is not half translated.
+`BonkApp` and `Workspace` each hold the language, chosen once; the seller's locale
+is the obvious source for a second table.
 
-Remaining in M5: the rest of the i18n pass — the editor, the issued screen, and
-the health and security panels still hold literals.
+Remaining in M5: the validation messages from `build_draft` and the domain errors
+from `crux` that they quote. Those are not widget strings: translating them means
+giving `DomainError` stable codes the interface can render, the same trick as the
+strength `Reason`, and that is a change to the domain rather than to the UI.
 
 ---
 
