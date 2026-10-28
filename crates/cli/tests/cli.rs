@@ -166,6 +166,67 @@ fn changing_the_passphrase_keeps_the_archive_openable() {
 }
 
 #[test]
+fn a_recovery_key_is_printed_once_and_the_passphrase_still_works() {
+    let dir = TempDir::new().expect("temp dir");
+    let (database, keystore) = run_init(&dir);
+    let passphrase = "correct horse battery staple";
+
+    let size_before = std::fs::metadata(&keystore).expect("keystore").len();
+    let output = bonk()
+        .args([
+            "recovery-add",
+            "--db",
+            &database,
+            "--keystore",
+            &keystore,
+            "--passphrase",
+            passphrase,
+        ])
+        .output()
+        .expect("binary runs");
+    assert!(
+        output.status.success(),
+        "recovery-add failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let said = String::from_utf8_lossy(&output.stdout);
+    let key = said
+        .lines()
+        .find_map(|line| line.strip_prefix("recovery key: "))
+        .expect("the key is printed")
+        .trim()
+        .to_owned();
+    assert_eq!(key.split('-').count(), 8, "eight groups of four: {key}");
+    assert!(
+        key.chars()
+            .all(|character| character.is_ascii_alphanumeric() || character == '-'),
+        "{key}"
+    );
+    assert!(said.contains("shown once"), "{said}");
+
+    let size_after = std::fs::metadata(&keystore).expect("keystore").len();
+    assert!(size_after > size_before, "the recovery wrap is appended");
+
+    // The passphrase keeps working, and the chain records the new route.
+    let output = bonk()
+        .args([
+            "verify",
+            "--db",
+            &database,
+            "--keystore",
+            &keystore,
+            "--passphrase",
+            passphrase,
+        ])
+        .output()
+        .expect("binary runs");
+    assert!(output.status.success());
+    let verified = String::from_utf8_lossy(&output.stdout);
+    assert!(verified.contains("integrity check passed"), "{verified}");
+    assert!(verified.contains("audit:    1 events verified"), "{verified}");
+}
+
+#[test]
 fn init_then_verify() {
     let dir = TempDir::new().expect("temp dir");
     let (database, keystore) = run_init(&dir);

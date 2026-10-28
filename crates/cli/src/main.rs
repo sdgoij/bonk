@@ -65,6 +65,12 @@ enum Command {
         #[arg(long)]
         new_passphrase: Option<String>,
     },
+    /// Add a recovery key that can open the archive without the passphrase.
+    ///
+    /// The key is printed once. Replacing an existing recovery key is allowed;
+    /// the old one stops working.
+    #[command(name = "recovery-add")]
+    RecoveryAdd,
     /// Roll back reversible migrations. Refuses to cross an irreversible one.
     #[command(name = "migrate-down")]
     MigrateDown {
@@ -352,6 +358,30 @@ fn run(cli: Cli) -> Result<(), CliError> {
 
             println!("passphrase changed: {}", key_store.path().display());
             println!("backups made before this change still need the old passphrase");
+            Ok(())
+        }
+        Some(Command::RecoveryAdd) => {
+            let passphrase = resolve_passphrase(passphrase)?;
+            let mut key_store = KeyStore::open(&keystore, &passphrase)?;
+            let session = Session::unlock(&database, &keystore, &passphrase)?;
+
+            let key = key_store.enable_recovery(&passphrase)?;
+            if let Err(error) = store::audit::record_recovery_key(
+                session.database().connection(),
+                &store::now_rfc3339(),
+                "cli",
+                &key_store.path().display().to_string(),
+            ) {
+                return Err(CliError::Input(format!(
+                    "the recovery key was written, but recording it in the audit chain failed: {error}"
+                )));
+            }
+
+            println!("recovery key: {key}");
+            println!();
+            println!("Write it down and keep it apart from the database and the passphrase.");
+            println!("It is shown once and cannot be looked up later; it opens the archive if");
+            println!("the passphrase is lost. The passphrase keeps working unchanged.");
             Ok(())
         }
         Some(Command::Init) => {

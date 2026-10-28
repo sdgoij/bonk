@@ -627,6 +627,12 @@ random DEK (32 B) ─────────── AES-256-GCM wrap ───�
   be indistinguishable from losing the archive. The change is appended to the
   audit chain as `passphrase_changed`, naming the keystore file and never key
   material.
+- A **recovery key** wraps the same DEK a second time (keystore version 2). It is
+  160 bits, shown once as Crockford base32 in groups of four, and never stored:
+  only its sealed wrap remains, which a passphrase change carries over without
+  ever holding the secret. Adding one requires the passphrase, because a copied
+  keystore must not be able to gain a route of its own; replacing one invalidates
+  the previous key. The chain records `recovery_key_added`.
 - Optional: wrap the DEK a second time with an OS-keychain secret so that
   "remember me" does not weaken the file-level key. If the keychain is
   unavailable, fall back to passphrase-only with a visible warning.

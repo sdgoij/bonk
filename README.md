@@ -192,6 +192,13 @@ recorded in the audit chain. Backups made before the change still need the old
 passphrase. The new passphrase is prompted for twice; `BONK_NEW_PASSPHRASE` or
 `--new-passphrase` exist for scripts and tests.
 
+`recovery-add` seals the same data key under a second, one-time secret and prints
+it: 32 base32 symbols in eight groups, from an alphabet without `I`, `L`, `O`, or
+`U`, so a transcribed key is a typo rather than a different key. The passphrase
+is required first — otherwise anyone holding a copy of the keystore could add a
+route of their own. The key is shown once and never stored; running the command
+again replaces it and the old key stops working.
+
 `credit-note` copies an issued invoice into a credit-note draft: same customer,
 currency, and lines, with BG-3 naming the invoice it corrects. Credit notes use
 their own number series (`2026-C0001`) so they never consume an invoice number.

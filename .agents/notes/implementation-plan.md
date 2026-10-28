@@ -341,7 +341,7 @@ buyer and order reference from the document they correct, so the copied draft
 still passes R003.
 
 Remaining in M2: nothing blocking. Explicit deliver-to address fields beyond the
-buyer country remain for a later slice. Workspace tests: 290 encrypted, 288 plain.
+buyer country remain for a later slice. Workspace tests: 298 encrypted, 296 plain.
 
 Exit criteria:
 
@@ -558,6 +558,15 @@ database with the current passphrase, seals the same data key under the new one,
 unseals those bytes in memory and compares the key before the file is replaced,
 then appends a `passphrase_changed` event. A wrong current passphrase or a
 missing database leaves the keystore untouched.
+
+M6.1's recovery key is in. Keystore format version 2 appends a second wrap of the
+same data key under a 160-bit secret, shown once as Crockford base32 in eight
+groups and never stored; the passphrase wrap keeps its version-1 layout and both
+versions still open. `bonk recovery-add` requires the passphrase before adding a
+route, replaces an existing key, verifies in memory that both routes unwrap the
+same key before writing, and records `recovery_key_added`. A passphrase change
+carries the recovery wrap over without holding the secret. Still open in M6.1:
+the strength meter and the GUI prompts.
 
 Remaining in M6: passphrase UX and recovery keys (M6.1), idle lock and zeroisation
 tests (M6.2), evidence bundles (M6.5), log redaction and support bundles (M6.6),

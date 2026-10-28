@@ -23,6 +23,14 @@ pub enum StoreError {
     #[error("wrong passphrase")]
     WrongPassphrase,
 
+    /// The keystore carries no recovery wrap, so a recovery key cannot open it.
+    #[error("this keystore has no recovery key; add one while the passphrase is still known")]
+    NoRecoveryKey,
+
+    /// The recovery key is incomplete or has mistyped symbols.
+    #[error("the recovery key is not valid; check for missing or mistyped groups")]
+    InvalidRecoveryKey,
+
     /// The keystore file is malformed or from a newer version.
     #[error("keystore is corrupt or uses an unsupported version")]
     InvalidKeystore,

@@ -93,15 +93,19 @@ pub fn append(
 /// The subject is the keystore file, never key material: the chain shows when
 /// the key changed, not what it is.
 pub fn record_passphrase_change(conn: &Connection, at: &str, actor: &str, keystore: &str) -> Result<(), StoreError> {
-    append(
-        conn,
-        at,
-        actor,
-        "passphrase_changed",
-        "keystore",
-        keystore,
-        serde_json::json!({}),
-    )?;
+    record_key_event(conn, at, actor, "passphrase_changed", keystore)
+}
+
+/// Records that a recovery key was added or replaced.
+///
+/// Like a passphrase change, this is evidence about the key, not about the
+/// documents: the recovery secret itself never enters the chain.
+pub fn record_recovery_key(conn: &Connection, at: &str, actor: &str, keystore: &str) -> Result<(), StoreError> {
+    record_key_event(conn, at, actor, "recovery_key_added", keystore)
+}
+
+fn record_key_event(conn: &Connection, at: &str, actor: &str, kind: &str, keystore: &str) -> Result<(), StoreError> {
+    append(conn, at, actor, kind, "keystore", keystore, serde_json::json!({}))?;
     Ok(())
 }
 
