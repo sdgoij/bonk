@@ -16,6 +16,7 @@ use store::{
     credit_note_for, first_seller, insert_customer, insert_draft, insert_seller, issue_draft, list_received,
     load_customer, load_draft, load_seller, resolve_customer, resolve_document, resolve_received, set_supplier_match,
 };
+use zeroize::Zeroizing;
 
 #[derive(Parser)]
 #[command(name = "bonk", version, about = "Local-first e-invoicing client (working name)")]
@@ -1169,35 +1170,39 @@ fn warn_if_unencrypted() {
     }
 }
 
-fn resolve_passphrase(explicit: Option<String>) -> Result<String, CliError> {
+fn resolve_passphrase(explicit: Option<String>) -> Result<Zeroizing<String>, CliError> {
     if let Some(value) = explicit
         && !value.is_empty()
     {
-        return Ok(value);
+        return Ok(Zeroizing::new(value));
     }
     if let Ok(value) = std::env::var("BONK_PASSPHRASE")
         && !value.is_empty()
     {
-        return Ok(value);
+        return Ok(Zeroizing::new(value));
     }
-    rpassword::prompt_password("Passphrase: ").map_err(|error| CliError::Input(error.to_string()))
+    rpassword::prompt_password("Passphrase: ")
+        .map(Zeroizing::new)
+        .map_err(|error| CliError::Input(error.to_string()))
 }
 
 /// The recovery key for `passphrase-reset`.
-fn resolve_recovery_key(explicit: Option<String>) -> Result<String, CliError> {
+fn resolve_recovery_key(explicit: Option<String>) -> Result<Zeroizing<String>, CliError> {
     if let Some(value) = explicit.filter(|value| !value.trim().is_empty()) {
-        return Ok(value);
+        return Ok(Zeroizing::new(value));
     }
     if let Ok(value) = std::env::var("BONK_RECOVERY_KEY")
         && !value.trim().is_empty()
     {
-        return Ok(value);
+        return Ok(Zeroizing::new(value));
     }
-    rpassword::prompt_password("Recovery key: ").map_err(|error| CliError::Input(error.to_string()))
+    rpassword::prompt_password("Recovery key: ")
+        .map(Zeroizing::new)
+        .map_err(|error| CliError::Input(error.to_string()))
 }
 
 /// The new passphrase for `passphrase-change`, asked for twice when interactive.
-fn resolve_new_passphrase(explicit: Option<String>) -> Result<String, CliError> {
+fn resolve_new_passphrase(explicit: Option<String>) -> Result<Zeroizing<String>, CliError> {
     let value = match explicit.filter(|value| !value.is_empty()) {
         Some(value) => value,
         None => match std::env::var("BONK_NEW_PASSPHRASE") {
@@ -1217,7 +1222,7 @@ fn resolve_new_passphrase(explicit: Option<String>) -> Result<String, CliError> 
     if value.trim().is_empty() {
         return Err(CliError::Input("an empty passphrase is not accepted".to_owned()));
     }
-    Ok(value)
+    Ok(Zeroizing::new(value))
 }
 
 #[cfg(test)]
@@ -1239,7 +1244,24 @@ mod tests {
 
     #[test]
     fn explicit_passphrase_wins() {
-        assert_eq!(resolve_passphrase(Some("secret".to_owned())).unwrap(), "secret");
+        let passphrase = resolve_passphrase(Some("secret".to_owned())).unwrap();
+        assert_eq!(&*passphrase, "secret");
+        assert!(
+            !format!("{passphrase:?}").contains("secret"),
+            "a resolved passphrase must not print itself"
+        );
+    }
+
+    #[test]
+    fn a_new_passphrase_is_never_empty_or_printable() {
+        let passphrase = resolve_new_passphrase(Some("secret-canary".to_owned())).unwrap();
+        assert_eq!(&*passphrase, "secret-canary");
+        assert!(!format!("{passphrase:?}").contains("secret-canary"));
+        assert!(resolve_new_passphrase(Some("   ".to_owned())).is_err());
+
+        let key = resolve_recovery_key(Some("recovery-canary".to_owned())).unwrap();
+        assert_eq!(&*key, "recovery-canary");
+        assert!(!format!("{key:?}").contains("recovery-canary"));
     }
 
     #[test]

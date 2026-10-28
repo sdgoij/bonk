@@ -19,6 +19,7 @@ use crux::{InvoiceDraft, InvoiceTotals, LocalDate, Party};
 use render::PdfRenderer;
 use store::{CustomerRecord, Database, IssueView, KdfParams, KeyStore, SellerRecord, StoreError};
 use syntax::{UblInvoice, UblLine, UblPrecedingInvoice, write_invoice};
+use zeroize::{Zeroize, Zeroizing};
 
 pub use workspace::{Workspace, WorkspaceAction};
 
@@ -313,7 +314,9 @@ impl BonkApp {
         let UiState::Locked { passphrase, .. } = &self.state else {
             return;
         };
-        let passphrase = passphrase.clone();
+        // The copy is wiped when it drops; the form's own buffer is wiped by
+        // `finish` once the credentials are accepted.
+        let passphrase = Zeroizing::new(passphrase.clone());
         let database_path = PathBuf::from(self.database_path.trim());
         let keystore_path = PathBuf::from(self.keystore_path.trim());
 
@@ -325,7 +328,7 @@ impl BonkApp {
         let UiState::Locked { passphrase, .. } = &self.state else {
             return;
         };
-        let passphrase = passphrase.clone();
+        let passphrase = Zeroizing::new(passphrase.clone());
         let database_path = PathBuf::from(self.database_path.trim());
         let keystore_path = PathBuf::from(self.keystore_path.trim());
 
@@ -335,19 +338,36 @@ impl BonkApp {
 
     fn finish(&mut self, opened: Result<Session, StoreError>) {
         match opened {
-            Ok(session) => match Workspace::new(&session) {
-                Ok(workspace) => {
-                    // A fresh unlock starts the idle clock, whatever happened
-                    // before it.
-                    self.idle.touch(std::time::Instant::now());
-                    self.state = UiState::Unlocked {
-                        session,
-                        workspace: Box::new(workspace),
+            Ok(session) => {
+                // The credentials were accepted, so the form no longer needs
+                // them. A wrong passphrase is left in place instead, so a typo
+                // can be corrected without retyping.
+                self.wipe_passphrase_buffer();
+                match Workspace::new(&session) {
+                    Ok(workspace) => {
+                        // A fresh unlock starts the idle clock, whatever
+                        // happened before it.
+                        self.idle.touch(std::time::Instant::now());
+                        self.state = UiState::Unlocked {
+                            session,
+                            workspace: Box::new(workspace),
+                        }
                     }
+                    Err(cause) => self.set_error(cause.to_string()),
                 }
-                Err(cause) => self.set_error(cause.to_string()),
-            },
+            }
             Err(cause) => self.set_error(cause.to_string()),
+        }
+    }
+
+    /// Wipes the unlock form's editor buffer.
+    ///
+    /// egui's `TextEdit` writes into a plain `String`, so the buffer is wiped
+    /// here rather than on drop; dropping it would leave the bytes in the
+    /// allocator.
+    fn wipe_passphrase_buffer(&mut self) {
+        if let UiState::Locked { passphrase, .. } = &mut self.state {
+            passphrase.zeroize();
         }
     }
 
@@ -472,6 +492,41 @@ mod tests {
         let keystore = dir.path().join("keystore.bin");
         Session::create(&database, &keystore, "passphrase").unwrap();
         assert!(Session::create(&database, &keystore, "passphrase").is_err());
+    }
+
+    #[test]
+    fn a_wrong_passphrase_stays_for_a_retry_and_a_used_buffer_is_wiped() {
+        let dir = TempDir::new().unwrap();
+        let database = dir.path().join("bonk.db");
+        let keystore = dir.path().join("keystore.bin");
+        Session::create(&database, &keystore, "buffer-canary").unwrap();
+
+        let mut app = BonkApp {
+            database_path: database.display().to_string(),
+            keystore_path: keystore.display().to_string(),
+            state: UiState::Locked {
+                passphrase: "wrong-canary".to_owned(),
+                error: None,
+            },
+            ..Default::default()
+        };
+
+        app.apply(Action::Unlock);
+
+        {
+            let UiState::Locked { passphrase, error } = &app.state else {
+                panic!("a wrong passphrase must not unlock the archive");
+            };
+            assert_eq!(passphrase, "wrong-canary", "a retry needs the text still there");
+            assert!(error.is_some());
+        }
+
+        app.wipe_passphrase_buffer();
+
+        let UiState::Locked { passphrase, .. } = &app.state else {
+            panic!("wiping the buffer must not change the state");
+        };
+        assert!(passphrase.is_empty(), "a used buffer must hold no passphrase");
     }
 
     #[test]

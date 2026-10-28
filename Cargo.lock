@@ -310,6 +310,7 @@ dependencies = [
  "syntax",
  "tempfile",
  "time",
+ "zeroize",
 ]
 
 [[package]]
@@ -937,6 +938,7 @@ dependencies = [
  "store",
  "tempfile",
  "thiserror 2.0.21",
+ "zeroize",
 ]
 
 [[package]]

@@ -25,6 +25,7 @@ store = { path = "../store", default-features = false }
 clap.workspace = true
 rpassword.workspace = true
 thiserror.workspace = true
+zeroize.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

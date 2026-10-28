@@ -136,8 +136,13 @@ the machine, not a machine an attacker is already logged into.
 - **R6 — The idle lock is a timer, not a guarantee.** The workspace locks after
   a configurable idle period (15 minutes by default), but a hung process locks
   nothing, and the limit can be raised to a day.
-- **R7 — Secrets in memory are only partly wiped.** DEK and KEK are zeroised;
-  passphrases and recovery-key strings are not.
+- **R7 — Secrets in memory are only partly wiped.** DEK, KEK, and the values the
+  CLI resolves for a passphrase or recovery key live in `Zeroizing` buffers, and
+  the desktop unlock form wipes its editor buffer once the credentials are
+  accepted; a wrong passphrase stays in the form so a typo can be corrected. What
+  no code can fix is a passphrase passed as a flag: it is in the process's argv,
+  which belongs to the operating system and is readable by other processes
+  running as the user for as long as the process lives.
 - **R8 — File permissions are the OS default.** Anyone who can read the user's
   profile can copy the keystore and archive.
 
@@ -166,14 +171,13 @@ the machine, not a machine an attacker is already logged into.
 | Payload drift is caught | `a_payload_that_no_longer_hashes_to_its_record_is_caught` |
 | Evidence forgery is caught | `a_rewritten_chain_is_caught_even_with_a_matching_manifest` |
 | Support bundles leak nothing | `a_bundle_has_counts_and_no_business_facts` |
+| A used passphrase does not print itself | CLI `a_new_passphrase_is_never_empty_or_printable` |
+| A used passphrase is not left in the form | `a_wrong_passphrase_stays_for_a_retry_and_a_used_buffer_is_wiped` |
 | Parsers survive hostile bytes | `arbitrary_bytes_never_panic`, `a_mutated_container_never_panics`, `a_stream_that_inflates_past_the_limit_is_refused` |
 
 ## 8. Open items
 
 - **O1** Passphrase strength meter and the GUI prompts for recovery (M6.1).
-- **O2** Zeroisation of passphrase strings (M6.2). The DEK and KEK already live in
-  `Zeroizing` buffers; resolved passphrases are still plain `String`s, and a
-  passphrase passed as a flag stays in the parser for the run.
 - **O3** Optional OS-keychain wrap of the same DEK, for “remember me”.
 - **O4** libFuzzer targets once the runner has nightly and `cargo-fuzz`; the
   property tests are the gate until then.
@@ -182,3 +186,6 @@ the machine, not a machine an attacker is already logged into.
   somewhere durable; today it prints the head and stops there.
 
 Changes to a decision recorded here need an ADR, like any other.
+
+O2 (zeroisation of passphrase strings) was closed in M6.2. The numbering of the
+remaining items is left as it was, so references in other notes still resolve.

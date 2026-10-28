@@ -341,7 +341,7 @@ buyer and order reference from the document they correct, so the copied draft
 still passes R003.
 
 Remaining in M2: nothing blocking. Explicit deliver-to address fields beyond the
-buyer country remain for a later slice. Workspace tests: 320 encrypted, 318 plain.
+buyer country remain for a later slice. Workspace tests: 322 encrypted, 320 plain.
 
 Exit criteria:
 
@@ -607,21 +607,33 @@ so its behaviour is tested without a window: it fires once at the limit, re-arms
 on activity, saturates a backwards clock, and clamps `BONK_IDLE_MINUTES` (default
 15, allowed 1–1440). The app counts any egui event as activity and schedules a
 repaint every 30 seconds while unlocked, because a reactive UI with no scheduled
-frame would only notice the timeout on the next mouse move. Zeroisation of
-passphrase strings is still open; the DEK and KEK already use `Zeroizing`.
+frame would only notice the timeout on the next mouse move.
+
+M6.2's zeroisation is in. The CLI's `resolve_passphrase`, `resolve_recovery_key`,
+and `resolve_new_passphrase` return `Zeroizing<String>`, so every route — flag,
+environment variable, or prompt — is wiped when it drops; a new test asserts that
+a resolved value still compares as text, never prints itself through `{:?}`, and
+refuses blank input. The desktop unlock and create paths copy the form's buffer
+into a `Zeroizing` for the call and wipe the buffer itself once the credentials
+are accepted, while a wrong passphrase stays in the form so a typo can be
+corrected. The buffer has to remain a plain `String` because egui's `TextEdit`
+writes into one, which is why it is wiped explicitly instead of on drop. A
+passphrase passed as a flag is still in the process's argv, which belongs to the
+operating system; the threat model records that as residual risk rather than as
+something the code can fix.
 
 The threat model is written: [`threat-model.md`](threat-model.md) covers assets,
 trust boundaries, assumptions, threats by category with their residual risk,
-what is out of scope, a claim-to-test table, and open items O1–O6. It is candid
+what is out of scope, a claim-to-test table, and open items O1 and O3–O6. It is
+candid
 about the parts that are easy to oversell — a fully rewritten chain is
 indistinguishable from the original without an outside record of a head; an
 unlocked archive is readable by anything running as the user; and a recovery key
 stored beside the archive turns two credentials into one.
 
-Remaining in M6: the passphrase strength meter and the GUI key prompts (M6.1) and
-idle lock plus zeroisation tests (M6.2). The threat model also lists O5–O6 as
-open: tighter file permissions at creation, and a decision on recording chain
-heads somewhere durable.
+Remaining in M6: the passphrase strength meter and the GUI key prompts (M6.1).
+The threat model also lists O5–O6 as open: tighter file permissions at creation,
+and a decision on recording chain heads somewhere durable.
 
 Exit criteria:
 
