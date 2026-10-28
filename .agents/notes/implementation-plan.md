@@ -341,7 +341,7 @@ buyer and order reference from the document they correct, so the copied draft
 still passes R003.
 
 Remaining in M2: nothing blocking. Explicit deliver-to address fields beyond the
-buyer country remain for a later slice. Workspace tests: 371 encrypted, 369 plain.
+buyer country remain for a later slice. Workspace tests: 385 encrypted, 383 plain.
 
 Exit criteria:
 
@@ -583,6 +583,15 @@ of an archive is a diff of sequence number, hash, and time rather than a guess.
 Event coverage is unchanged and already tested (issue, import, status changes,
 supplier decisions).
 
+M6.3 is in as well. `store::anchor` writes a checkpoint — timestamp, sequence
+number, hash — as one line in a plain-text file the user keeps apart from the
+archive, refuses to extend a file that no longer agrees, and treats a repeated
+head as nothing to record. `bonk verify --anchor <file>` checks every recorded
+head against the chain, which is the one check a complete rewrite cannot pass:
+the store test builds a second archive, swaps its (valid) chain in, confirms
+`verify_chain` still accepts it, and then confirms the anchor refuses. Without a
+checkpoint there is no such check, which is what the threat model says.
+
 M6.7's data half is in. `store::integrity::audit` re-hashes every blob, cross-
 checks each artefact's hash against its blob, confirms every import record still
 has its payload, runs `PRAGMA foreign_key_check`, and counts blobs nothing refers
@@ -705,9 +714,8 @@ indistinguishable from the original without an outside record of a head; an
 unlocked archive is readable by anything running as the user; and a recovery key
 stored beside the archive turns two credentials into one.
 
-Remaining in M6: nothing. The threat model still lists O3, O4, and O6 as open: an
-optional keychain wrap, fuzz targets, and a decision on recording chain heads
-somewhere durable.
+Remaining in M6: nothing. The threat model lists O3 and O4 as open: an optional
+keychain wrap, and fuzz targets.
 
 Exit criteria:
 

@@ -124,8 +124,12 @@ the machine, not a machine an attacker is already logged into.
 - **R1 — Unlocked means readable.** While the app runs, the DEK is in memory and
   the archive is readable by any process running as the user. Disk encryption and
   SQLCipher do not change that.
-- **R2 — The chain is tamper-evident, not tamper-proof.** Without an outside record
-  of a head, a fully rewritten chain is indistinguishable from the original.
+- **R2 — The chain is tamper-evident, not tamper-proof.** Someone who rewrites
+  every audit row produces a chain that verifies against itself. `bonk anchor`
+  records a head in a file kept elsewhere and `bonk verify --anchor` checks it,
+  which catches exactly that — but only for the runs where the user took a
+  checkpoint and kept it out of reach. Without an anchor, a complete rewrite is
+  still indistinguishable from the original.
 - **R3 — One archive, no redundancy.** Verification detects loss; only backups
   survive it.
 - **R4 — The recovery key is a second key.** Storing it beside the archive turns
@@ -176,6 +180,9 @@ further, and an archive placed in a shared folder keeps that folder's ACL.
 | Adding a key needs the passphrase | `keystore::tests::adding_a_recovery_key_requires_the_passphrase` |
 | The used recovery key is rotated away | CLI `a_lost_passphrase_can_be_reset_with_the_recovery_key` |
 | Chain tampering is caught | `tampering_with_the_audit_chain_is_detected` |
+| A completely rewritten chain is caught by an anchor | `a_rewritten_chain_is_caught` |
+| A truncated chain is caught by an anchor | `a_truncated_chain_is_caught` |
+| An anchor file that contradicts the chain is not extended | `recording_refuses_a_file_that_no_longer_agrees` |
 | Payload drift is caught | `a_payload_that_no_longer_hashes_to_its_record_is_caught` |
 | Evidence forgery is caught | `a_rewritten_chain_is_caught_even_with_a_matching_manifest` |
 | Support bundles leak nothing | `a_bundle_has_counts_and_no_business_facts` |
@@ -196,11 +203,10 @@ further, and an archive placed in a shared folder keeps that folder's ACL.
 - **O3** Optional OS-keychain wrap of the same DEK, for “remember me”.
 - **O4** libFuzzer targets once the runner has nightly and `cargo-fuzz`; the
   property tests are the gate until then.
-- **O6** Decide whether `bonk verify` should print a head that the user can record
-  somewhere durable; today it prints the head and stops there.
 
 Changes to a decision recorded here need an ADR, like any other.
 
 O2 (zeroisation of passphrase strings) was closed in M6.2, O1 (a recovery route
-in the window) in M6.1, and O5 (file permissions) in M6.2. The numbering of the
-remaining items is left as it was, so references in other notes still resolve.
+in the window) in M6.1, O5 (file permissions) in M6.2, and O6 (a durable record of
+a head) in M6.3. The numbering of the remaining items is left as it was, so
+references in other notes still resolve.

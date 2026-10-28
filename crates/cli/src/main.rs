@@ -42,7 +42,22 @@ enum Command {
     /// Create an encrypted database and its keystore.
     Init,
     /// Check integrity, the audit chain, and every stored artefact.
-    Verify,
+    Verify {
+        /// Check the chain against checkpoints recorded outside the archive.
+        #[arg(long)]
+        anchor: Option<PathBuf>,
+    },
+    /// Record the audit chain head in a file kept outside the archive.
+    ///
+    /// A hash chain cannot prove it is the original: whoever rewrites every row
+    /// produces a chain that verifies against itself. A copy of a head kept
+    /// elsewhere is what closes that gap, so this appends one line per new head
+    /// to a file you keep apart from the database — printed, mailed to yourself,
+    /// or in a repository. `bonk verify --anchor <file>` checks it later.
+    Anchor {
+        /// File holding the checkpoints. Created on first use.
+        file: PathBuf,
+    },
     /// Write a verified, encrypted backup and prune older ones.
     Backup {
         /// Directory for backups. Defaults to `backups` beside the database.
@@ -534,7 +549,7 @@ fn run(cli: Cli) -> Result<(), CliError> {
             println!("encryption: {}", store::encryption_label());
             Ok(())
         }
-        Some(Command::Verify) => {
+        Some(Command::Verify { anchor }) => {
             let session = open(&database, &keystore, passphrase.clone())?;
             session.integrity_check()?;
             let summary = session.summary()?;
@@ -561,6 +576,32 @@ fn run(cli: Cli) -> Result<(), CliError> {
                     "orphans:  {} unreferenced blob(s); the archive is intact, this is wasted space",
                     report.orphaned_blobs
                 );
+            }
+            // Last, because an anchor can only speak about a chain that verified.
+            if let Some(path) = anchor {
+                let checked = store::anchor::check(&path, session.database().connection())?;
+                println!(
+                    "anchor:   {} checkpoint(s) still in the chain, newest {} {}",
+                    checked.count, checked.newest.seq, checked.newest.hash
+                );
+            }
+            Ok(())
+        }
+        Some(Command::Anchor { file }) => {
+            let session = open(&database, &keystore, passphrase.clone())?;
+            let now = store::now_rfc3339();
+            let report = store::anchor::record(&file, session.database().connection(), &now)?;
+
+            println!("anchor file: {}", file.display());
+            println!("checked:     {} previous checkpoint(s)", report.checked);
+            println!(
+                "head:        {} {} ({})",
+                report.anchor.seq, report.anchor.hash, report.anchor.at
+            );
+            if report.appended {
+                println!("appended:    yes");
+            } else {
+                println!("appended:    no, the chain has not moved since the last checkpoint");
             }
             Ok(())
         }

@@ -999,6 +999,81 @@ fn an_unknown_document_language_is_refused() {
 }
 
 #[test]
+fn an_anchor_file_proves_the_chain_is_the_original() {
+    let dir = TempDir::new().expect("temp dir");
+    let (database, keystore) = run_init(&dir);
+    let old = "correct horse battery staple";
+    let new = "a much better passphrase";
+
+    // Give the chain something to hold: a passphrase change is an audited event.
+    bonk_ok(&[
+        "passphrase-change",
+        "--db",
+        &database,
+        "--keystore",
+        &keystore,
+        "--passphrase",
+        old,
+        "--new-passphrase",
+        new,
+    ]);
+
+    let common = [
+        "--db",
+        database.as_str(),
+        "--keystore",
+        keystore.as_str(),
+        "--passphrase",
+        new,
+    ];
+    let file = dir.path().join("heads.txt");
+    let path = file.to_str().expect("utf-8");
+
+    let mut args = vec!["anchor", path];
+    args.extend(common);
+    let written = bonk_ok(&args);
+    assert!(written.contains("appended:    yes"), "{written}");
+
+    // Running it again records nothing new.
+    let mut args = vec!["anchor", path];
+    args.extend(common);
+    let again = bonk_ok(&args);
+    assert!(again.contains("appended:    no"), "{again}");
+
+    // Verifying with the anchor checks the chain and the outside record together.
+    let mut args = vec!["verify", "--anchor", path];
+    args.extend(common);
+    let verified = bonk_ok(&args);
+    assert!(verified.contains("1 checkpoint(s) still in the chain"), "{verified}");
+}
+
+#[test]
+fn anchoring_an_archive_with_no_history_says_so() {
+    let dir = TempDir::new().expect("temp dir");
+    let (database, keystore) = run_init(&dir);
+    let file = dir.path().join("heads.txt");
+
+    let output = bonk()
+        .args([
+            "anchor",
+            file.to_str().expect("utf-8"),
+            "--db",
+            &database,
+            "--keystore",
+            &keystore,
+            "--passphrase",
+            "correct horse battery staple",
+        ])
+        .output()
+        .expect("binary runs");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("no audit events"), "{stderr}");
+    assert!(!file.exists(), "nothing was written");
+}
+
+#[test]
 fn a_weak_passphrase_is_reported_but_not_refused() {
     let dir = TempDir::new().expect("temp dir");
     let database = dir.path().join("bonk.db");

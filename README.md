@@ -186,6 +186,16 @@ file, then run `bonk verify`.
 copies of the same archive must agree on that triple; `verify-backup` prints the
 same line for a copy, so the comparison is a diff rather than a guess.
 
+`anchor heads.txt` writes that head to a plain-text file of checkpoints, one line
+of `timestamp sequence hash` per run, and does nothing when the head has not
+moved. Keep the file apart from the database — printed, mailed to yourself, in a
+repository — because that is the whole point: `bonk verify --anchor heads.txt`
+checks that every recorded head is *still the link at its own position*. A hash
+chain alone cannot prove this, since whoever rewrites every row produces a chain
+that verifies against itself; a copy of a head that the attacker does not control
+is what closes that gap. Lines starting with `#` are ignored, so the file can
+carry notes. Nothing secret is in it.
+
 `passphrase-change` rewraps the data key with a new passphrase. The database is
 not touched, the new keystore is only written after the sealed bytes have been
 unsealed in memory and confirmed to hold the same key, and the change is

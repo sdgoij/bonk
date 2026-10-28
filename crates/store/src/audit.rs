@@ -51,6 +51,22 @@ pub fn head(conn: &Connection) -> Result<Option<ChainHead>, StoreError> {
     .map_err(StoreError::from)
 }
 
+/// Returns the link at a sequence number.
+///
+/// Used by an anchor check: a head recorded outside the archive must still be the
+/// link at its own position, which is what a rewritten chain cannot satisfy.
+pub fn at(conn: &Connection, seq: i64) -> Result<Option<ChainHead>, StoreError> {
+    conn.query_row("SELECT seq, hash, at FROM audit_event WHERE seq = ?1", [seq], |row| {
+        Ok(ChainHead {
+            seq: row.get(0)?,
+            hash: row.get(1)?,
+            at: row.get(2)?,
+        })
+    })
+    .optional()
+    .map_err(StoreError::from)
+}
+
 /// Appends one event and returns its hash (the new chain head).
 #[allow(clippy::too_many_arguments)]
 pub fn append(

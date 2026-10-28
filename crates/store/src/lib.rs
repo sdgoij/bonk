@@ -13,6 +13,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod anchor;
 pub mod archive;
 pub mod audit;
 pub mod backup;
@@ -28,6 +29,7 @@ pub mod repo;
 pub mod saved;
 pub mod support;
 
+pub use anchor::{Anchor, AnchorCheck, AnchorRecord};
 pub use archive::{ArtefactInfo, DocumentView, StatusEvent, StoredLine};
 pub use audit::ChainHead;
 pub use backup::{BackupReport, BackupSummary, RETENTION};
