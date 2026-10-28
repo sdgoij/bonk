@@ -54,6 +54,10 @@ pub enum StoreError {
     #[error("cryptographic failure: {0}")]
     Crypto(String),
 
+    /// The operating system's credential store refused the operation.
+    #[error("the credential store refused: {0}")]
+    Keychain(String),
+
     /// JSON serialisation or parsing failed.
     #[error("JSON failure: {0}")]
     Json(#[from] serde_json::Error),

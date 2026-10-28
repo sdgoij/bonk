@@ -169,6 +169,75 @@ impl Session {
         Ok(())
     }
 
+    /// Keeps the data key in this device's credential store, so the archive can
+    /// be opened without the passphrase.
+    ///
+    /// The passphrase is required again: trusting a machine should not be
+    /// something an unattended window can do. The decision goes into the audit
+    /// chain, because a second way in is evidence about the archive.
+    pub fn remember_device(&self, passphrase: &str, store: &dyn store::DeviceStore) -> Result<(), StoreError> {
+        let keystore = KeyStore::open(self.keystore_path(), passphrase)?;
+        store::device::remember(store, self.keystore_path(), keystore.dek())?;
+        if let Err(error) = store::audit::record_device_trust(
+            self.database.connection(),
+            &store::now_rfc3339(),
+            "gui",
+            &self.keystore_path().display().to_string(),
+        ) {
+            return Err(StoreError::Rejected(format!(
+                "the key was stored for this device, but recording it in the audit chain failed: {error}"
+            )));
+        }
+        Ok(())
+    }
+
+    /// Stops this device from keeping the key. False when it did not have one.
+    pub fn forget_device(&self, store: &dyn store::DeviceStore) -> Result<bool, StoreError> {
+        let forgotten = store::device::forget(store, self.keystore_path())?;
+        if forgotten
+            && let Err(error) = store::audit::record_device_forget(
+                self.database.connection(),
+                &store::now_rfc3339(),
+                "gui",
+                &self.keystore_path().display().to_string(),
+            )
+        {
+            return Err(StoreError::Rejected(format!(
+                "the key was forgotten by this device, but recording it in the audit chain failed: {error}"
+            )));
+        }
+        Ok(forgotten)
+    }
+
+    /// True when this device holds a key for the archive at these paths.
+    pub fn device_ready(keystore_path: impl AsRef<Path>, store: &dyn store::DeviceStore) -> bool {
+        matches!(store::device::recall(store, keystore_path.as_ref()), Ok(Some(_)))
+    }
+
+    /// Opens the archive with the key this device kept.
+    ///
+    /// The keystore is not consulted: the point of the feature is that the
+    /// operating system's login is enough.
+    pub fn unlock_with_device(
+        database_path: impl AsRef<Path>,
+        keystore_path: impl AsRef<Path>,
+        store: &dyn store::DeviceStore,
+    ) -> Result<Self, StoreError> {
+        let database_path = database_path.as_ref().to_path_buf();
+        let keystore_path = keystore_path.as_ref().to_path_buf();
+        let key = store::device::recall(store, &keystore_path)?.ok_or_else(|| {
+            StoreError::Rejected(
+                "this device has no key for that archive; unlock with the passphrase once and remember it".to_owned(),
+            )
+        })?;
+        let database = Database::open_with_key(&database_path, &key)?;
+        Ok(Self {
+            database,
+            database_path,
+            keystore_path,
+        })
+    }
+
     /// Replaces a forgotten passphrase using the recovery key.
     ///
     /// Returns the session and the replacement recovery key. The key that was
@@ -1301,6 +1370,69 @@ mod tests {
                 error: None,
             } if passphrase.is_empty()
         ));
+    }
+
+    #[test]
+    fn a_remembered_device_opens_the_archive_without_the_passphrase() {
+        let dir = TempDir::new().unwrap();
+        let database = dir.path().join("bonk.db");
+        let keystore = dir.path().join("keystore.bin");
+        let passphrase = "correct horse battery staple";
+        let session = Session::create(&database, &keystore, passphrase).unwrap();
+        let store = store::device::MemoryStore::default();
+
+        assert!(!Session::device_ready(&keystore, &store));
+        // A wrong passphrase cannot trust the device.
+        assert!(session.remember_device("not the passphrase", &store).is_err());
+        assert!(!Session::device_ready(&keystore, &store));
+
+        session.remember_device(passphrase, &store).unwrap();
+        assert!(Session::device_ready(&keystore, &store));
+
+        // The keystore is not consulted: the device store is enough.
+        let reopened = Session::unlock_with_device(&database, &keystore, &store).unwrap();
+        assert_eq!(reopened.summary().unwrap().schema_version, 3);
+
+        let trusted: i64 = reopened
+            .database()
+            .connection()
+            .query_row(
+                "SELECT COUNT(*) FROM audit_event WHERE kind = 'device_trusted'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(trusted, 1, "a second way in belongs in the chain");
+    }
+
+    #[test]
+    fn forgetting_the_device_removes_the_route() {
+        let dir = TempDir::new().unwrap();
+        let database = dir.path().join("bonk.db");
+        let keystore = dir.path().join("keystore.bin");
+        let passphrase = "correct horse battery staple";
+        let session = Session::create(&database, &keystore, passphrase).unwrap();
+        let store = store::device::MemoryStore::default();
+        session.remember_device(passphrase, &store).unwrap();
+
+        assert!(session.forget_device(&store).unwrap());
+        assert!(!Session::device_ready(&keystore, &store));
+        assert!(Session::unlock_with_device(&database, &keystore, &store).is_err());
+        assert!(!session.forget_device(&store).unwrap(), "a second forget is a no-op");
+
+        let forgotten: i64 = session
+            .database()
+            .connection()
+            .query_row(
+                "SELECT COUNT(*) FROM audit_event WHERE kind = 'device_forgotten'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(forgotten, 1);
+
+        // The passphrase still opens it, which is the point of turning this off.
+        assert!(Session::unlock(&database, &keystore, passphrase).is_ok());
     }
 
     #[test]

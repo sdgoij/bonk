@@ -146,6 +146,19 @@ pub fn record_passphrase_reset(
     Ok(())
 }
 
+/// Records that this device now keeps the archive key.
+///
+/// A second way in is evidence about the archive, exactly like a recovery key: the
+/// chain should say when one was opened.
+pub fn record_device_trust(conn: &Connection, at: &str, actor: &str, keystore: &str) -> Result<(), StoreError> {
+    record_key_event(conn, at, actor, "device_trusted", keystore)
+}
+
+/// Records that the device no longer keeps it.
+pub fn record_device_forget(conn: &Connection, at: &str, actor: &str, keystore: &str) -> Result<(), StoreError> {
+    record_key_event(conn, at, actor, "device_forgotten", keystore)
+}
+
 fn record_key_event(conn: &Connection, at: &str, actor: &str, kind: &str, keystore: &str) -> Result<(), StoreError> {
     append(conn, at, actor, kind, "keystore", keystore, serde_json::json!({}))?;
     Ok(())
