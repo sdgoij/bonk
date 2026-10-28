@@ -9,9 +9,9 @@ use crux::{
     VatRate, calculate_totals, has_blocking, validate_draft,
 };
 use store::{
-    CustomerRecord, DocumentRecord, IssueRequest, SellerRecord, StoreError, Suppression, attach_artefact,
-    credit_note_for, first_seller, insert_customer, insert_seller, issue_draft, list_customers, list_suppressions,
-    save_draft, save_suppression,
+    CustomerRecord, Direction, DocumentRecord, DocumentStatus, IssueRequest, SearchHit, SearchRequest, SellerRecord,
+    StoreError, Suppression, attach_artefact, credit_note_for, first_seller, insert_customer, insert_seller,
+    issue_draft, list_customers, list_suppressions, save_draft, save_suppression, search,
 };
 
 use crate::Session;
@@ -54,6 +54,36 @@ pub struct Workspace {
     suppression_reason: String,
     focus_request: Option<String>,
     message: Option<Message>,
+    search: SearchView,
+}
+
+/// The find panel's state, kept apart from the drawing code so it can be tested.
+#[derive(Default)]
+struct SearchView {
+    query: String,
+    direction: Option<Direction>,
+    status: Option<DocumentStatus>,
+    results: Vec<SearchHit>,
+    /// True once a query has run, which is what separates "nothing found" from
+    /// "nothing asked yet".
+    ran: bool,
+}
+
+impl SearchView {
+    /// Runs what the panel describes and keeps the result, empty or not.
+    fn run(&mut self, database: &store::Database, owner: SellerId) -> Result<(), StoreError> {
+        let query = self.query.trim();
+        let request = SearchRequest {
+            query: (!query.is_empty()).then_some(query),
+            direction: self.direction,
+            from: None,
+            to: None,
+            status: self.status,
+        };
+        self.results = search(database.connection(), owner, &request)?;
+        self.ran = true;
+        Ok(())
+    }
 }
 
 #[derive(Clone)]
@@ -248,13 +278,17 @@ impl Workspace {
             suppression_reason: String::new(),
             focus_request: None,
             message: None,
+            search: SearchView::default(),
         })
     }
 
     /// Draws the workspace.
     pub fn ui(&mut self, ui: &mut egui::Ui, session: &mut Session) -> WorkspaceAction {
         let mut lock = false;
-        let focus = self.focus_request.take();
+        let mut focus = self.focus_request.take();
+        if ui.input(|input| input.modifiers.command && input.key_pressed(egui::Key::F)) {
+            focus = Some("search.query".to_owned());
+        }
 
         ui.horizontal(|ui| {
             ui.heading("Bonk");
@@ -283,6 +317,11 @@ impl Workspace {
             ui.separator();
         }
 
+        if self.seller.is_some() {
+            self.search_ui(ui, session, focus.as_deref());
+            ui.separator();
+        }
+
         if self.seller.is_none() {
             self.seller_onboarding(ui, session, focus.as_deref());
         } else {
@@ -295,6 +334,62 @@ impl Workspace {
             WorkspaceAction::Lock
         } else {
             WorkspaceAction::None
+        }
+    }
+
+    /// Draws the find panel and runs the query when the user asks for it.
+    ///
+    /// Nothing runs while typing: a search reads the whole index, and a key
+    /// press per character would be work the user did not ask for. Enter or the
+    /// button runs it, and an empty query lists what the filters allow.
+    fn search_ui(&mut self, ui: &mut egui::Ui, session: &Session, focus: Option<&str>) {
+        let mut run = false;
+        let mut clear = false;
+        ui.group(|ui| {
+            ui.horizontal(|ui| {
+                ui.strong("Find documents");
+                ui.weak("Ctrl+F");
+            });
+            ui.horizontal(|ui| {
+                let response = text_field(ui, &mut self.search.query, "search.query", 300.0, focus);
+                if response.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter)) {
+                    run = true;
+                }
+                direction_combo(ui, &mut self.search.direction);
+                status_combo(ui, &mut self.search.status);
+                if ui.button("Search").clicked() {
+                    run = true;
+                }
+                if ui.button("Clear").clicked() {
+                    clear = true;
+                }
+            });
+
+            if self.search.ran {
+                if self.search.results.is_empty() {
+                    ui.label(if self.search.query.trim().is_empty() {
+                        "No documents in this archive yet."
+                    } else {
+                        "No documents match. Words are combined, so every word has to appear."
+                    });
+                } else {
+                    search_results_ui(ui, &self.search.results);
+                }
+            } else {
+                ui.label("Search by number, party, reference, or note. Leave it blank to list everything.");
+            }
+        });
+
+        if clear {
+            self.search = SearchView::default();
+        }
+        if run {
+            let Some(owner) = self.seller.as_ref().map(|seller| seller.id) else {
+                return;
+            };
+            if let Err(error) = self.search.run(session.database(), owner) {
+                self.message = Some(Message::error(error.to_string()));
+            }
         }
     }
 
@@ -1065,7 +1160,7 @@ fn suppressed_by(finding: &Finding, suppressions: &[Suppression]) -> bool {
             .any(|suppression| suppression.code == finding.code && suppression.field == finding.field)
 }
 
-fn text_field(ui: &mut egui::Ui, value: &mut String, field: &str, width: f32, focus: Option<&str>) {
+fn text_field(ui: &mut egui::Ui, value: &mut String, field: &str, width: f32, focus: Option<&str>) -> egui::Response {
     let response = ui.add(
         egui::TextEdit::singleline(value)
             .id(egui::Id::unique(field))
@@ -1074,6 +1169,70 @@ fn text_field(ui: &mut egui::Ui, value: &mut String, field: &str, width: f32, fo
     if focus == Some(field) {
         response.request_focus();
     }
+    response
+}
+
+fn direction_combo(ui: &mut egui::Ui, value: &mut Option<Direction>) {
+    let label = match value {
+        None => "any side",
+        Some(Direction::Outbound) => "issued",
+        Some(Direction::Inbound) => "received",
+    };
+    egui::ComboBox::from_id_salt("search.direction")
+        .selected_text(label)
+        .show_ui(ui, |ui| {
+            ui.selectable_value(value, None, "any side");
+            ui.selectable_value(value, Some(Direction::Outbound), "issued");
+            ui.selectable_value(value, Some(Direction::Inbound), "received");
+        });
+}
+
+fn status_combo(ui: &mut egui::Ui, value: &mut Option<DocumentStatus>) {
+    let label = value
+        .map(|status| status.to_string())
+        .unwrap_or_else(|| "any status".to_owned());
+    egui::ComboBox::from_id_salt("search.status")
+        .selected_text(label)
+        .show_ui(ui, |ui| {
+            ui.selectable_value(value, None, "any status");
+            for status in [
+                DocumentStatus::Issued,
+                DocumentStatus::Received,
+                DocumentStatus::Approved,
+                DocumentStatus::Paid,
+                DocumentStatus::Archived,
+            ] {
+                ui.selectable_value(value, Some(status), status.to_string());
+            }
+        });
+}
+
+fn search_results_ui(ui: &mut egui::Ui, results: &[SearchHit]) {
+    egui::ScrollArea::vertical().max_height(220.0).show(ui, |ui| {
+        egui::Grid::new("search-results")
+            .num_columns(6)
+            .striped(true)
+            .show(ui, |ui| {
+                for heading in ["Number", "Side", "Party", "Issued", "Gross", "Status"] {
+                    ui.strong(heading);
+                }
+                ui.end_row();
+                for hit in results {
+                    ui.label(hit.number.as_str());
+                    ui.label(hit.direction.to_string());
+                    ui.label(hit.party.as_str());
+                    ui.label(hit.issue_date.to_iso_string());
+                    ui.label(format!("{} {}", money_text(hit.gross), hit.currency.as_str()));
+                    ui.label(hit.status.to_string());
+                    ui.end_row();
+                }
+            });
+    });
+    ui.weak(format!(
+        "{} document(s), best match or newest first, at most {}.",
+        results.len(),
+        store::SEARCH_LIMIT
+    ));
 }
 
 fn show_findings(ui: &mut egui::Ui, findings: &[Finding]) -> Option<FindingAction> {
@@ -1169,6 +1328,9 @@ fn nonempty(value: &str) -> Option<String> {
 mod tests {
     use super::*;
     use crux::Address;
+    use store::{Database, KdfParams, KeyStore, insert_draft};
+
+    const NOW: &str = "2026-10-28T00:00:00Z";
 
     fn seller() -> SellerRecord {
         SellerRecord {
@@ -1185,6 +1347,94 @@ mod tests {
         editor.lines[0].quantity = "2".to_owned();
         editor.lines[0].unit_price = "50.00".to_owned();
         editor
+    }
+
+    /// A seller, one customer, and one issued invoice.
+    fn seeded_archive() -> (tempfile::TempDir, Database, SellerId) {
+        let dir = tempfile::TempDir::new().unwrap();
+        let keystore = KeyStore::create(dir.path().join("keystore.bin"), "pass", KdfParams::TEST).unwrap();
+        let mut database = Database::create(dir.path().join("bonk.db"), &keystore).unwrap();
+
+        let seller = seller();
+        insert_seller(database.connection(), &seller, NOW).unwrap();
+
+        let customer = CustomerRecord {
+            id: CustomerId::new(),
+            party: Party::new("Acme BV", Address::new("Rotterdam", CountryCode::NL)),
+        };
+        insert_customer(database.connection(), &customer, NOW).unwrap();
+
+        let mut form = editor();
+        form.customer = Some(customer.id);
+        form.buyer_reference = "PO-1".to_owned();
+        let draft = build_draft(&form, &seller).unwrap();
+        insert_draft(database.connection(), &draft, NOW).unwrap();
+        issue_draft(
+            database.connection_mut(),
+            IssueRequest {
+                draft_id: draft.id,
+                actor: "test",
+                device: "test",
+                renderer_version: "test",
+                now: NOW,
+            },
+            |_| Ok(b"<Invoice/>".to_vec()),
+        )
+        .unwrap();
+
+        (dir, database, seller.id)
+    }
+
+    #[test]
+    fn the_find_panel_runs_what_it_describes() {
+        let (_dir, database, seller_id) = seeded_archive();
+
+        let mut view = SearchView {
+            query: "acme".to_owned(),
+            ..SearchView::default()
+        };
+        view.run(&database, seller_id).unwrap();
+        assert!(view.ran);
+        assert_eq!(view.results.len(), 1);
+        assert_eq!(view.results[0].party, "Acme BV");
+        assert_eq!(view.results[0].status, DocumentStatus::Issued);
+
+        view.query = "nothing-matches-this".to_owned();
+        view.run(&database, seller_id).unwrap();
+        assert!(view.results.is_empty(), "a run with no hits is still a run");
+
+        // A blank query lists what the filters allow, which is how the panel
+        // doubles as a browse view.
+        view.query = "   ".to_owned();
+        view.run(&database, seller_id).unwrap();
+        assert_eq!(view.results.len(), 1);
+
+        view.direction = Some(Direction::Inbound);
+        view.run(&database, seller_id).unwrap();
+        assert!(view.results.is_empty(), "the side filter is applied");
+    }
+
+    #[test]
+    fn the_workspace_draws_without_panicking() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let mut session = Session::create(
+            dir.path().join("bonk.db"),
+            dir.path().join("keystore.bin"),
+            "passphrase",
+        )
+        .unwrap();
+        insert_seller(session.database().connection(), &seller(), NOW).unwrap();
+
+        let mut workspace = Workspace::new(&session).unwrap();
+        let context = egui::Context::default();
+        let mut action = WorkspaceAction::None;
+        // Drawing is where duplicate widget ids and missing fonts show up as a
+        // panic, so a headless frame is worth more than it looks.
+        let output = context.run_ui(egui::RawInput::default(), |ui| {
+            action = workspace.ui(ui, &mut session);
+        });
+        output.drop_without_applying_deltas();
+        assert_eq!(action, WorkspaceAction::None);
     }
 
     #[test]

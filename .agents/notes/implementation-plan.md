@@ -341,7 +341,7 @@ buyer and order reference from the document they correct, so the copied draft
 still passes R003.
 
 Remaining in M2: nothing blocking. Explicit deliver-to address fields beyond the
-buyer country remain for a later slice. Workspace tests: 279 encrypted, 277 plain.
+buyer country remain for a later slice. Workspace tests: 281 encrypted, 279 plain.
 
 Exit criteria:
 
@@ -500,6 +500,21 @@ or, when there is none, from `document.state`, so an issued invoice reads as
 
 Remaining in M5: saved filters, keyboard shortcuts and empty states in the GUI,
 the i18n pass, document-language selection, and `bonk support-bundle`.
+
+**The find panel is in the workspace.** A group above the editor holds the query,
+a side filter, a status filter, and Search/Clear; Enter in the field runs the
+query and Ctrl+F focuses it. Nothing runs per keystroke: a search reads the whole
+index, and work the user did not ask for is the wrong default. A blank query
+lists what the filters allow, so the panel doubles as a browse view. The empty
+states are distinct — "nothing asked yet", "nothing in this archive", and
+"nothing matches, every word has to appear" — because the three mean different
+things. Results are read-only for now; opening an archived document in the
+editor is not built. `SearchView` keeps the state apart from the drawing code, so
+a unit test drives the panel against a real database, and a headless egui frame
+proves the workspace draws without panicking.
+
+Remaining in M5: saved filters, opening a result in the editor, the i18n pass,
+document-language selection, and `bonk support-bundle`.
 
 ---
 

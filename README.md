@@ -249,6 +249,11 @@ add customers, edit lines with live totals and findings, save drafts, and issue.
 Both front ends call the same renderers: UBL is byte-identical whichever one
 issues the document, and the Issued screen can save the Typst PDF.
 
+The workspace also has a find panel: type a number, party, reference, or note and
+press Enter (Ctrl+F jumps to the field), optionally narrowed by side and status.
+Leaving the query blank lists everything the filters allow. Results are read-only
+for now — opening an archived document in the editor is not built yet.
+
 ## Layout
 
 | Crate | Role | Milestone |
