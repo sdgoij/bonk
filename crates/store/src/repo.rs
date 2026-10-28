@@ -1483,7 +1483,7 @@ pub fn advance_status(
     Ok(target)
 }
 
-/// Finds an inbound document by identity or by the supplier's number.
+/// Finds an inbound document by identifier or by the number the sender wrote.
 pub fn resolve_received(conn: &Connection, owner_id: SellerId, needle: &str) -> Result<Option<DocumentId>, StoreError> {
     if let Ok(id) = DocumentId::parse_str(needle)
         && let Some(direction) = conn
@@ -1510,6 +1510,43 @@ pub fn resolve_received(conn: &Connection, owner_id: SellerId, needle: &str) -> 
     found
         .map(|id| DocumentId::parse_str(&id).map_err(|error| StoreError::Data(error.to_string())))
         .transpose()
+}
+
+/// Finds a document in either direction by identifier or number.
+///
+/// An identifier always wins. A number can occur in both directions at once — a
+/// supplier's document and one of ours can share it — so a number that matches
+/// more than one document is refused rather than resolved by a coin flip.
+pub fn resolve_document(conn: &Connection, owner_id: SellerId, needle: &str) -> Result<Option<DocumentId>, StoreError> {
+    if let Ok(id) = DocumentId::parse_str(needle)
+        && conn
+            .query_row(
+                "SELECT id FROM document WHERE id = ?1 AND owner_id = ?2",
+                params![id.to_string(), owner_id.to_string()],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+            .is_some()
+    {
+        return Ok(Some(id));
+    }
+
+    let mut statement = conn.prepare(
+        "SELECT id FROM document WHERE owner_id = ?1 AND number = ?2
+         ORDER BY issue_date_local DESC, id",
+    )?;
+    let ids = statement
+        .query_map(params![owner_id.to_string(), needle], |row| row.get::<_, String>(0))?
+        .collect::<Result<Vec<_>, _>>()?;
+    match ids.len() {
+        0 => Ok(None),
+        1 => Ok(Some(
+            DocumentId::parse_str(&ids[0]).map_err(|error| StoreError::Data(error.to_string()))?,
+        )),
+        count => Err(StoreError::Rejected(format!(
+            "{needle:?} matches {count} documents; pass the identifier instead"
+        ))),
+    }
 }
 
 /// Issues a draft, invoking `render` inside the transaction.
@@ -1687,7 +1724,7 @@ where
         request.now,
         request.actor,
         "issued",
-        "invoice",
+        "document",
         &issued_id.to_string(),
         json!({
             "number": number,
@@ -1701,7 +1738,7 @@ where
         request.now,
         request.actor,
         "artefact_rendered",
-        "invoice",
+        "document",
         &issued_id.to_string(),
         json!({ "kind": "ubl", "sha256": ubl_hash, "size": ubl.len() }),
     )?;

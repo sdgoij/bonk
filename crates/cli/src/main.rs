@@ -14,7 +14,7 @@ use crux::{
 use store::{
     CustomerRecord, DocumentStatus, IssueRequest, KeyStore, SearchRequest, SellerRecord, StoreError, advance_status,
     credit_note_for, first_seller, insert_customer, insert_draft, insert_seller, issue_draft, list_received,
-    load_customer, load_draft, load_seller, resolve_customer, resolve_received, set_supplier_match,
+    load_customer, load_draft, load_seller, resolve_customer, resolve_document, resolve_received, set_supplier_match,
 };
 
 #[derive(Parser)]
@@ -50,6 +50,20 @@ enum Command {
         /// How many backups to keep.
         #[arg(long, default_value_t = store::backup::RETENTION)]
         keep: usize,
+    },
+    /// Verify an evidence bundle without the archive.
+    #[command(name = "evidence-verify")]
+    EvidenceVerify {
+        /// Bundle directory.
+        directory: PathBuf,
+    },
+    /// Write a verifiable evidence bundle for one document.
+    Evidence {
+        /// Document number or identifier.
+        document: String,
+        /// Directory to write the bundle into; it must not already hold one.
+        #[arg(long)]
+        out: PathBuf,
     },
     /// Verify a backup without opening it as the live database.
     #[command(name = "verify-backup")]
@@ -314,6 +328,43 @@ fn run(cli: Cli) -> Result<(), CliError> {
     let passphrase = cli.passphrase.clone();
     match cli.command {
         None | Some(Command::Gui) => app::run().map_err(|error| CliError::Gui(error.to_string())),
+        Some(Command::Evidence { document, out }) => {
+            let session = open(&database, &keystore, passphrase.clone())?;
+            let owner = owner_of(session.database(), None)?;
+            let id = resolve_document(session.database().connection(), owner, &document)?
+                .ok_or_else(|| CliError::Input(format!("no document matching {document:?}")))?;
+
+            let report = store::evidence::export(
+                session.database().connection(),
+                owner,
+                id,
+                &out,
+                "cli",
+                &store::now_rfc3339(),
+            )?;
+            println!("evidence:  {}", out.display());
+            println!("document:  {} ({}, {})", report.number, report.direction, report.status);
+            println!("files:     {} ({} bytes)", report.files, report.bytes);
+            match &report.head {
+                Some(hash) => println!("chain:     {} events, head {hash}", report.events),
+                None => println!("chain:     empty"),
+            }
+            println!("verified:  ok");
+            Ok(())
+        }
+        Some(Command::EvidenceVerify { directory }) => {
+            // No keystore and no database: the point of the verifier is that a
+            // recipient can run it with nothing but the bundle.
+            let report = store::evidence::verify(&directory)?;
+            println!("bundle verified: {}", directory.display());
+            println!("document:  {} ({}, {})", report.number, report.direction, report.status);
+            println!("files:     {} ({} bytes)", report.files, report.bytes);
+            match &report.head {
+                Some(hash) => println!("chain:     {} events, head {hash}", report.events),
+                None => println!("chain:     empty"),
+            }
+            Ok(())
+        }
         Some(Command::Backup { to, keep }) => {
             let passphrase = resolve_passphrase(passphrase)?;
             let key_store = KeyStore::open(&keystore, &passphrase)?;

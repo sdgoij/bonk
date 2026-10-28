@@ -918,6 +918,37 @@ mod tests {
     }
 
     #[test]
+    fn an_imported_document_bundles_its_received_bytes() {
+        let (dir, database, seller_id) = database();
+        let outcome = import_bytes(
+            &database,
+            seller_id,
+            None,
+            &ubl("Acme BV", None, "X-21"),
+            "2026-10-27T00:00:00Z",
+        )
+        .unwrap();
+
+        let bundle = dir.path().join("evidence");
+        let report = store::evidence::export(
+            database.connection(),
+            seller_id,
+            outcome.document_id,
+            &bundle,
+            "test",
+            "2026-10-27T00:00:01Z",
+        )
+        .unwrap();
+
+        assert_eq!(report.direction, "inbound");
+        assert!(
+            bundle.join("artefacts/X-21-received.xml").exists(),
+            "the bytes as received travel with the bundle"
+        );
+        assert_eq!(store::evidence::verify(&bundle).unwrap(), report);
+    }
+
+    #[test]
     fn a_non_ubl_file_is_reported_with_its_reason() {
         let (_dir, database, seller_id) = database();
         let error = import_bytes(

@@ -341,7 +341,7 @@ buyer and order reference from the document they correct, so the copied draft
 still passes R003.
 
 Remaining in M2: nothing blocking. Explicit deliver-to address fields beyond the
-buyer country remain for a later slice. Workspace tests: 300 encrypted, 298 plain.
+buyer country remain for a later slice. Workspace tests: 308 encrypted, 306 plain.
 
 Exit criteria:
 
@@ -569,6 +569,17 @@ carries the recovery wrap over without holding the secret. `passphrase-reset`
 uses the key to install a new passphrase when the old one is gone, then rotates
 the key and prints the replacement, because the used key has now been typed
 somewhere. Still open in M6.1: the strength meter and the GUI prompts.
+
+M6.5 is in. `store::evidence` writes a bundle directory — manifest with a SHA-256
+per file, the stored semantic record, every artefact, the received bytes for an
+imported document, and the whole audit chain — and verifies it without any
+database: listed files must match, nothing unlisted may appear, manifest paths
+must stay inside the bundle, the record must belong to the named document, and
+the chain must recompute to the recorded head with at least one event naming the
+document. Export verifies what it wrote before reporting success, and refuses a
+number that matches both directions. `bonk evidence` and `bonk evidence-verify`
+expose it. The chain travels whole, so bundles grow with the archive; the design
+note records that trade-off and what a bundle does and does not prove.
 
 Remaining in M6: passphrase UX and recovery keys (M6.1), idle lock and zeroisation
 tests (M6.2), evidence bundles (M6.5), log redaction and support bundles (M6.6),

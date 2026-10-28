@@ -14,6 +14,11 @@ use crate::error::StoreError;
 
 const GENESIS: &str = "0000000000000000000000000000000000000000000000000000000000000000";
 
+/// The empty chain's predecessor, for verifiers that start from nothing.
+pub(crate) fn genesis() -> &'static str {
+    GENESIS
+}
+
 /// The newest link in the chain.
 ///
 /// Two copies of the same archive should agree on this pair; a different head
@@ -129,6 +134,51 @@ fn record_key_event(conn: &Connection, at: &str, actor: &str, kind: &str, keysto
     Ok(())
 }
 
+/// One audit event, as the chain hashes it.
+pub(crate) struct Event<'a> {
+    pub(crate) id: &'a str,
+    pub(crate) at: &'a str,
+    pub(crate) actor: &'a str,
+    pub(crate) kind: &'a str,
+    pub(crate) subject_kind: &'a str,
+    pub(crate) subject_id: &'a str,
+    pub(crate) payload: &'a Value,
+    pub(crate) prev_hash: &'a str,
+    pub(crate) hash: &'a str,
+}
+
+/// Recomputes one link and checks it against its record.
+///
+/// Returns the hash the event must have, which becomes the next event's
+/// `prev_hash`. Shared with the evidence verifier, so a bundle is judged by the
+/// same code that judges the live archive.
+pub(crate) fn verify_one(event: &Event<'_>, expected_previous: &str) -> Result<String, StoreError> {
+    if event.prev_hash != expected_previous {
+        return Err(StoreError::Integrity(format!(
+            "audit event {} does not link to its predecessor",
+            event.id
+        )));
+    }
+
+    let canonical = canonical_event(
+        event.id,
+        event.at,
+        event.actor,
+        event.kind,
+        event.subject_kind,
+        event.subject_id,
+        event.payload,
+    )?;
+    let hash = hash_pair(event.prev_hash, &canonical);
+    if hash != event.hash {
+        return Err(StoreError::Integrity(format!(
+            "audit event {} has been altered",
+            event.id
+        )));
+    }
+    Ok(hash)
+}
+
 /// Recomputes the whole chain. Returns the number of events verified.
 pub fn verify_chain(conn: &Connection) -> Result<usize, StoreError> {
     let mut statement = conn.prepare(
@@ -151,20 +201,19 @@ pub fn verify_chain(conn: &Connection) -> Result<usize, StoreError> {
         let prev_hash: String = row.get(7)?;
         let stored_hash: String = row.get(8)?;
 
-        if prev_hash != expected_previous {
-            return Err(StoreError::Integrity(format!(
-                "audit event {id} does not link to its predecessor"
-            )));
-        }
-
         let payload: Value = serde_json::from_str(&payload_json)?;
-        let canonical = canonical_event(&id, &at, &actor, &kind, &subject_kind, &subject_id, &payload)?;
-        let hash = hash_pair(&prev_hash, &canonical);
-        if hash != stored_hash {
-            return Err(StoreError::Integrity(format!("audit event {id} has been altered")));
-        }
-
-        expected_previous = hash;
+        let event = Event {
+            id: &id,
+            at: &at,
+            actor: &actor,
+            kind: &kind,
+            subject_kind: &subject_kind,
+            subject_id: &subject_id,
+            payload: &payload,
+            prev_hash: &prev_hash,
+            hash: &stored_hash,
+        };
+        expected_previous = verify_one(&event, &expected_previous)?;
         count += 1;
     }
 

@@ -18,6 +18,7 @@ pub mod backup;
 pub mod db;
 mod dto;
 pub mod error;
+pub mod evidence;
 pub mod integrity;
 pub mod keystore;
 pub mod migrations;
@@ -27,6 +28,7 @@ pub use audit::ChainHead;
 pub use backup::{BackupReport, BackupSummary, RETENTION};
 pub use db::Database;
 pub use error::StoreError;
+pub use evidence::EvidenceReport;
 pub use integrity::IntegrityReport;
 pub use keystore::{KdfParams, KeyStore};
 pub use repo::{
@@ -35,7 +37,8 @@ pub use repo::{
     advance_status, attach_artefact, credit_note_for, document_status, find_import_by_payload, find_inbound_number,
     find_issued_reference, first_seller, insert_customer, insert_draft, insert_seller, issue_draft, list_customers,
     list_received, list_suppressions, load_customer, load_draft, load_seller, now_rfc3339, record_received,
-    resolve_customer, resolve_received, save_draft, save_suppression, search, set_supplier_match, verify_artefacts,
+    resolve_customer, resolve_document, resolve_received, save_draft, save_suppression, search, set_supplier_match,
+    verify_artefacts,
 };
 
 /// True when the database file is actually encrypted.

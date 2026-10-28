@@ -205,6 +205,17 @@ key**, printing the new one. Rotation is deliberate — the key that was just ty
 may now be in a shell history or a screenshot, and leaving it valid would quietly
 keep a second route open. The used key stops working.
 
+`evidence <document> --out <dir>` writes a bundle an auditor or counterparty can
+check without the archive: the document's stored record, its artefacts (and, for
+an imported document, the bytes as received), and the whole audit chain, with
+every file listed by SHA-256 in `manifest.json`. `evidence-verify <dir>` needs no
+keystore and no database: it hashes every file, rejects anything the manifest
+never listed, refuses paths that leave the bundle, and recomputes the chain,
+requiring it to end at the recorded head. A number that names both an issued and
+a received document is refused rather than guessed at — pass the identifier.
+The chain travels whole, so a bundle grows with the archive; the design note says
+what that buys and what it does not prove.
+
 `credit-note` copies an issued invoice into a credit-note draft: same customer,
 currency, and lines, with BG-3 naming the invoice it corrects. Credit notes use
 their own number series (`2026-C0001`) so they never consume an invoice number.

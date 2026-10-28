@@ -586,6 +586,20 @@ fn full_slice_through_the_cli() {
         assert!(issued_output.contains("warning: PDF not rendered"), "{issued_output}");
     }
 
+    // Evidence for the invoice we just issued, taken while the number still
+    // points at one document; the check needs no keystore at all.
+    let evidence_dir = dir.path().join("evidence");
+    let mut args = vec!["evidence", "2026-0001", "--out", evidence_dir.to_str().expect("utf-8")];
+    args.extend(common);
+    let said = bonk_ok(&args);
+    assert!(said.contains("verified:  ok"), "{said}");
+    assert!(said.contains("document:  2026-0001 (outbound, issued)"), "{said}");
+
+    let args = vec!["evidence-verify", evidence_dir.to_str().expect("utf-8")];
+    let said = bonk_ok(&args);
+    assert!(said.contains("bundle verified"), "{said}");
+    assert!(said.contains("files:"), "{said}");
+
     let mut args = vec!["credit-note", "2026-0001", "--date", "2026-12-15"];
     args.extend(common);
     let credit_output = bonk_ok(&args);
@@ -636,6 +650,16 @@ fn full_slice_through_the_cli() {
     args.extend(common);
     let again = bonk_ok(&args);
     assert!(again.contains("duplicate: 2026-0001"), "{again}");
+
+    // The same number now names two documents, so evidence export refuses to
+    // pick one for us.
+    let ambiguous_dir = dir.path().join("evidence-ambiguous");
+    let mut args = vec!["evidence", "2026-0001", "--out", ambiguous_dir.to_str().expect("utf-8")];
+    args.extend(common);
+    let output = bonk().args(&args).output().expect("binary runs");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("matches 2 documents"), "{stderr}");
 
     let mut args = vec!["received"];
     args.extend(common);
