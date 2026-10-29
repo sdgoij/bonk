@@ -25,15 +25,23 @@ Design documents live in [`.agents/notes/`](.agents/notes/README.md):
 
 ## Build
 
-Requires Rust 1.98 (pinned in `rust-toolchain.toml`).
+Requires Rust 1.98 (pinned in `rust-toolchain.toml`) and [just](https://github.com/casey/just).
+Every command lives in the [`Justfile`](Justfile), which picks the right Cargo
+wrapper for the platform:
+
+```sh
+just build      # shippable binary, release profile -> target/release/bonk
+just gate       # fmt, clippy, and both test suites
+```
 
 The default build enables SQLCipher through
 `rusqlite/bundled-sqlcipher-vendored-openssl`, which compiles OpenSSL from
 source. OpenSSL's `Configure` script is Perl and needs `ExtUtils::MakeMaker`;
 the Perl bundled with Git for Windows is stripped and cannot build it.
 
-**Windows:** install [Strawberry Perl](https://strawberryperl.com/) and use the
-wrapper, which puts it first on `PATH`:
+**Windows:** install [Strawberry Perl](https://strawberryperl.com/). `just` runs
+`tools/cargo-strawberry.sh`, which puts it first on `PATH`; run the same wrapper
+by hand when calling Cargo directly:
 
 ```sh
 sh tools/cargo-strawberry.sh test --workspace
@@ -45,7 +53,7 @@ build takes about six minutes (OpenSSL); later builds are incremental.
 **macOS / Linux:** the system Perl is sufficient.
 
 ```sh
-cargo test --workspace
+just test
 ```
 
 `.zed/settings.json` disables all language servers for Perl in this workspace;
@@ -56,7 +64,7 @@ the repository contains no Perl files.
 Hosts without a usable OpenSSL/Perl toolchain can still run the whole stack:
 
 ```sh
-cargo test --workspace --no-default-features --features plain
+just test-plain
 ```
 
 This build stores the database **unencrypted**. It exists only for development:
@@ -66,7 +74,7 @@ the GUI shows a permanent red warning, and the CLI prints
 
 ## Repository setup
 
-Install the pre-commit gate once per clone:
+Install the pre-commit gate once per clone (`just hooks` does the same):
 
 ```sh
 git config core.hooksPath .githooks

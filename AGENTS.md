@@ -23,8 +23,12 @@ when a required gate cannot be run.
 
 ## Verification gates
 
-Enable the pre-commit gate once per clone; it is a convenience, not a
-replacement for the gates below:
+Every recipe lives in the `Justfile`; `just` is the one place to look for the
+commands, and the recipes pick the Strawberry Perl wrapper on Windows by
+themselves. `just gate` runs the four offline gates in the order CI does.
+
+Enable the pre-commit gate once per clone (`just hooks` does the same); it is a
+convenience, not a replacement for the gates below:
 
 ```sh
 git config core.hooksPath .githooks
@@ -33,25 +37,26 @@ git config core.hooksPath .githooks
 The hook runs formatting and clippy through the Strawberry wrapper and blocks
 the commit on failure. `BONK_PRECOMMIT_TESTS=1` adds the workspace tests.
 
-Use the Strawberry Perl wrapper for Cargo on Windows:
+The gates, spelled out. On Windows these need the Strawberry Perl wrapper, which
+`just` applies for you:
 
 ```sh
-cargo fmt --all --check
-sh tools/cargo-strawberry.sh clippy --workspace --all-targets -- -D warnings
-sh tools/cargo-strawberry.sh test --workspace
-sh tools/cargo-strawberry.sh test --workspace --no-default-features --features plain
+just fmt
+just clippy
+just test
+just test-plain
 ```
 
 For UBL serialisation, validation, or PDF rendering changes, also run:
 
 ```sh
-sh tools/validate-m1.sh
+just validate-m1
 ```
 
 For VAT-category, exemption-reason, or breakdown changes, also run:
 
 ```sh
-sh tools/validate-vat-matrix.sh
+just validate-vat
 ```
 
 The validation scripts download Mustang into the ignored `target/validator/`
