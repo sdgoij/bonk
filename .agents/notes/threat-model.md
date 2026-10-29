@@ -117,7 +117,7 @@ the machine, not a machine an attacker is already logged into.
 |---|---|---|
 | Plaintext build shipped by accident | The `plain` feature exists for hosts without OpenSSL; the GUI shows a permanent red banner, the CLI prints the label, and support bundles say `none (test build)` | Nothing prevents a determined packager from shipping it; the release checklist must |
 | Vulnerable dependency | `deny.toml` allows permissive licences only (AGPL/SSPL rejected on purpose) and CI runs `cargo deny check` for licences, advisories, and yanked crates | It runs in CI, not on the developer's machine, and advisory data needs the network; `cargo audit` alone is not wired |
-| Unmaintained dependency reported | `deny.toml` takes one advisory by ID, with the reason beside it, rather than silencing the class: `RUSTSEC-2026-0372` covers `zvariant_derive`, which only the Linux accessibility and Secret Service stacks pull in | An ignore hides the advisory for every version, including one where it becomes a defect; the entry names when to revisit it (zbus 6) |
+| Unmaintained dependency reported | `deny.toml` takes advisories by ID, with the reason beside them, rather than silencing the class: two of them cover `zvariant` and `zvariant_derive`, which only the Linux accessibility and Secret Service stacks pull in | An ignore hides the advisory for every version, including one where it becomes a defect; each entry names when to revisit it (zbus 6) |
 | Untrusted code in a template | Typst templates are ours; the world exposes no filesystem or network | M4's template editor must keep that world restricted |
 
 ## 5. Residual risks, stated plainly
