@@ -88,6 +88,116 @@ fn find(database: &Database, seller: SellerId, request: SearchRequest<'_>) -> Ve
     search(database.connection(), seller, &request).unwrap()
 }
 
+/// Stores a draft without issuing it.
+fn draft(database: &Database, seller: SellerId, customer: CustomerId, note: &str, date: &str) -> crux::DocumentId {
+    let mut draft = InvoiceDraft::new(seller, customer, Currency::EUR, LocalDate::parse_iso(date).unwrap());
+    draft.note = Some(note.to_owned());
+    draft.lines.push(DraftLine {
+        id: LineId::new(),
+        position: 1,
+        name: "Advies".to_owned(),
+        description: None,
+        quantity: Quantity::ONE,
+        unit: UnitCode::PIECE,
+        unit_price: Money::from_major_units(100, Currency::EUR).unwrap(),
+        price_base_quantity: Quantity::ONE,
+        treatment: TaxTreatment::standard(VatRate::STANDARD_NL),
+    });
+    let id = draft.id;
+    store::insert_draft(database.connection(), &draft, NOW).unwrap();
+    id
+}
+
+#[test]
+fn a_draft_is_findable_and_carries_its_own_totals() {
+    let (_dir, database, seller, customer, _cafe) = fixture();
+    let draft_id = draft(&database, seller, customer, "Concept voor mei", "2026-10-20");
+
+    let hits = find(&database, seller, SearchRequest::default());
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].id, draft_id);
+    assert_eq!(hits[0].status, store::DocumentStatus::Draft);
+    assert_eq!(hits[0].party, "Customer BV");
+    assert_eq!(hits[0].direction, Direction::Outbound);
+    assert_eq!(hits[0].gross.micros(), 121_000_000, "100 net plus 21%");
+
+    let hits = find(
+        &database,
+        seller,
+        SearchRequest {
+            query: Some("concept"),
+            ..SearchRequest::default()
+        },
+    );
+    assert_eq!(hits.len(), 1, "the note is searched too");
+}
+
+#[test]
+fn issuing_a_draft_removes_it_from_the_list() {
+    let (_dir, mut database, seller, customer, _cafe) = fixture();
+    let id = draft(&database, seller, customer, "Concept", "2026-10-20");
+
+    issue_draft(
+        database.connection_mut(),
+        IssueRequest {
+            draft_id: id,
+            actor: "test",
+            device: "test",
+            renderer_version: "test",
+            now: NOW,
+        },
+        |_| Ok(b"<Invoice/>".to_vec()),
+    )
+    .unwrap();
+
+    assert!(
+        store::load_draft(database.connection(), id).unwrap().is_none(),
+        "the draft became the document"
+    );
+    let hits = find(&database, seller, SearchRequest::default());
+    assert_eq!(hits.len(), 1);
+    assert_ne!(hits[0].status, store::DocumentStatus::Draft);
+}
+
+#[test]
+fn a_draft_is_only_listed_where_it_belongs() {
+    let (_dir, database, seller, customer, _cafe) = fixture();
+    draft(&database, seller, customer, "Concept", "2026-10-20");
+
+    // A draft has no number, so a number query cannot find it.
+    let hits = find(
+        &database,
+        seller,
+        SearchRequest {
+            query: Some("2026-0001"),
+            ..SearchRequest::default()
+        },
+    );
+    assert!(hits.is_empty());
+
+    // It is on our side of the books only.
+    let hits = find(
+        &database,
+        seller,
+        SearchRequest {
+            direction: Some(Direction::Inbound),
+            ..SearchRequest::default()
+        },
+    );
+    assert!(hits.is_empty());
+
+    // And the status filter can ask for drafts alone.
+    let hits = find(
+        &database,
+        seller,
+        SearchRequest {
+            status: Some(store::DocumentStatus::Draft),
+            ..SearchRequest::default()
+        },
+    );
+    assert_eq!(hits.len(), 1);
+}
+
 #[test]
 fn words_find_the_document_people_remember() {
     let (_dir, mut database, seller, customer, cafe) = fixture();

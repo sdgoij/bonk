@@ -1184,9 +1184,15 @@ mod tests {
         );
 
         let hits = all_hits(&session, owner(&session));
-        assert_eq!(hits.len(), 50);
+        // The four drafts are listed alongside the issued and received documents:
+        // unfinished work is searchable, which is the only way to find it again.
+        assert_eq!(hits.len(), 54);
+        assert_eq!(
+            hits.iter().filter(|hit| hit.status == DocumentStatus::Draft).count(),
+            seeded.drafts
+        );
         assert!(hits.iter().any(|hit| hit.number.contains("-C")));
-        for hit in &hits {
+        for hit in hits.iter().filter(|hit| hit.status != DocumentStatus::Draft) {
             assert!(
                 store::archive::load(connection, hit.id).unwrap().is_some(),
                 "{} cannot be read back from the archive",

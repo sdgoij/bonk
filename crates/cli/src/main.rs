@@ -987,7 +987,7 @@ fn run(cli: Cli) -> Result<(), CliError> {
             let filter = match status {
                 Some(value) => Some(DocumentStatus::parse(&value).ok_or_else(|| {
                     CliError::Input(format!(
-                        "unknown status {value:?}; use issued, received, approved, paid, or archived"
+                        "unknown status {value:?}; use draft, issued, received, approved, paid, or archived"
                     ))
                 })?),
                 None => None,
@@ -1480,7 +1480,7 @@ fn filters(
     let status = match status {
         Some(value) => Some(DocumentStatus::parse(&value).ok_or_else(|| {
             CliError::Input(format!(
-                "unknown status {value:?}; use issued, received, approved, paid, or archived"
+                "unknown status {value:?}; use draft, issued, received, approved, paid, or archived"
             ))
         })?),
         None => None,

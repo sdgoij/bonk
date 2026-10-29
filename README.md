@@ -166,16 +166,29 @@ on it.
 
 ### The window
 
-The window is a four-tab shell: a thin icon rail on the left switches **Search**,
-**Create**, **Customers**, and **Settings**. Search is a continuous table over
-the archive; typing or changing a filter re-runs it, a row opens in place with the
-stored document, and headings sort when clicked and resize when dragged. Clicking
-a customer opens it in place and every field is editable; a save changes the
-party on file and leaves issued documents saying what they said. Date fields
-carry a calendar button that opens a month grid, but stay typable, so a date can
-be pasted as well as picked. Settings holds appearance (System, Light, Dark),
-archive health, verified backups, and credentials. Labels are not selectable;
-values — amounts, names, hashes, paths — are. Light and dark share one layout.
+The window is a three-tab shell: a thin icon rail on the left switches **Search**,
+**Customers**, and **Settings**, with the content inset from the rail so tables do
+not start against it. Search is a continuous table over the archive; typing or
+changing a filter re-runs it, a row opens in place with the stored document, and
+headings sort when clicked and resize when dragged. **New invoice** in the same
+row opens the composer over the list — the list stays underneath — and a saved
+draft appears in the results and reopens in that composer when clicked, which is
+how unfinished work is found. The composer's **Preview** renders the invoice
+through the same Typst template that issuing uses, so what the preview shows is
+what gets filed; after issuing, the panel offers the PDF and the UBL again.
+
+Clicking a customer opens it in place and every field is editable, including a
+phone number, which is normalised to E.164 against the party's country
+(`06 12 34 56 78` and `+31 6 1234 5678` are one value). A save changes the party
+on file and leaves issued documents saying what they said. Date fields carry a
+calendar button that opens a month grid, but stay typable, so a date can be
+pasted as well as picked. An opened stored document re-reads its filed artefacts
+— hash-checked — rather than re-rendering them, so **Save PDF** and **Save UBL**
+write exactly what was archived.
+
+Settings holds appearance (System, Light, Dark), archive health, verified
+backups, and credentials. Labels are not selectable; values — amounts, names,
+hashes, paths — are. Light and dark share one layout.
 
 Peppol BIS 3.0 requires an endpoint identifier for both parties and a buyer or
 order reference, and a Dutch seller also needs a street, a post code, and a KvK

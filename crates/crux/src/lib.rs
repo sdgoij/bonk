@@ -25,6 +25,7 @@ pub mod ids;
 pub mod invoice;
 pub mod money;
 pub mod party;
+pub mod phone;
 pub mod quantity;
 pub mod totals;
 pub mod validation;
@@ -40,6 +41,7 @@ pub use invoice::{
 };
 pub use money::{Currency, MAX_SCALE, MICROS_PER_UNIT, Money};
 pub use party::{Address, CountryCode, Party, VatIdCheck, validate_vat_id};
+pub use phone::PhoneNumber;
 pub use quantity::{Quantity, UnitCode};
 pub use totals::{InvoiceTotals, TaxBreakdown, calculate_totals};
 pub use validation::validate_draft;

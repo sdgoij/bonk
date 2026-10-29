@@ -26,6 +26,9 @@ egui.workspace = true
 
 serde_json.workspace = true
 zeroize.workspace = true
+# Decoding the PNG that Typst exports for the in-window preview. Already in the
+# tree through eframe; this only declares the use.
+image = { version = "0.25", default-features = false, features = ["png"] }
 
 [dev-dependencies]
 tempfile.workspace = true

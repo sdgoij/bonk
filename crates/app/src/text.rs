@@ -209,11 +209,6 @@ pub mod tabs {
         "Search"
     }
 
-    /// Start an invoice.
-    pub fn create(_: Language) -> &'static str {
-        "Create"
-    }
-
     /// The party list.
     pub fn customers(_: Language) -> &'static str {
         "Customers"
@@ -316,12 +311,18 @@ pub mod find {
     /// Where a document stands.
     pub fn status(_: Language, status: DocumentStatus) -> &'static str {
         match status {
+            DocumentStatus::Draft => "draft",
             DocumentStatus::Issued => "issued",
             DocumentStatus::Received => "received",
             DocumentStatus::Approved => "approved",
             DocumentStatus::Paid => "paid",
             DocumentStatus::Archived => "archived",
         }
+    }
+
+    /// The number column for a draft, which has no number yet.
+    pub fn draft_number(_: Language) -> &'static str {
+        "(draft)"
     }
 
     /// Result columns, in order.
@@ -436,6 +437,36 @@ pub mod find {
         match language {
             Language::English => format!("{kind} · {size} bytes · {hash}"),
         }
+    }
+
+    /// Label beside the export path field.
+    pub fn save_to(_: Language) -> &'static str {
+        "Save to"
+    }
+
+    /// Writes the filed PDF.
+    pub fn save_pdf_action(_: Language) -> &'static str {
+        "Save PDF"
+    }
+
+    /// Writes the filed UBL.
+    pub fn save_ubl_action(_: Language) -> &'static str {
+        "Save UBL"
+    }
+
+    /// No export path was typed.
+    pub fn choose_export_path(_: Language) -> &'static str {
+        "Choose where to save the export first."
+    }
+
+    /// What was written, and where.
+    pub fn export_saved(_: Language, path: &str) -> String {
+        format!("Saved {path}")
+    }
+
+    /// Writing failed.
+    pub fn export_failed(_: Language, error: &str) -> String {
+        format!("Could not save the export: {error}")
     }
 }
 
@@ -664,6 +695,8 @@ pub mod editor {
         Contact,
         /// Contact email.
         Email,
+        /// Contact phone, in E.164 form.
+        Phone,
     }
 
     /// The word for a party field.
@@ -680,6 +713,7 @@ pub mod editor {
             Field::Peppol => "Peppol ID",
             Field::Contact => "Contact",
             Field::Email => "Email",
+            Field::Phone => "Phone",
         }
     }
 
@@ -713,9 +747,9 @@ pub mod editor {
         "Add customer"
     }
 
-    /// Nothing has been started yet.
-    pub fn empty_editor(_: Language) -> &'static str {
-        "Open a new invoice to start. Existing drafts are not listed yet."
+    /// The draft the user asked for is gone.
+    pub fn draft_missing(_: Language) -> &'static str {
+        "That draft is no longer in this archive; run the search again."
     }
 
     /// The editor needs a party to bill.
@@ -771,6 +805,41 @@ pub mod editor {
     /// Heading after issuing.
     pub fn issued_heading(credit_note: bool) -> &'static str {
         if credit_note { "Issued credit note" } else { "Issued" }
+    }
+
+    /// Heading over a composer that reopened a stored draft.
+    pub fn draft_heading(_: Language) -> &'static str {
+        "Draft"
+    }
+
+    /// Tooltip on the button that puts the composer away.
+    pub fn close_composer(_: Language) -> &'static str {
+        "Close without issuing"
+    }
+
+    /// Renders what the invoice will look like.
+    pub fn preview_action(_: Language) -> &'static str {
+        "Preview"
+    }
+
+    /// Heading over the rendered preview.
+    pub fn preview_heading(_: Language) -> &'static str {
+        "Preview"
+    }
+
+    /// Tooltip on the button that hides the preview.
+    pub fn close_preview(_: Language) -> &'static str {
+        "Hide the preview"
+    }
+
+    /// The number field of a preview: nothing has been allocated yet.
+    pub fn preview_number(_: Language) -> &'static str {
+        "(not issued)"
+    }
+
+    /// The preview could not be rendered.
+    pub fn preview_failed(_: Language, error: &str) -> String {
+        format!("Could not render the preview: {error}")
     }
 
     /// Number of the issued document.

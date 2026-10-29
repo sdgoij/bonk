@@ -1034,9 +1034,14 @@ pub fn find_import_by_payload(conn: &Connection, payload_hash: &str) -> Result<O
         .transpose()
 }
 
-/// Where a received document stands in the payable register.
+/// Where a document stands.
+///
+/// `Draft` is not a state of an issued document: it marks an unfinished invoice
+/// in the draft table, which search lists so work in progress is not invisible.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub enum DocumentStatus {
+    /// Written but not issued; only drafts have this status.
+    Draft,
     /// We issued it; nothing has happened to it yet.
     Issued,
     /// Recorded, not yet approved for payment.
@@ -1053,6 +1058,7 @@ impl DocumentStatus {
     /// Stable code, as stored in `document_event.kind` or `document.state`.
     pub const fn code(self) -> &'static str {
         match self {
+            Self::Draft => "draft",
             Self::Issued => "issued",
             Self::Received => "received",
             Self::Approved => "approved",
@@ -1064,6 +1070,7 @@ impl DocumentStatus {
     /// Parses a status code.
     pub fn parse(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
+            "draft" => Some(Self::Draft),
             "issued" => Some(Self::Issued),
             "received" => Some(Self::Received),
             "approved" => Some(Self::Approved),
@@ -1265,6 +1272,20 @@ pub fn search(
     owner_id: SellerId,
     request: &SearchRequest<'_>,
 ) -> Result<Vec<SearchHit>, StoreError> {
+    let mut hits = Vec::new();
+
+    // Unfinished invoices come first: a draft is the thing most likely to be on
+    // the user's mind, and it has no number to sort by. Drafts are always
+    // outbound, so an inbound filter excludes them.
+    if request.status.is_none_or(|status| status == DocumentStatus::Draft)
+        && request.direction != Some(Direction::Inbound)
+    {
+        hits = draft_hits(conn, owner_id, request)?;
+    }
+    if request.status == Some(DocumentStatus::Draft) {
+        return Ok(hits);
+    }
+
     let expression = match request.query {
         Some(query) => Some(match_expression(query)?),
         None => None,
@@ -1314,7 +1335,6 @@ pub fn search(
 
     let mut statement = conn.prepare(&sql)?;
     let mut rows = statement.query(rusqlite::params_from_iter(parameters))?;
-    let mut hits = Vec::new();
     while let Some(row) = rows.next()? {
         let id: String = row.get(0)?;
         let direction: String = row.get(1)?;
@@ -1338,6 +1358,85 @@ pub fn search(
             gross: Money::parse_fixed(gross, currency).map_err(|error| StoreError::Data(error.to_string()))?,
             status: DocumentStatus::parse(&status)
                 .ok_or_else(|| StoreError::Data(format!("stored status {status:?} is unknown")))?,
+        });
+    }
+    Ok(hits)
+}
+
+/// Finds drafts whose customer, references, or note mention the typed words.
+///
+/// Drafts are not in the FTS index: they are few, they change on every save,
+/// and keeping a second index in step with a table that is rewritten on each
+/// keystroke's save is work with no payoff. The scan is over one seller's drafts
+/// and stops at the same limit search does.
+fn draft_hits(
+    conn: &Connection,
+    owner_id: SellerId,
+    request: &SearchRequest<'_>,
+) -> Result<Vec<SearchHit>, StoreError> {
+    let words: Vec<String> = request
+        .query
+        .map(|query| {
+            query
+                .split_whitespace()
+                .map(|word| word.trim_matches('"').to_lowercase())
+                .filter(|word| !word.is_empty())
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let mut statement = conn.prepare(
+        "SELECT d.id, d.issue_date_local, d.currency,
+                COALESCE(c.display_name, ''), d.buyer_reference, d.order_reference, d.notes_json
+         FROM invoice_draft d
+         LEFT JOIN customer c ON c.id = d.counterparty_id
+         WHERE d.owner_id = ?1
+         ORDER BY d.issue_date_local DESC, d.updated_at DESC
+         LIMIT ?2",
+    )?;
+    let mut rows = statement.query(rusqlite::params![owner_id.to_string(), i64::from(SEARCH_LIMIT)])?;
+    let mut hits = Vec::new();
+    while let Some(row) = rows.next()? {
+        let id =
+            DocumentId::parse_str(&row.get::<_, String>(0)?).map_err(|error| StoreError::Data(error.to_string()))?;
+        let issue_date = parse_date(&row.get::<_, String>(1)?)?;
+        let currency =
+            Currency::parse(&row.get::<_, String>(2)?).map_err(|error| StoreError::Data(error.to_string()))?;
+        let party: String = row.get(3)?;
+        let note: Option<String> = row
+            .get::<_, Option<String>>(6)?
+            .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+            .and_then(|value| value.get("note").and_then(|note| note.as_str()).map(str::to_owned));
+
+        if request.from.is_some_and(|from| issue_date < from) || request.to.is_some_and(|to| issue_date > to) {
+            continue;
+        }
+        if !words.is_empty() {
+            let haystack = format!(
+                "{party} {} {} {}",
+                row.get::<_, Option<String>>(4)?.unwrap_or_default(),
+                row.get::<_, Option<String>>(5)?.unwrap_or_default(),
+                note.as_deref().unwrap_or_default()
+            )
+            .to_lowercase();
+            if !words.iter().all(|word| haystack.contains(word)) {
+                continue;
+            }
+        }
+
+        let gross = load_draft(conn, id)?
+            .and_then(|draft| calculate_totals(&draft.lines).ok())
+            .map_or_else(|| Money::from_micros(0, currency), |totals| totals.gross);
+
+        hits.push(SearchHit {
+            id,
+            direction: Direction::Outbound,
+            number: String::new(),
+            party,
+            issue_date,
+            currency,
+            gross,
+            status: DocumentStatus::Draft,
         });
     }
     Ok(hits)
@@ -1778,6 +1877,14 @@ where
         "document",
         &issued_id.to_string(),
         json!({ "kind": "ubl", "sha256": ubl_hash, "size": ubl.len() }),
+    )?;
+
+    // The draft has become the document. Its facts live on in the snapshots and
+    // lines above, so keeping an uneditable copy would only leave a row that
+    // search has to learn to skip.
+    transaction.execute(
+        "DELETE FROM invoice_draft WHERE id = ?1",
+        [request.draft_id.to_string()],
     )?;
 
     transaction.commit()?;

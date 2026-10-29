@@ -57,6 +57,10 @@ pub enum DomainError {
     #[error("invalid country code: {0:?}")]
     InvalidCountry(String),
 
+    /// A phone number could not be expressed in E.164.
+    #[error("invalid phone number: {0}")]
+    InvalidPhone(String),
+
     /// A document was submitted for issuing without any lines.
     #[error("the invoice has no lines")]
     EmptyInvoice,

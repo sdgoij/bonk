@@ -31,7 +31,7 @@ pub mod saved;
 pub mod support;
 
 pub use anchor::{Anchor, AnchorCheck, AnchorRecord};
-pub use archive::{ArtefactInfo, DocumentView, StatusEvent, StoredLine};
+pub use archive::{ArtefactInfo, DocumentView, StatusEvent, StoredLine, artefact_bytes};
 pub use audit::ChainHead;
 pub use backup::{BackupReport, BackupSummary, RETENTION};
 pub use db::Database;

@@ -8,10 +8,10 @@
 
 use std::collections::HashSet;
 
-use crux::{Address, CountryCode, CustomerId, Party};
+use crux::{Address, CountryCode, CustomerId, Party, PhoneNumber};
 use store::{CustomerRecord, StoreError, insert_customer, list_customers};
 
-const HEADER: &str = "name,street,postal,city,country,vat,kvk,peppol,contact,email";
+const HEADER: &str = "name,street,postal,city,country,vat,kvk,peppol,contact,email,phone";
 
 /// One row read from a customer file.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -38,6 +38,8 @@ pub struct Row {
     pub contact: String,
     /// Contact email.
     pub email: String,
+    /// Contact phone, as typed; normalised to E.164 on import.
+    pub phone: String,
 }
 
 /// What an import did.
@@ -69,6 +71,7 @@ pub fn export(customers: &[CustomerRecord]) -> String {
             party.peppol_id.as_deref().unwrap_or(""),
             party.contact_name.as_deref().unwrap_or(""),
             party.email.as_deref().unwrap_or(""),
+            party.phone.as_deref().unwrap_or(""),
         ];
         let line: Vec<String> = fields.iter().map(|field| quote(field)).collect();
         out.push_str(&line.join(","));
@@ -97,6 +100,7 @@ pub fn parse(text: &str) -> Result<Vec<Row>, String> {
     let peppol = column(&["peppol", "peppol_id", "endpoint"]);
     let contact = column(&["contact", "contact_name"]);
     let email = column(&["email", "e-mail"]);
+    let phone = column(&["phone", "telephone", "mobile", "phone_number"]);
 
     let mut rows = Vec::new();
     for (line, fields) in records.into_iter().skip(1) {
@@ -128,6 +132,7 @@ pub fn parse(text: &str) -> Result<Vec<Row>, String> {
             peppol: get(peppol),
             contact: get(contact),
             email: get(email),
+            phone: get(phone),
         });
     }
     Ok(rows)
@@ -182,6 +187,16 @@ pub fn import(database: &store::Database, rows: &[Row], now: &str) -> Result<Rep
         party.peppol_id = nonempty(&row.peppol);
         party.contact_name = nonempty(&row.contact);
         party.email = nonempty(&row.email);
+        party.phone = match nonempty(&row.phone) {
+            Some(raw) => match PhoneNumber::parse(&raw, country) {
+                Ok(number) => Some(number.as_str().to_owned()),
+                Err(error) => {
+                    report.errors.push(format!("line {}: {error}", row.line));
+                    continue;
+                }
+            },
+            None => None,
+        };
 
         insert_customer(
             connection,
@@ -324,6 +339,7 @@ mod tests {
         party.peppol_id = Some("0106:12345678".to_owned());
         party.contact_name = Some("Sam".to_owned());
         party.email = Some("sam@example.test".to_owned());
+        party.phone = Some("+31612345678".to_owned());
         CustomerRecord {
             id: CustomerId::new(),
             party,
@@ -351,6 +367,7 @@ mod tests {
         assert_eq!(rows[0].kvk, "12345678");
         assert_eq!(rows[0].peppol, "0106:12345678");
         assert_eq!(rows[0].email, "sam@example.test");
+        assert_eq!(rows[0].phone, "+31612345678");
         assert_eq!(rows[1].name, "Plain BV");
         assert!(rows[1].vat.is_empty());
     }
@@ -389,5 +406,21 @@ mod tests {
     fn a_country_defaults_to_the_netherlands() {
         let rows = parse("name,city\nSolo BV,Delft\n").unwrap();
         assert_eq!(rows[0].country, "NL");
+    }
+
+    #[test]
+    fn an_imported_phone_is_normalised_or_reported() {
+        let (_directory, database) = database();
+        let text = format!(
+            "{HEADER}\nGood BV,Main 1,1000 AA,Delft,NL,,,,,,\"06 12 34 56 78\"\nBad BV,Main 2,2000 BB,Delft,NL,,,,,,call me\n"
+        );
+        let rows = parse(&text).unwrap();
+        let report = import(&database, &rows, NOW).unwrap();
+        assert_eq!(report.imported, 1, "{report:?}");
+        assert_eq!(report.errors.len(), 1, "{report:?}");
+        assert!(report.errors[0].contains("line 3"), "{report:?}");
+
+        let customers = list_customers(database.connection()).unwrap();
+        assert_eq!(customers[0].party.phone.as_deref(), Some("+31612345678"));
     }
 }

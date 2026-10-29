@@ -226,6 +226,17 @@ impl PdfRenderer for TypstCliRenderer {
     }
 }
 
+impl TypstCliRenderer {
+    /// Renders the first page as PNG, for a preview inside the window.
+    ///
+    /// The same template that produces the PDF is compiled with Typst's PNG
+    /// export, so what the preview shows is what issuing writes; nothing here
+    /// re-implements the layout.
+    pub fn render_png(&self, data: &InvoiceData, ppi: f32) -> Result<Vec<u8>, RenderError> {
+        render_png(&self.binary, data, ppi)
+    }
+}
+
 /// Stages the template and data in a temporary directory and compiles them.
 pub fn render_pdf(binary: &str, data: &InvoiceData) -> Result<Vec<u8>, RenderError> {
     let directory = tempfile::tempdir()?;
@@ -266,6 +277,52 @@ pub fn render_pdf(binary: &str, data: &InvoiceData) -> Result<Vec<u8>, RenderErr
     }
 
     Ok(std::fs::read(output_path)?)
+}
+
+/// Compiles the template to a PNG preview of its first page.
+///
+/// Typst writes one file per page when the output path contains `{p}`; an
+/// invoice template is one page, so page 1 is the whole document.
+pub fn render_png(binary: &str, data: &InvoiceData, ppi: f32) -> Result<Vec<u8>, RenderError> {
+    let directory = tempfile::tempdir()?;
+    let data_path = directory.path().join("data.json");
+    let source_path = directory.path().join("invoice.typ");
+    let output_path = directory.path().join("preview-{p}.png");
+
+    std::fs::write(&data_path, serde_json::to_vec(data)?)?;
+    std::fs::write(&source_path, TEMPLATE)?;
+
+    let result = std::process::Command::new(binary)
+        .arg("compile")
+        .arg("--root")
+        .arg(directory.path())
+        .arg("--creation-timestamp")
+        .arg(creation_timestamp(&data.issue_date).to_string())
+        .arg("--input")
+        .arg("data=data.json")
+        .arg("--format")
+        .arg("png")
+        .arg("--ppi")
+        .arg(format!("{ppi}"))
+        .arg(&source_path)
+        .arg(&output_path)
+        .output();
+
+    let result = match result {
+        Ok(result) => result,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Err(RenderError::ToolMissing);
+        }
+        Err(error) => return Err(error.into()),
+    };
+
+    if !result.status.success() {
+        return Err(RenderError::Typst(
+            String::from_utf8_lossy(&result.stderr).trim().to_owned(),
+        ));
+    }
+
+    Ok(std::fs::read(directory.path().join("preview-1.png"))?)
 }
 
 /// Midnight UTC on the issue date, as a UNIX timestamp. Zero if unparseable.
@@ -402,5 +459,19 @@ mod tests {
     fn missing_tool_is_reported_clearly() {
         let error = render_pdf("definitely-not-typst", &sample()).unwrap_err();
         assert!(matches!(error, RenderError::ToolMissing));
+    }
+
+    #[test]
+    fn previews_a_png_when_typst_is_installed() {
+        match render_png("typst", &sample(), 96.0) {
+            Ok(bytes) => {
+                assert_eq!(&bytes[..8], b"\x89PNG\r\n\x1a\n", "not a PNG");
+                assert!(bytes.len() > 1_000, "suspiciously small PNG: {}", bytes.len());
+            }
+            Err(RenderError::ToolMissing) => {
+                eprintln!("skipping: typst is not installed");
+            }
+            Err(other) => panic!("preview failed: {other}"),
+        }
     }
 }

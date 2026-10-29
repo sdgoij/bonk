@@ -259,6 +259,45 @@ fn events(conn: &Connection, id: DocumentId) -> Result<Vec<StatusEvent>, StoreEr
     Ok(events)
 }
 
+/// Loads the bytes of a stored artefact, checking them against the hash.
+///
+/// The latest rendition of `kind` wins, so a PDF attached after the UBL is the
+/// one a reader gets. The hash is verified here rather than at the call site:
+/// an artefact that no longer matches its record must not be handed to anyone
+/// as the invoice.
+pub fn artefact_bytes(conn: &Connection, id: DocumentId, kind: &str) -> Result<Vec<u8>, StoreError> {
+    let found: Option<(String, Vec<u8>)> = conn
+        .query_row(
+            "SELECT a.bytes_hash, b.payload
+             FROM artefact a
+             JOIN blob b ON b.id = a.blob_id
+             WHERE a.document_id = ?1 AND a.kind = ?2
+             ORDER BY a.rendered_at DESC, a.id DESC
+             LIMIT 1",
+            params![id.to_string(), kind],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?;
+    let (hash, bytes) = found.ok_or_else(|| StoreError::NotFound(format!("{kind} artefact for document {id}")))?;
+    if crate::audit::sha256_hex(&bytes) != hash {
+        return Err(data(format!(
+            "the stored {kind} no longer hashes to its record ({hash})"
+        )));
+    }
+    Ok(bytes)
+}
+
+/// Distinct artefact kinds a document carries, in a stable order.
+pub fn artefact_kinds(conn: &Connection, id: DocumentId) -> Result<Vec<String>, StoreError> {
+    let mut statement = conn.prepare("SELECT DISTINCT kind FROM artefact WHERE document_id = ?1 ORDER BY kind")?;
+    let rows = statement.query_map(params![id.to_string()], |row| row.get::<_, String>(0))?;
+    let mut kinds = Vec::new();
+    for row in rows {
+        kinds.push(row?);
+    }
+    Ok(kinds)
+}
+
 fn artefacts(conn: &Connection, id: DocumentId) -> Result<Vec<ArtefactInfo>, StoreError> {
     let mut statement = conn.prepare(
         "SELECT kind, syntax_profile, bytes_hash, size_bytes, rendered_at, renderer_version

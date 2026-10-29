@@ -11,8 +11,8 @@ use std::path::{Path, PathBuf};
 
 use crux::{
     Address, CountryCode, Currency, CustomerId, DocType, DocumentId, DraftLine, Finding, InvoiceDraft, LineId,
-    LocalDate, Money, Party, PrecedingInvoice, Quantity, SavedSearchId, SellerId, Severity, TaxTreatment, UnitCode,
-    VatCategory, VatRate, calculate_totals, has_blocking, validate_draft,
+    LocalDate, Money, Party, PhoneNumber, PrecedingInvoice, Quantity, SavedSearchId, SellerId, Severity, TaxTreatment,
+    UnitCode, VatCategory, VatRate, calculate_totals, has_blocking, validate_draft,
 };
 use store::{
     CustomerRecord, Direction, DocumentRecord, DocumentStatus, IssueRequest, SavedSearch, SearchHit, SearchRequest,
@@ -40,14 +40,12 @@ const CATEGORIES: [VatCategory; 6] = [
     VatCategory::Export,
 ];
 
-/// The four places the window can be.
+/// The three places the window can be.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 enum Tab {
-    /// Find and read documents.
+    /// Find and read documents, and write a new one.
     #[default]
     Search,
-    /// Write a new invoice.
-    Create,
     /// The party list.
     Customers,
     /// Archive health, backups, and credentials.
@@ -77,6 +75,11 @@ pub struct Workspace {
     issued: Option<DocumentRecord>,
     pdf: Option<PdfDocument>,
     pdf_path: String,
+    /// Where an export of the open stored document goes; the extension decides
+    /// which artefact is written.
+    export_path: String,
+    /// The preview of the composer's invoice, once one has been asked for.
+    preview: Option<Preview>,
     conformance_findings: Vec<Finding>,
     suppressions: Vec<Suppression>,
     suppress_target: Option<SuppressionTarget>,
@@ -172,6 +175,7 @@ impl CustomerEdit {
                 peppol: customer.party.peppol_id.clone().unwrap_or_default(),
                 contact: customer.party.contact_name.clone().unwrap_or_default(),
                 email: customer.party.email.clone().unwrap_or_default(),
+                phone: customer.party.phone.clone().unwrap_or_default(),
             },
         }
     }
@@ -340,6 +344,15 @@ struct PdfDocument {
     hash: String,
 }
 
+/// A rendered preview of the invoice being written.
+///
+/// It is a snapshot, not a live view: rendering costs a Typst run, so it happens
+/// when the user asks and stays until the composer closes.
+struct Preview {
+    texture: egui::TextureHandle,
+    size: egui::Vec2,
+}
+
 struct Message {
     text: String,
     error: bool,
@@ -400,9 +413,42 @@ struct CustomerForm {
     peppol: String,
     contact: String,
     email: String,
+    phone: String,
 }
 
 impl CustomerForm {
+    /// Builds the party the form describes, normalising the phone number.
+    ///
+    /// The phone is parsed against the party's own country, so `06 12 34 56 78`
+    /// and `+31 6 1234 5678` are one stored value.
+    fn to_party(&self) -> Result<Party, String> {
+        let country = CountryCode::parse(self.country.trim()).map_err(|error| error.to_string())?;
+        let mut party = Party::new(
+            self.name.trim().to_owned(),
+            Address {
+                street: nonempty(&self.street),
+                city: self.city.trim().to_owned(),
+                postal_code: nonempty(&self.postal),
+                country,
+            },
+        );
+        party.vat_id = nonempty(&self.vat).map(|value| value.to_ascii_uppercase());
+        party.kvk_number = nonempty(&self.kvk);
+        party.peppol_id = nonempty(&self.peppol);
+        party.contact_name = nonempty(&self.contact);
+        party.email = nonempty(&self.email);
+        party.phone = match nonempty(&self.phone) {
+            Some(raw) => Some(
+                PhoneNumber::parse(&raw, country)
+                    .map_err(|error| error.to_string())?
+                    .as_str()
+                    .to_owned(),
+            ),
+            None => None,
+        };
+        Ok(party)
+    }
+
     fn field_mut(&mut self, field: Field) -> &mut String {
         match field {
             Field::Name => &mut self.name,
@@ -415,6 +461,7 @@ impl CustomerForm {
             Field::Peppol => &mut self.peppol,
             Field::Contact => &mut self.contact,
             Field::Email => &mut self.email,
+            Field::Phone => &mut self.phone,
             Field::LegalName => &mut self.name,
         }
     }
@@ -433,6 +480,7 @@ impl Default for CustomerForm {
             peppol: String::new(),
             contact: String::new(),
             email: String::new(),
+            phone: String::new(),
         }
     }
 }
@@ -479,6 +527,9 @@ struct Editor {
     document_language: render::Language,
     lines: Vec<LineForm>,
     date_popup: Option<DatePopup>,
+    /// True when this composer reopened a draft that is already stored, which is
+    /// only used to say so in the heading.
+    saved: bool,
 }
 
 impl Clone for Editor {
@@ -497,6 +548,7 @@ impl Clone for Editor {
             document_language: self.document_language,
             lines: self.lines.clone(),
             date_popup: self.date_popup,
+            saved: self.saved,
         }
     }
 }
@@ -517,19 +569,21 @@ impl Editor {
             document_language,
             lines: vec![LineForm::default()],
             date_popup: None,
+            saved: false,
         }
     }
 
-    /// An editor pre-filled from a credit-note draft copied from an issued
-    /// invoice: the reference is fixed, the lines and customer are editable.
-    fn credit_note(draft: &InvoiceDraft, document_language: render::Language) -> Option<Self> {
-        let preceding = draft.preceding_invoice.clone()?;
+    /// An editor filled from a stored draft, so unfinished work reopens where it
+    /// was left.
+    fn from_draft(draft: &InvoiceDraft, document_language: render::Language) -> Self {
         let mut editor = Self::new(Some(draft.customer_id), document_language);
+        editor.saved = true;
         editor.id = draft.id;
-        editor.doc_type = DocType::CreditNote;
-        editor.preceding = Some(preceding);
+        editor.doc_type = draft.doc_type;
+        editor.preceding = draft.preceding_invoice.clone();
         editor.issue_date = draft.issue_date.to_iso_string();
-        editor.due_date.clear();
+        editor.due_date = draft.due_date.map(|date| date.to_iso_string()).unwrap_or_default();
+        editor.delivery_date = draft.delivery_date.map(|date| date.to_iso_string()).unwrap_or_default();
         editor.buyer_reference = draft.buyer_reference.clone().unwrap_or_default();
         editor.order_reference = draft.order_reference.clone().unwrap_or_default();
         editor.note = draft.note.clone().unwrap_or_default();
@@ -544,6 +598,17 @@ impl Editor {
                 category: line.treatment.category,
             })
             .collect();
+        editor
+    }
+
+    /// An editor pre-filled from a credit-note draft copied from an issued
+    /// invoice: the reference is fixed, the lines and customer are editable.
+    fn credit_note(draft: &InvoiceDraft, document_language: render::Language) -> Option<Self> {
+        draft.preceding_invoice.clone()?;
+        let mut editor = Self::from_draft(draft, document_language);
+        editor.doc_type = DocType::CreditNote;
+        editor.due_date.clear();
+        editor.saved = false;
         Some(editor)
     }
 }
@@ -608,6 +673,8 @@ impl Workspace {
             issued: None,
             pdf: None,
             pdf_path: String::new(),
+            export_path: String::new(),
+            preview: None,
             conformance_findings: Vec::new(),
             suppressions: Vec::new(),
             suppress_target: None,
@@ -643,10 +710,8 @@ impl Workspace {
                 } else if input.key_pressed(egui::Key::Num1) {
                     requested = Some(Tab::Search);
                 } else if input.key_pressed(egui::Key::Num2) {
-                    requested = Some(Tab::Create);
-                } else if input.key_pressed(egui::Key::Num3) {
                     requested = Some(Tab::Customers);
-                } else if input.key_pressed(egui::Key::Num4) {
+                } else if input.key_pressed(egui::Key::Num3) {
                     requested = Some(Tab::Settings);
                 }
             }
@@ -666,33 +731,30 @@ impl Workspace {
                 lock = self.rail_ui(ui);
             });
 
-        self.header_ui(ui);
-        self.message_ui(ui);
+        // A margin between the rail and the content, so a table does not start
+        // against the icon column and the last column does not touch the window
+        // edge. Tables size themselves from `available_width`, so they take the
+        // reduced width naturally.
+        let content = egui::Frame::new().inner_margin(egui::Margin {
+            left: 18,
+            right: 18,
+            top: 2,
+            bottom: 8,
+        });
+        content.show(ui, |ui| {
+            self.header_ui(ui);
+            self.message_ui(ui);
 
-        match self.tab {
-            Tab::Search => {
-                if self.seller.is_none() {
-                    self.seller_onboarding(ui, session, focus.as_deref());
-                } else {
-                    self.search_ui(ui, session, focus.as_deref());
+            if self.seller.is_none() {
+                self.seller_onboarding(ui, session, focus.as_deref());
+            } else {
+                match self.tab {
+                    Tab::Search => self.search_ui(ui, session, focus.as_deref()),
+                    Tab::Customers => self.customers_ui(ui, session, focus.as_deref()),
+                    Tab::Settings => self.settings_ui(ui, session, appearance),
                 }
             }
-            Tab::Create => {
-                if self.seller.is_none() {
-                    self.seller_onboarding(ui, session, focus.as_deref());
-                } else {
-                    if !self.conformance_findings.is_empty() {
-                        if let Some(action) = show_findings(ui, self.language, &self.conformance_findings) {
-                            self.apply_finding_action(action);
-                        }
-                        ui.add_space(4.0);
-                    }
-                    self.unlocked_ui(ui, session, focus.as_deref());
-                }
-            }
-            Tab::Customers => self.customers_ui(ui, session, focus.as_deref()),
-            Tab::Settings => self.settings_ui(ui, session, appearance),
-        }
+        });
 
         self.suppression_dialog(ui, session);
 
@@ -719,7 +781,6 @@ impl Workspace {
 
         let tabs = [
             (Tab::Search, theme::Icon::Search, text::tabs::search(language)),
-            (Tab::Create, theme::Icon::Create, text::tabs::create(language)),
             (Tab::Customers, theme::Icon::Customers, text::tabs::customers(language)),
             (Tab::Settings, theme::Icon::Settings, text::tabs::settings(language)),
         ];
@@ -740,16 +801,8 @@ impl Workspace {
         lock
     }
 
-    /// Switches tabs, starting an invoice when Create is entered for the first
-    /// time. Re-entering the tab never discards work already there.
+    /// Switches tabs.
     fn select_tab(&mut self, tab: Tab) {
-        if tab == Tab::Create && self.tab != Tab::Create && self.editor.is_none() && self.issued.is_none() {
-            let customer = self.customers.first().map(|customer| customer.id);
-            self.editor = Some(Editor::new(customer, self.default_document_language()));
-            self.suppressions.clear();
-            self.suppress_target = None;
-            self.suppression_reason.clear();
-        }
         self.tab = tab;
     }
 
@@ -758,7 +811,6 @@ impl Workspace {
         let language = self.language;
         let title = match self.tab {
             Tab::Search => text::tabs::search(language),
-            Tab::Create => text::tabs::create(language),
             Tab::Customers => text::tabs::customers(language),
             Tab::Settings => text::tabs::settings(language),
         };
@@ -803,17 +855,25 @@ impl Workspace {
 
     /// Draws the find screen. A blank query lists everything; changing any
     /// filter re-runs the query without a button.
-    fn search_ui(&mut self, ui: &mut egui::Ui, session: &Session, focus: Option<&str>) {
+    fn search_ui(&mut self, ui: &mut egui::Ui, session: &mut Session, focus: Option<&str>) {
         let language = self.language;
         let Some(owner) = self.seller.as_ref().map(|seller| seller.id) else {
             return;
         };
         let tokens = *theme::palette(ui.ctx());
+        let composing = self.editor.is_some() || self.issued.is_some();
+        let mut new_invoice = false;
 
         ui.horizontal(|ui| {
             // The trailing controls are laid out from the right edge so the
             // query field can take whatever space is left over.
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                new_invoice = ui
+                    .add_enabled(
+                        !composing,
+                        egui::Button::new(text::editor::new_invoice_action(language)),
+                    )
+                    .clicked();
                 if ui.button(text::find::clear_action(language)).clicked() {
                     self.search.query.clear();
                     self.search.direction = None;
@@ -833,6 +893,9 @@ impl Workspace {
                 }
             });
         });
+        if new_invoice {
+            self.start_invoice();
+        }
 
         let mut apply_saved = None;
         let mut save_current = false;
@@ -891,6 +954,36 @@ impl Workspace {
             ui.colored_label(tokens.error, error.as_str());
         }
 
+        if self.editor.is_some() || self.issued.is_some() {
+            let mut close = false;
+            let max_height = (ui.available_height() * 0.62).max(240.0);
+            egui::Frame::new()
+                .fill(tokens.surface_alt)
+                .stroke(egui::Stroke::new(1.0, tokens.border))
+                .corner_radius(8)
+                .inner_margin(egui::Margin::same(12))
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.strong(self.composer_heading(language));
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            close = ui
+                                .small_button("×")
+                                .on_hover_text(text::editor::close_composer(language))
+                                .clicked();
+                        });
+                    });
+                    egui::ScrollArea::vertical()
+                        .id_salt("composer")
+                        .max_height(max_height)
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| self.composer_ui(ui, session, focus));
+                });
+            if close {
+                self.reset_document();
+            }
+            ui.add_space(8.0);
+        }
+
         let width = (ui.available_width() - ui.spacing().scroll.bar_width).max(320.0);
         if self
             .search
@@ -901,7 +994,8 @@ impl Workspace {
         }
 
         let mut toggle = None;
-        let mut close = false;
+        let mut close_panel = false;
+        let mut save_artefact = None;
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             ui.set_width(width);
             if self.search.results.is_empty() {
@@ -915,8 +1009,13 @@ impl Workspace {
 
             for (index, hit) in self.search.results.iter().enumerate() {
                 let selected = self.search.opened.as_ref().is_some_and(|view| view.id == hit.id);
+                let number = if hit.status == DocumentStatus::Draft {
+                    text::find::draft_number(language)
+                } else {
+                    hit.number.as_str()
+                };
                 let cells = [
-                    Cell::left(hit.number.as_str()).strong(),
+                    Cell::left(number).strong(),
                     Cell::left(text::find::direction(language, hit.direction)).muted(),
                     Cell::left(hit.party.as_str()),
                     Cell::left(hit.issue_date.to_iso_string()),
@@ -933,20 +1032,20 @@ impl Workspace {
                 }
                 if selected {
                     ui.add_space(2.0);
-                    let closed = egui::Frame::new()
+                    let action = egui::Frame::new()
                         .fill(tokens.surface_alt)
                         .stroke(egui::Stroke::new(1.0, tokens.border))
                         .corner_radius(6)
                         .inner_margin(egui::Margin::same(12))
-                        .show(ui, |ui| {
-                            self.search
-                                .opened
-                                .as_ref()
-                                .is_some_and(|view| document_panel(ui, language, view))
+                        .show(ui, |ui| match &self.search.opened {
+                            Some(view) => document_panel(ui, language, view, &mut self.export_path),
+                            None => DocumentAction::None,
                         })
                         .inner;
-                    if closed {
-                        close = true;
+                    match action {
+                        DocumentAction::None => {}
+                        DocumentAction::Close => close_panel = true,
+                        DocumentAction::Save(kind) => save_artefact = Some(kind),
                     }
                     ui.add_space(4.0);
                 }
@@ -965,13 +1064,26 @@ impl Workspace {
         });
 
         if let Some(id) = toggle {
-            if self.search.opened.as_ref().is_some_and(|view| view.id == id) {
+            let draft = self
+                .search
+                .results
+                .iter()
+                .any(|hit| hit.id == id && hit.status == DocumentStatus::Draft);
+            if draft {
+                self.open_draft(session, id);
+            } else if self.search.opened.as_ref().is_some_and(|view| view.id == id) {
                 self.search.opened = None;
             } else {
                 self.search.open(session.database(), id);
+                if let Some(number) = self.search.opened.as_ref().map(|view| view.number.clone()) {
+                    self.export_path = default_pdf_path(session, &number);
+                }
             }
         }
-        if close {
+        if let Some(kind) = save_artefact {
+            self.save_artefact(session, kind);
+        }
+        if close_panel {
             self.search.opened = None;
         }
     }
@@ -1145,28 +1257,13 @@ impl Workspace {
         let Some(edit) = self.customer_edit.clone() else {
             return;
         };
-        let form = &edit.form;
-        let country = match CountryCode::parse(form.country.trim()) {
-            Ok(country) => country,
+        let party = match edit.form.to_party() {
+            Ok(party) => party,
             Err(error) => {
-                self.message = Some(Message::error(error.to_string()));
+                self.message = Some(Message::error(error));
                 return;
             }
         };
-        let mut party = Party::new(
-            form.name.trim().to_owned(),
-            Address {
-                street: nonempty(&form.street),
-                city: form.city.trim().to_owned(),
-                postal_code: nonempty(&form.postal),
-                country,
-            },
-        );
-        party.vat_id = nonempty(&form.vat).map(|value| value.to_ascii_uppercase());
-        party.kvk_number = nonempty(&form.kvk);
-        party.peppol_id = nonempty(&form.peppol);
-        party.contact_name = nonempty(&form.contact);
-        party.email = nonempty(&form.email);
 
         let record = CustomerRecord { id: edit.id, party };
         match store::update_customer(session.database().connection(), &record, &store::now_rfc3339()) {
@@ -1683,12 +1780,26 @@ impl Workspace {
         }
     }
 
-    fn unlocked_ui(&mut self, ui: &mut egui::Ui, session: &mut Session, focus: Option<&str>) {
+    /// The heading over the composer card.
+    fn composer_heading(&self, language: Language) -> &'static str {
+        if let Some(issued) = &self.issued {
+            text::editor::issued_heading(issued.number.contains("-C"))
+        } else if self.editor.as_ref().is_some_and(|editor| editor.saved) {
+            text::editor::draft_heading(language)
+        } else {
+            text::editor::new_invoice_action(language)
+        }
+    }
+
+    /// The invoice being written, or the one just issued.
+    ///
+    /// It lives in the Search tab rather than a tab of its own: writing an
+    /// invoice starts from the list of what is already there, and the list stays
+    /// on screen underneath while the composer is open.
+    fn composer_ui(&mut self, ui: &mut egui::Ui, session: &mut Session, focus: Option<&str>) {
         let language = self.language;
         let mut start_credit = false;
         if let Some(issued) = &self.issued {
-            let credit_note = issued.number.contains("-C");
-            ui.heading(text::editor::issued_heading(credit_note));
             theme::value(ui, text::editor::number_line(language, &issued.number));
             theme::value(
                 ui,
@@ -1727,38 +1838,150 @@ impl Workspace {
                 self.save_pdf();
             }
             if reset {
-                self.reset_document();
+                self.start_invoice();
             } else if start_credit {
                 self.start_credit_note(session);
             }
             return;
         }
 
-        if let Some(seller) = &self.seller {
-            ui.label(text::editor::seller_line(language, &seller.party.legal_name));
-        }
-
-        ui.horizontal(|ui| {
-            if ui.button(text::editor::new_invoice_action(language)).clicked() {
-                let customer = self.customers.first().map(|customer| customer.id);
-                self.editor = Some(Editor::new(customer, self.default_document_language()));
-                self.suppressions.clear();
-                self.suppress_target = None;
-                self.suppression_reason.clear();
-            }
-            if self.customers.is_empty() {
+        if self.customers.is_empty() {
+            ui.horizontal(|ui| {
                 ui.label(text::editor::no_customers(language));
                 if ui.button(text::editor::go_to_customers(language)).clicked() {
                     self.tab = Tab::Customers;
                 }
-            }
-        });
+            });
+            return;
+        }
 
-        if self.editor.is_some() {
-            self.editor_ui(ui, session, focus);
-        } else {
-            ui.add_space(8.0);
-            ui.label(text::editor::empty_editor(language));
+        if let Some(seller) = &self.seller {
+            ui.label(text::editor::seller_line(language, &seller.party.legal_name));
+        }
+        self.editor_ui(ui, session, focus);
+        self.preview_ui(ui);
+    }
+
+    /// Shows the rendered preview, if one has been asked for.
+    fn preview_ui(&mut self, ui: &mut egui::Ui) {
+        let language = self.language;
+        let Some(preview) = &self.preview else {
+            return;
+        };
+        ui.add_space(10.0);
+        let close = ui.horizontal(|ui| {
+            ui.strong(text::editor::preview_heading(language));
+            ui.small_button("×")
+                .on_hover_text(text::editor::close_preview(language))
+                .clicked()
+        });
+        let width = ui.available_width().min(760.0);
+        let scale = (width / preview.size.x).min(1.0);
+        ui.add(egui::Image::new(egui::load::SizedTexture::new(
+            preview.texture.id(),
+            preview.size * scale,
+        )));
+        if close.inner {
+            self.preview = None;
+        }
+    }
+
+    /// Renders what the composer currently holds and keeps it as a texture.
+    ///
+    /// This is the same template that issuing compiles, so the preview cannot
+    /// disagree with the PDF that gets filed.
+    fn render_preview(&mut self, ctx: &egui::Context) {
+        let language = self.language;
+        let Some(seller) = self.seller.clone() else {
+            return;
+        };
+        let Some(editor) = self.editor.clone() else {
+            return;
+        };
+        let Some(customer) = self
+            .customers
+            .iter()
+            .find(|customer| Some(customer.id) == editor.customer)
+            .cloned()
+        else {
+            self.message = Some(Message::error(text::editor::select_customer_required(language)));
+            return;
+        };
+        let draft = match build_draft(&editor, &seller) {
+            Ok(draft) => draft,
+            Err(error) => {
+                self.message = Some(Message::error(error));
+                return;
+            }
+        };
+        let totals = match calculate_totals(&draft.lines) {
+            Ok(totals) => totals,
+            Err(error) => {
+                self.message = Some(Message::error(error.to_string()));
+                return;
+            }
+        };
+
+        let data = crate::pdf_data(
+            text::editor::preview_number(language),
+            &draft,
+            &seller,
+            &customer,
+            &totals,
+            editor.document_language,
+        );
+        let bytes = match render::TypstCliRenderer::from_environment().render_png(&data, 110.0) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                self.message = Some(Message::error(text::editor::preview_failed(
+                    language,
+                    &error.to_string(),
+                )));
+                return;
+            }
+        };
+        match image::load_from_memory(&bytes) {
+            Ok(decoded) => {
+                let rgba = decoded.to_rgba8();
+                let size = [rgba.width() as usize, rgba.height() as usize];
+                let pixels = egui::ColorImage::from_rgba_unmultiplied(size, rgba.as_raw());
+                let texture = ctx.load_texture("invoice-preview", pixels, egui::TextureOptions::LINEAR);
+                self.preview = Some(Preview {
+                    texture,
+                    size: egui::vec2(size[0] as f32, size[1] as f32),
+                });
+            }
+            Err(error) => self.message = Some(Message::error(error.to_string())),
+        }
+    }
+
+    /// Opens an empty invoice in the composer.
+    fn start_invoice(&mut self) {
+        self.reset_document();
+        let customer = self.customers.first().map(|customer| customer.id);
+        self.editor = Some(Editor::new(customer, self.default_document_language()));
+        self.search.opened = None;
+        self.search.open_error = None;
+    }
+
+    /// Reopens a stored draft in the composer, so unfinished work is editable
+    /// from the list rather than being a dead row.
+    fn open_draft(&mut self, session: &Session, id: DocumentId) {
+        let language = self.default_document_language();
+        match store::load_draft(session.database().connection(), id) {
+            Ok(Some(draft)) => {
+                self.reset_document();
+                self.editor = Some(Editor::from_draft(&draft, language));
+                self.search.opened = None;
+                self.search.open_error = None;
+                if let Ok(suppressions) = list_suppressions(session.database().connection(), id) {
+                    self.suppressions = suppressions;
+                }
+            }
+            Ok(None) => {
+                self.message = Some(Message::error(text::editor::draft_missing(self.language)));
+            }
+            Err(error) => self.message = Some(Message::error(error.to_string())),
         }
     }
 
@@ -1771,6 +1994,7 @@ impl Workspace {
         let customers = self.customers.clone();
         let save;
         let issue;
+        let preview;
         let mut remove_line = None;
 
         {
@@ -1939,8 +2163,21 @@ impl Workspace {
             }
 
             ui.add_space(8.0);
-            save = ui.button(text::editor::save_draft_action(language)).clicked();
-            issue = ui.button(text::editor::issue_action(language)).clicked();
+            let mut clicked_save = false;
+            let mut clicked_issue = false;
+            let mut clicked_preview = false;
+            ui.horizontal(|ui| {
+                clicked_save = ui.button(text::editor::save_draft_action(language)).clicked();
+                clicked_issue = ui.button(text::editor::issue_action(language)).clicked();
+                clicked_preview = ui.button(text::editor::preview_action(language)).clicked();
+            });
+            save = clicked_save;
+            issue = clicked_issue;
+            preview = clicked_preview;
+        }
+
+        if preview {
+            self.render_preview(ui.ctx());
         }
 
         let mut finding_action = None;
@@ -2011,6 +2248,7 @@ impl Workspace {
         self.editor = None;
         self.pdf = None;
         self.pdf_path.clear();
+        self.preview = None;
         self.conformance_findings.clear();
         self.suppressions.clear();
         self.suppress_target = None;
@@ -2094,28 +2332,13 @@ impl Workspace {
     }
 
     fn create_customer(&mut self, session: &Session) {
-        let form = &self.customer_form;
-        let country = match CountryCode::parse(form.country.trim()) {
-            Ok(country) => country,
+        let party = match self.customer_form.to_party() {
+            Ok(party) => party,
             Err(error) => {
-                self.message = Some(Message::error(error.to_string()));
+                self.message = Some(Message::error(error));
                 return;
             }
         };
-        let mut party = Party::new(
-            form.name.trim().to_owned(),
-            Address {
-                street: nonempty(&form.street),
-                city: form.city.trim().to_owned(),
-                postal_code: nonempty(&form.postal),
-                country,
-            },
-        );
-        party.vat_id = nonempty(&form.vat).map(|value| value.to_ascii_uppercase());
-        party.kvk_number = nonempty(&form.kvk);
-        party.peppol_id = nonempty(&form.peppol);
-        party.contact_name = nonempty(&form.contact);
-        party.email = nonempty(&form.email);
 
         let record = CustomerRecord {
             id: CustomerId::new(),
@@ -2155,8 +2378,20 @@ impl Workspace {
         match save_draft(session.database().connection(), &draft, &store::now_rfc3339()) {
             Ok(()) => {
                 self.message = Some(Message::ok(text::editor::draft_saved(self.language)));
+                self.refresh_search(session);
             }
             Err(error) => self.message = Some(Message::error(error.to_string())),
+        }
+    }
+
+    /// Re-runs the visible query after the archive changed underneath it, so a
+    /// saved or issued document appears in the list it was written from.
+    fn refresh_search(&mut self, session: &Session) {
+        let Some(owner) = self.seller.as_ref().map(|seller| seller.id) else {
+            return;
+        };
+        if self.search.last_request.is_some() {
+            let _ = self.search.run(session.database(), owner);
         }
     }
 
@@ -2247,6 +2482,7 @@ impl Workspace {
                 self.issued = Some(issued);
                 self.editor = None;
                 self.conformance_findings.clear();
+                self.refresh_search(session);
                 if let Some(error) = attach_error {
                     self.message = Some(Message::error(text::editor::issued_with_unattached_pdf(
                         self.language,
@@ -2287,11 +2523,63 @@ impl Workspace {
             }
         }
     }
+
+    /// Writes a stored document's artefact where the export field points.
+    ///
+    /// The bytes are the ones filed with the document, hash-checked by the
+    /// store, so this is a copy and not a re-render.
+    fn save_artefact(&mut self, session: &Session, kind: &str) {
+        let Some(view) = &self.search.opened else {
+            return;
+        };
+        let id = view.id;
+        if self.export_path.trim().is_empty() {
+            self.message = Some(Message::error(text::find::choose_export_path(self.language)));
+            return;
+        }
+        match store::artefact_bytes(session.database().connection(), id, kind) {
+            Ok(bytes) => {
+                let path = sibling_path(&self.export_path, artefact_extension(kind));
+                match std::fs::write(&path, &bytes) {
+                    Ok(()) => {
+                        self.message = Some(Message::ok(text::find::export_saved(
+                            self.language,
+                            &path.display().to_string(),
+                        )))
+                    }
+                    Err(error) => {
+                        self.message = Some(Message::error(text::find::export_failed(
+                            self.language,
+                            &error.to_string(),
+                        )))
+                    }
+                }
+            }
+            Err(error) => self.message = Some(Message::error(error.to_string())),
+        }
+    }
 }
 
 fn default_pdf_path(session: &Session, number: &str) -> String {
     let directory = session.database_path().parent().unwrap_or(std::path::Path::new("."));
     directory.join(format!("{number}.pdf")).display().to_string()
+}
+
+/// The file extension an artefact kind is written with.
+fn artefact_extension(kind: &str) -> &'static str {
+    match kind {
+        "ubl" => "xml",
+        _ => "pdf",
+    }
+}
+
+/// Replaces the extension of the export path, so one stem names both formats.
+fn sibling_path(base: &str, extension: &str) -> PathBuf {
+    let path = Path::new(base.trim());
+    if path.as_os_str().is_empty() {
+        return PathBuf::from(format!("export.{extension}"));
+    }
+    path.with_extension(extension)
 }
 
 /// Where the window keeps its backups.
@@ -2304,7 +2592,7 @@ fn backup_directory(session: &Session) -> PathBuf {
 }
 
 /// The fields the customer forms edit, in the order they are shown.
-const CUSTOMER_FIELDS: [Field; 10] = [
+const CUSTOMER_FIELDS: [Field; 11] = [
     Field::Name,
     Field::Street,
     Field::PostCode,
@@ -2315,6 +2603,7 @@ const CUSTOMER_FIELDS: [Field; 10] = [
     Field::Peppol,
     Field::Contact,
     Field::Email,
+    Field::Phone,
 ];
 
 fn customer_key(field: Field) -> &'static str {
@@ -2329,6 +2618,7 @@ fn customer_key(field: Field) -> &'static str {
         Field::Peppol => "peppol",
         Field::Contact => "contact",
         Field::Email => "email",
+        Field::Phone => "phone",
     }
 }
 
@@ -2452,6 +2742,9 @@ fn build_draft(editor: &Editor, seller: &SellerRecord) -> Result<InvoiceDraft, S
     };
 
     let mut draft = InvoiceDraft::new(seller.id, customer_id, seller.default_currency, issue_date);
+    // The composer may have reopened a stored draft; keeping its id is what
+    // makes Save an update rather than a second copy.
+    draft.id = editor.id;
     draft.doc_type = editor.doc_type;
     draft.preceding_invoice = editor.preceding.clone();
     if !editor.doc_type.is_credit_note() {
@@ -2700,6 +2993,7 @@ fn status_combo(ui: &mut egui::Ui, language: Language, value: &mut Option<Docume
         .show_ui(ui, |ui| {
             ui.selectable_value(value, None, text::find::any_status(language));
             for status in [
+                DocumentStatus::Draft,
                 DocumentStatus::Issued,
                 DocumentStatus::Received,
                 DocumentStatus::Approved,
@@ -2711,9 +3005,24 @@ fn status_combo(ui: &mut egui::Ui, language: Language, value: &mut Option<Docume
         });
 }
 
-/// Draws a stored document read-only. Returns true when the user closes it.
-fn document_panel(ui: &mut egui::Ui, language: Language, view: &DocumentView) -> bool {
-    let mut close = false;
+/// What the document panel asks the caller to do.
+enum DocumentAction {
+    /// Still open.
+    None,
+    /// Fold the panel away.
+    Close,
+    /// Write the artefact of this kind to the chosen path.
+    Save(&'static str),
+}
+
+/// Draws a stored document read-only.
+fn document_panel(
+    ui: &mut egui::Ui,
+    language: Language,
+    view: &DocumentView,
+    export_path: &mut String,
+) -> DocumentAction {
+    let mut action = DocumentAction::None;
     ui.horizontal(|ui| {
         ui.heading(text::find::document_title(
             language,
@@ -2721,7 +3030,7 @@ fn document_panel(ui: &mut egui::Ui, language: Language, view: &DocumentView) ->
             view.doc_type.is_credit_note(),
         ));
         if ui.button(text::find::close_action(language)).clicked() {
-            close = true;
+            action = DocumentAction::Close;
         }
     });
     ui.weak(text::find::stored_note(language));
@@ -2810,9 +3119,28 @@ fn document_panel(ui: &mut egui::Ui, language: Language, view: &DocumentView) ->
                 text::find::artefact_line(language, &artefact.kind, artefact.size_bytes, &artefact.bytes_hash),
             );
         }
+
+        // Exporting re-reads the stored bytes rather than re-rendering, so what
+        // leaves the archive is what was filed. The path is one stem for both
+        // formats: the extension decides which file is written.
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            ui.label(text::find::save_to(language));
+            ui.add(egui::TextEdit::singleline(export_path).desired_width(360.0));
+            if view.artefacts.iter().any(|artefact| artefact.kind == "pdf")
+                && ui.button(text::find::save_pdf_action(language)).clicked()
+            {
+                action = DocumentAction::Save("pdf");
+            }
+            if view.artefacts.iter().any(|artefact| artefact.kind == "ubl")
+                && ui.button(text::find::save_ubl_action(language)).clicked()
+            {
+                action = DocumentAction::Save("ubl");
+            }
+        });
     }
 
-    close
+    action
 }
 
 fn fact(ui: &mut egui::Ui, language: Language, fact: Fact, value: &str) {
@@ -3187,7 +3515,7 @@ mod tests {
         insert_customer(session.database().connection(), &customer, NOW).unwrap();
         let mut workspace = Workspace::new(&session).unwrap();
 
-        for tab in [Tab::Search, Tab::Create, Tab::Customers, Tab::Settings] {
+        for tab in [Tab::Search, Tab::Customers, Tab::Settings] {
             workspace.tab = tab;
             let context = egui::Context::default();
             let mut appearance = egui::ThemePreference::System;
@@ -3446,5 +3774,125 @@ mod tests {
         assert_eq!(edit.form.name, "Klant BV");
         assert_eq!(edit.form.city, "Leiden");
         assert_eq!(edit.form.country, "NL");
+    }
+
+    #[test]
+    fn a_customer_form_normalises_the_phone_against_its_country() {
+        let mut form = CustomerForm {
+            name: "Klant BV".to_owned(),
+            city: "Delft".to_owned(),
+            phone: "06 12 34 56 78".to_owned(),
+            ..CustomerForm::default()
+        };
+        assert_eq!(form.to_party().unwrap().phone.as_deref(), Some("+31612345678"));
+
+        form.phone = "not a number".to_owned();
+        assert!(form.to_party().is_err(), "garbage must not be stored as a phone");
+
+        form.phone.clear();
+        assert_eq!(form.to_party().unwrap().phone, None);
+    }
+
+    #[test]
+    fn a_stored_draft_reopens_in_the_composer() {
+        let (dir, database, _seller_id) = seeded_archive();
+        let seller = first_seller(database.connection()).unwrap().unwrap();
+        let customer = list_customers(database.connection()).unwrap()[0].clone();
+
+        let mut form = editor();
+        form.customer = Some(customer.id);
+        form.note = "Concept".to_owned();
+        form.due_date = "2026-11-30".to_owned();
+        let draft = build_draft(&form, &seller).unwrap();
+        insert_draft(database.connection(), &draft, NOW).unwrap();
+
+        let reopened = Editor::from_draft(&draft, render::Language::Dutch);
+        assert!(reopened.saved, "a reopened draft says so in the heading");
+        assert_eq!(reopened.id, draft.id);
+        assert_eq!(reopened.customer, Some(customer.id));
+        assert_eq!(reopened.due_date, "2026-11-30");
+        assert_eq!(reopened.note, "Concept");
+        assert_eq!(reopened.document_language, render::Language::Dutch);
+        assert_eq!(reopened.lines.len(), 1);
+        assert_eq!(reopened.lines[0].name, "Consulting");
+        assert_eq!(reopened.lines[0].unit_price, "50");
+
+        // The round trip is lossless: rebuilding a draft from the editor gives
+        // the same facts back.
+        let rebuilt = build_draft(&reopened, &seller).unwrap();
+        assert_eq!(rebuilt.id, draft.id);
+        assert_eq!(rebuilt.note, draft.note);
+        assert_eq!(rebuilt.due_date, draft.due_date);
+        drop(dir);
+    }
+
+    #[test]
+    fn the_composer_draws_over_the_list() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let mut session = Session::create(
+            dir.path().join("bonk.db"),
+            dir.path().join("keystore.bin"),
+            "passphrase",
+        )
+        .unwrap();
+        insert_seller(session.database().connection(), &seller(), NOW).unwrap();
+        let customer = CustomerRecord {
+            id: CustomerId::new(),
+            party: Party::new("Acme BV", Address::new("Rotterdam", CountryCode::NL)),
+        };
+        insert_customer(session.database().connection(), &customer, NOW).unwrap();
+        let mut workspace = Workspace::new(&session).unwrap();
+
+        workspace.start_invoice();
+        assert!(workspace.editor.is_some(), "the button starts an invoice");
+
+        let context = egui::Context::default();
+        let mut appearance = egui::ThemePreference::System;
+        let output = context.run_ui(egui::RawInput::default(), |ui| {
+            let _ = workspace.ui(ui, &mut session, &mut appearance);
+        });
+        output.drop_without_applying_deltas();
+    }
+
+    #[test]
+    fn a_draft_row_reopens_it_in_the_composer() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let session = Session::create(
+            dir.path().join("bonk.db"),
+            dir.path().join("keystore.bin"),
+            "passphrase",
+        )
+        .unwrap();
+        let seller = seller();
+        insert_seller(session.database().connection(), &seller, NOW).unwrap();
+        let customer = CustomerRecord {
+            id: CustomerId::new(),
+            party: Party::new("Acme BV", Address::new("Rotterdam", CountryCode::NL)),
+        };
+        insert_customer(session.database().connection(), &customer, NOW).unwrap();
+
+        let mut form = editor();
+        form.customer = Some(customer.id);
+        let draft = build_draft(&form, &seller).unwrap();
+        insert_draft(session.database().connection(), &draft, NOW).unwrap();
+
+        let mut workspace = Workspace::new(&session).unwrap();
+        workspace.open_draft(&session, draft.id);
+        let reopened = workspace.editor.as_ref().expect("the draft reopened");
+        assert_eq!(reopened.id, draft.id);
+        assert_eq!(reopened.customer, Some(customer.id));
+        assert!(workspace.message.is_none());
+    }
+
+    #[test]
+    fn an_export_path_names_both_formats() {
+        assert_eq!(
+            sibling_path("/tmp/2026-0001.pdf", "xml"),
+            Path::new("/tmp/2026-0001.xml")
+        );
+        assert_eq!(sibling_path("/tmp/out", "pdf"), Path::new("/tmp/out.pdf"));
+        assert_eq!(sibling_path("  ", "pdf"), Path::new("export.pdf"));
+        assert_eq!(artefact_extension("ubl"), "xml");
+        assert_eq!(artefact_extension("pdf"), "pdf");
     }
 }
