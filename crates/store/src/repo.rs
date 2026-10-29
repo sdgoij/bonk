@@ -238,6 +238,42 @@ pub fn load_customer(conn: &Connection, id: CustomerId) -> Result<CustomerRecord
     })
 }
 
+/// Updates a customer's party data.
+///
+/// Documents keep the snapshot taken when they were issued or imported, so an
+/// edit here changes the party on file, not what an existing invoice says.
+pub fn update_customer(conn: &Connection, customer: &CustomerRecord, now: &str) -> Result<(), StoreError> {
+    let address = dto::address_to_json(&customer.party.address)?;
+    let contact = dto::contact_to_json(&customer.party)?;
+    let display_name = customer
+        .party
+        .trading_name
+        .clone()
+        .unwrap_or_else(|| customer.party.legal_name.clone());
+    let updated = conn.execute(
+        "UPDATE customer
+             SET display_name = ?2, legal_name = ?3, vat_id = ?4, kvk_number = ?5,
+                 peppol_id = ?6, address_json = ?7, contact_json = ?8,
+                 updated_at = ?9, revision = revision + 1
+         WHERE id = ?1",
+        params![
+            customer.id.to_string(),
+            display_name,
+            customer.party.legal_name,
+            customer.party.vat_id,
+            customer.party.kvk_number,
+            customer.party.peppol_id,
+            address,
+            contact,
+            now,
+        ],
+    )?;
+    if updated == 0 {
+        return Err(StoreError::NotFound(format!("customer {}", customer.id)));
+    }
+    Ok(())
+}
+
 /// Inserts a draft and its lines atomically.
 pub fn insert_draft(conn: &Connection, draft: &InvoiceDraft, now: &str) -> Result<(), StoreError> {
     save_draft(conn, draft, now)
@@ -1873,9 +1909,29 @@ pub(crate) fn parse_doc_type(raw: &str) -> Result<DocType, StoreError> {
     }
 }
 
-/// Current UTC time in RFC 3339 form.
+/// Current UTC time in RFC 3339 form, with microsecond precision.
 pub fn now_rfc3339() -> String {
-    time::OffsetDateTime::now_utc()
-        .format(&time::format_description::well_known::Rfc3339)
-        .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_owned())
+    let now = time::OffsetDateTime::now_utc();
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:06}Z",
+        now.year(),
+        u8::from(now.month()),
+        now.day(),
+        now.hour(),
+        now.minute(),
+        now.second(),
+        now.microsecond()
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn timestamps_carry_microseconds() {
+        let stamp = super::now_rfc3339();
+        assert_eq!(stamp.len(), 27, "{stamp}");
+        let (_, fraction) = stamp.split_once('.').expect("a fraction");
+        assert_eq!(fraction.len(), 7, "six digits and Z in {stamp}");
+        assert!(stamp.ends_with('Z'));
+    }
 }

@@ -458,6 +458,18 @@ pub mod customers {
         "New customer"
     }
 
+    /// Heading of the inline detail editor.
+    pub fn edit_heading(_: Language) -> &'static str {
+        "Edit customer"
+    }
+
+    /// A saved edit.
+    pub fn updated(language: Language, name: &str) -> String {
+        match language {
+            Language::English => format!("Saved {name}."),
+        }
+    }
+
     /// Closes the new-customer form.
     pub fn cancel_action(_: Language) -> &'static str {
         "Cancel"
@@ -648,6 +660,10 @@ pub mod editor {
         Kvk,
         /// Peppol participant identifier.
         Peppol,
+        /// Contact person.
+        Contact,
+        /// Contact email.
+        Email,
     }
 
     /// The word for a party field.
@@ -662,6 +678,8 @@ pub mod editor {
             Field::VatId => "VAT ID",
             Field::Kvk => "KvK number",
             Field::Peppol => "Peppol ID",
+            Field::Contact => "Contact",
+            Field::Email => "Email",
         }
     }
 
@@ -703,6 +721,39 @@ pub mod editor {
     /// The editor needs a party to bill.
     pub fn no_customers(_: Language) -> &'static str {
         "Add a customer before starting an invoice."
+    }
+
+    /// Tooltip on the calendar button.
+    pub fn choose_date(_: Language) -> &'static str {
+        "Choose a date"
+    }
+
+    /// Tooltip on the button that empties an optional date.
+    pub fn clear_date(_: Language) -> &'static str {
+        "Clear the date"
+    }
+
+    /// Weekday headings in the calendar, Monday first.
+    pub fn weekdays(_: Language) -> [&'static str; 7] {
+        ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"]
+    }
+
+    /// A month's name, for the calendar heading.
+    pub fn month_name(_: Language, month: time::Month) -> &'static str {
+        match month {
+            time::Month::January => "January",
+            time::Month::February => "February",
+            time::Month::March => "March",
+            time::Month::April => "April",
+            time::Month::May => "May",
+            time::Month::June => "June",
+            time::Month::July => "July",
+            time::Month::August => "August",
+            time::Month::September => "September",
+            time::Month::October => "October",
+            time::Month::November => "November",
+            time::Month::December => "December",
+        }
     }
 
     /// Switches to the customer tab.

@@ -47,7 +47,7 @@ pub use repo::{
     find_issued_reference, first_seller, insert_customer, insert_draft, insert_seller, issue_draft, list_customers,
     list_received, list_suppressions, load_customer, load_draft, load_seller, now_rfc3339, record_received,
     resolve_customer, resolve_document, resolve_received, save_draft, save_suppression, search, set_supplier_match,
-    verify_artefacts,
+    update_customer, verify_artefacts,
 };
 pub use saved::SavedSearch;
 pub use support::SupportSummary;

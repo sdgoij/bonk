@@ -13,9 +13,9 @@ use egui::{Align, Color32, CursorIcon, Rect, Response, Sense, Stroke, Ui, pos2, 
 
 use crate::theme;
 
-const HEADER_HEIGHT: f32 = 30.0;
-const ROW_HEIGHT: f32 = 30.0;
-const CELL_PADDING: f32 = 8.0;
+const HEADER_HEIGHT: f32 = 32.0;
+const ROW_HEIGHT: f32 = 32.0;
+const CELL_PADDING: f32 = 10.0;
 const MIN_COLUMN: f32 = 54.0;
 
 /// One cell of a row.
@@ -98,6 +98,9 @@ impl Table {
             // there resizes instead of sorting.
             let hit = Rect::from_min_max(pos2(x, rect.top()), pos2(x + cell_width - 4.0, rect.bottom()));
             let response = ui.interact(hit, ui.scope_id().with((id, "head", index)), Sense::click());
+            if response.hovered() {
+                ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+            }
             if response.clicked() {
                 self.sort = Some(match self.sort {
                     Some((column, descending)) if column == index => (index, !descending),
@@ -143,6 +146,9 @@ impl Table {
     /// Draws one row and returns its click response.
     pub fn row(&self, ui: &mut Ui, width: f32, cells: &[Cell], selected: bool, striped: bool) -> Response {
         let (rect, response) = ui.allocate_exact_size(vec2(width, ROW_HEIGHT), Sense::click());
+        if response.hovered() {
+            ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+        }
         let tokens = theme::palette(ui.ctx());
         let fill = if selected {
             tokens.selection

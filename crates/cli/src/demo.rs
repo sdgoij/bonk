@@ -1047,7 +1047,7 @@ fn year_of(date: LocalDate) -> String {
 
 /// An RFC 3339 timestamp on a business date, for a backdated audit event.
 fn at(date: LocalDate, hour: u8, minute: u8) -> String {
-    format!("{}T{hour:02}:{minute:02}:00Z", date.to_iso_string())
+    format!("{}T{hour:02}:{minute:02}:00.000000Z", date.to_iso_string())
 }
 
 fn earliest(left: LocalDate, right: LocalDate) -> LocalDate {

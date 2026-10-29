@@ -565,6 +565,8 @@ call site. The shared table in `app::table` stores column shares rather than
 pixels, so a window resize redistributes columns and a drag on a header edge
 moves width between its neighbours.
 
+**The window got a polish pass (2026-10-29).** Values are selectable where labels are not: `theme::value` and `theme::value_mono` wrap document facts, line cells, totals, status history, artefact hashes, the archive path, and the chain head, so a number or a hash can be copied while chrome stays inert. The search row lays its filters and Clear out from the right edge and gives the query field the remaining width, which is what keeps Clear inside the window at the 900 px minimum. The Customers tab opens a customer on click and edits every field in place, saving through `store::update_customer`; documents keep their issued snapshot, so the edit changes the party on file and not what an old invoice says. Dates carry a calendar button that opens a six-week month grid (Monday first, `‹`/`›` move a month) while the field stays typable, so a date can still be pasted. A note is a three-row box and a line name takes the leftover width rather than a fixed 160 px. Audit timestamps now record microseconds, which is what makes two events in the same second distinguishable. Spacing moved out of the widgets into `theme::style`, and the light palette was darkened until it clears the contrast test rather than merely looking different from dark.
+
 Remaining in M5: the validation messages from `build_draft` and the domain errors
 from `crux` that they quote. Those are not widget strings: translating them means
 giving `DomainError` stable codes the interface can render, the same trick as the

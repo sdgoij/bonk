@@ -11,7 +11,7 @@ use std::collections::HashSet;
 use crux::{Address, CountryCode, CustomerId, Party};
 use store::{CustomerRecord, StoreError, insert_customer, list_customers};
 
-const HEADER: &str = "name,street,postal,city,country,vat,peppol,contact,email";
+const HEADER: &str = "name,street,postal,city,country,vat,kvk,peppol,contact,email";
 
 /// One row read from a customer file.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -30,6 +30,8 @@ pub struct Row {
     pub country: String,
     /// VAT identifier.
     pub vat: String,
+    /// Dutch chamber of commerce number.
+    pub kvk: String,
     /// Peppol endpoint, `EAS:value`.
     pub peppol: String,
     /// Contact person.
@@ -63,6 +65,7 @@ pub fn export(customers: &[CustomerRecord]) -> String {
             party.address.city.as_str(),
             party.address.country.as_str(),
             party.vat_id.as_deref().unwrap_or(""),
+            party.kvk_number.as_deref().unwrap_or(""),
             party.peppol_id.as_deref().unwrap_or(""),
             party.contact_name.as_deref().unwrap_or(""),
             party.email.as_deref().unwrap_or(""),
@@ -90,6 +93,7 @@ pub fn parse(text: &str) -> Result<Vec<Row>, String> {
     let city = column(&["city", "town"]);
     let country = column(&["country", "country_code"]);
     let vat = column(&["vat", "vat_id", "vat number"]);
+    let kvk = column(&["kvk", "kvk_number", "coc", "chamber of commerce"]);
     let peppol = column(&["peppol", "peppol_id", "endpoint"]);
     let contact = column(&["contact", "contact_name"]);
     let email = column(&["email", "e-mail"]);
@@ -120,6 +124,7 @@ pub fn parse(text: &str) -> Result<Vec<Row>, String> {
                 }
             },
             vat: get(vat).to_ascii_uppercase(),
+            kvk: get(kvk),
             peppol: get(peppol),
             contact: get(contact),
             email: get(email),
@@ -173,6 +178,7 @@ pub fn import(database: &store::Database, rows: &[Row], now: &str) -> Result<Rep
             },
         );
         party.vat_id = nonempty(&row.vat).map(|value| value.to_ascii_uppercase());
+        party.kvk_number = nonempty(&row.kvk);
         party.peppol_id = nonempty(&row.peppol);
         party.contact_name = nonempty(&row.contact);
         party.email = nonempty(&row.email);
@@ -314,6 +320,7 @@ mod tests {
         party.address.street = Some("Main 1".to_owned());
         party.address.postal_code = Some("1000 AA".to_owned());
         party.vat_id = vat.map(str::to_owned);
+        party.kvk_number = Some("12345678".to_owned());
         party.peppol_id = Some("0106:12345678".to_owned());
         party.contact_name = Some("Sam".to_owned());
         party.email = Some("sam@example.test".to_owned());
@@ -341,6 +348,7 @@ mod tests {
         assert_eq!(rows[0].name, awkward.party.legal_name);
         assert_eq!(rows[0].city, "Bergen op Zoom");
         assert_eq!(rows[0].vat, "NL123456782B01");
+        assert_eq!(rows[0].kvk, "12345678");
         assert_eq!(rows[0].peppol, "0106:12345678");
         assert_eq!(rows[0].email, "sam@example.test");
         assert_eq!(rows[1].name, "Plain BV");
@@ -354,7 +362,7 @@ mod tests {
         insert_customer(database.connection(), &existing, NOW).unwrap();
 
         let text = format!(
-            "{HEADER}\n\"Acme BV\",Main 1,1000 AA,Rotterdam,NL,NL123456782B01,,,\nNew BV,Main 2,2000 BB,Utrecht,NL,NL123456788B01,,Sam,sam@new.test\nBad BV,Main 3,3000 CC,Nowhere,Netherlands,,,,\n"
+            "{HEADER}\n\"Acme BV\",Main 1,1000 AA,Rotterdam,NL,NL123456782B01,12345678,,\nNew BV,Main 2,2000 BB,Utrecht,NL,NL123456788B01,,,Sam,sam@new.test\nBad BV,Main 3,3000 CC,Nowhere,Netherlands,,,,,\n"
         );
         let rows = parse(&text).unwrap();
         assert_eq!(rows.len(), 3);

@@ -71,6 +71,7 @@ pub struct Workspace {
     customer_form: CustomerForm,
     show_customer_form: bool,
     customers_view: CustomersView,
+    customer_edit: Option<CustomerEdit>,
     tab: Tab,
     editor: Option<Editor>,
     issued: Option<DocumentRecord>,
@@ -145,6 +146,35 @@ struct CustomersView {
     table: Table,
     /// Where import reads and export writes.
     path: String,
+    /// The customer whose detail editor is open, if any.
+    opened: Option<CustomerId>,
+}
+
+/// A working copy of one customer, so Cancel leaves the archive alone.
+#[derive(Clone)]
+struct CustomerEdit {
+    id: CustomerId,
+    form: CustomerForm,
+}
+
+impl CustomerEdit {
+    fn from_record(customer: &CustomerRecord) -> Self {
+        Self {
+            id: customer.id,
+            form: CustomerForm {
+                name: customer.party.legal_name.clone(),
+                street: customer.party.address.street.clone().unwrap_or_default(),
+                postal: customer.party.address.postal_code.clone().unwrap_or_default(),
+                city: customer.party.address.city.clone(),
+                country: customer.party.address.country.as_str().to_owned(),
+                vat: customer.party.vat_id.clone().unwrap_or_default(),
+                kvk: customer.party.kvk_number.clone().unwrap_or_default(),
+                peppol: customer.party.peppol_id.clone().unwrap_or_default(),
+                contact: customer.party.contact_name.clone().unwrap_or_default(),
+                email: customer.party.email.clone().unwrap_or_default(),
+            },
+        }
+    }
 }
 
 impl SearchView {
@@ -357,15 +387,81 @@ impl Default for SellerForm {
     }
 }
 
-#[derive(Default)]
+/// A working copy of one customer form, used both to create and to edit.
+#[derive(Clone)]
 struct CustomerForm {
     name: String,
-    city: String,
     street: String,
     postal: String,
+    city: String,
     country: String,
     vat: String,
+    kvk: String,
     peppol: String,
+    contact: String,
+    email: String,
+}
+
+impl CustomerForm {
+    fn field_mut(&mut self, field: Field) -> &mut String {
+        match field {
+            Field::Name => &mut self.name,
+            Field::Street => &mut self.street,
+            Field::PostCode => &mut self.postal,
+            Field::City => &mut self.city,
+            Field::Country => &mut self.country,
+            Field::VatId => &mut self.vat,
+            Field::Kvk => &mut self.kvk,
+            Field::Peppol => &mut self.peppol,
+            Field::Contact => &mut self.contact,
+            Field::Email => &mut self.email,
+            Field::LegalName => &mut self.name,
+        }
+    }
+}
+
+impl Default for CustomerForm {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            city: String::new(),
+            street: String::new(),
+            postal: String::new(),
+            country: "NL".to_owned(),
+            vat: String::new(),
+            kvk: String::new(),
+            peppol: String::new(),
+            contact: String::new(),
+            email: String::new(),
+        }
+    }
+}
+
+/// Which editor field a calendar popup is filling.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum DateField {
+    Issue,
+    Due,
+    Delivery,
+}
+
+impl DateField {
+    /// The widget id used for focus and for the popup's text field.
+    fn id(self) -> &'static str {
+        match self {
+            Self::Issue => "issue_date",
+            Self::Due => "due_date",
+            Self::Delivery => "delivery_date",
+        }
+    }
+}
+
+/// An open calendar. The month is the one on screen, not the selected date.
+#[derive(Clone, Copy, Debug)]
+struct DatePopup {
+    field: DateField,
+    month: time::Date,
+    pos: egui::Pos2,
 }
 
 struct Editor {
@@ -382,6 +478,7 @@ struct Editor {
     /// The language the printed document speaks, chosen per document.
     document_language: render::Language,
     lines: Vec<LineForm>,
+    date_popup: Option<DatePopup>,
 }
 
 impl Clone for Editor {
@@ -399,6 +496,7 @@ impl Clone for Editor {
             order_reference: self.order_reference.clone(),
             document_language: self.document_language,
             lines: self.lines.clone(),
+            date_popup: self.date_popup,
         }
     }
 }
@@ -418,6 +516,7 @@ impl Editor {
             order_reference: String::new(),
             document_language,
             lines: vec![LineForm::default()],
+            date_popup: None,
         }
     }
 
@@ -501,7 +600,9 @@ impl Workspace {
                 filter: String::new(),
                 table: Table::new(&[2.6, 1.4, 0.8, 1.6, 1.6]),
                 path: csv_path,
+                opened: None,
             },
+            customer_edit: None,
             tab: Tab::Search,
             editor: None,
             issued: None,
@@ -710,23 +811,27 @@ impl Workspace {
         let tokens = *theme::palette(ui.ctx());
 
         ui.horizontal(|ui| {
-            let width = (ui.available_width() - 240.0).max(220.0);
-            let response = ui.add(
-                egui::TextEdit::singleline(&mut self.search.query)
-                    .id(egui::Id::unique("search.query"))
-                    .hint_text(text::find::hint(language))
-                    .desired_width(width),
-            );
-            if focus == Some("search.query") {
-                response.request_focus();
-            }
-            direction_combo(ui, language, &mut self.search.direction);
-            status_combo(ui, language, &mut self.search.status);
-            if ui.button(text::find::clear_action(language)).clicked() {
-                self.search.query.clear();
-                self.search.direction = None;
-                self.search.status = None;
-            }
+            // The trailing controls are laid out from the right edge so the
+            // query field can take whatever space is left over.
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.button(text::find::clear_action(language)).clicked() {
+                    self.search.query.clear();
+                    self.search.direction = None;
+                    self.search.status = None;
+                }
+                status_combo(ui, language, &mut self.search.status);
+                direction_combo(ui, language, &mut self.search.direction);
+                let width = ui.available_width().max(160.0);
+                let response = ui.add(
+                    egui::TextEdit::singleline(&mut self.search.query)
+                        .id(egui::Id::unique("search.query"))
+                        .hint_text(text::find::hint(language))
+                        .desired_width(width),
+                );
+                if focus == Some("search.query") {
+                    response.request_focus();
+                }
+            });
         });
 
         let mut apply_saved = None;
@@ -912,6 +1017,10 @@ impl Workspace {
 
         if toggle_form {
             self.show_customer_form = !self.show_customer_form;
+            if self.show_customer_form {
+                self.customers_view.opened = None;
+                self.customer_edit = None;
+            }
         }
         if self.show_customer_form {
             self.customer_form_ui(ui, focus, &mut create);
@@ -935,6 +1044,9 @@ impl Workspace {
             sort_customers(&mut visible, column, descending);
         }
 
+        let mut toggle = None;
+        let mut save_edit = false;
+        let mut cancel_edit = false;
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             ui.set_width(width);
             if visible.is_empty() {
@@ -947,6 +1059,7 @@ impl Workspace {
             }
             for (index, customer) in visible.iter().enumerate() {
                 let party = &customer.party;
+                let selected = self.customers_view.opened == Some(customer.id);
                 let cells = [
                     Cell::left(party.legal_name.as_str()),
                     Cell::left(party.address.city.as_str()),
@@ -954,11 +1067,41 @@ impl Workspace {
                     Cell::left(party.vat_id.as_deref().unwrap_or("—")).muted(),
                     Cell::left(party.peppol_id.as_deref().unwrap_or("—")).muted(),
                 ];
-                self.customers_view.table.row(ui, width, &cells, false, index % 2 == 1);
+                if self
+                    .customers_view
+                    .table
+                    .row(ui, width, &cells, selected, index % 2 == 1)
+                    .clicked()
+                {
+                    toggle = Some(customer.id);
+                }
+                if selected && let Some(edit) = self.customer_edit.as_mut() {
+                    let (save, cancel) = customer_edit_ui(ui, language, edit, focus);
+                    save_edit |= save;
+                    cancel_edit |= cancel;
+                }
             }
             ui.add_space(8.0);
             ui.weak(format!("{} customer(s)", visible.len()));
         });
+
+        if let Some(id) = toggle {
+            if self.customers_view.opened == Some(id) {
+                self.customers_view.opened = None;
+                self.customer_edit = None;
+            } else if let Some(record) = self.customers.iter().find(|customer| customer.id == id).cloned() {
+                self.customer_edit = Some(CustomerEdit::from_record(&record));
+                self.customers_view.opened = Some(id);
+                self.show_customer_form = false;
+            }
+        }
+        if cancel_edit {
+            self.customers_view.opened = None;
+            self.customer_edit = None;
+        }
+        if save_edit {
+            self.save_customer_edit(session);
+        }
 
         if import || export {
             self.transfer_customers(session, import);
@@ -977,27 +1120,12 @@ impl Workspace {
             .show(ui, |ui| {
                 ui.strong(text::editor::new_customer_heading(language));
                 egui::Grid::new("customer-form").num_columns(2).show(ui, |ui| {
-                    ui.label(text::editor::field(language, Field::Name));
-                    text_field(ui, &mut self.customer_form.name, "customer.name", 200.0, focus);
-                    ui.end_row();
-                    ui.label(text::editor::field(language, Field::Street));
-                    text_field(ui, &mut self.customer_form.street, "customer.street", 200.0, focus);
-                    ui.end_row();
-                    ui.label(text::editor::field(language, Field::PostCode));
-                    text_field(ui, &mut self.customer_form.postal, "customer.postal_code", 200.0, focus);
-                    ui.end_row();
-                    ui.label(text::editor::field(language, Field::City));
-                    text_field(ui, &mut self.customer_form.city, "customer.city", 200.0, focus);
-                    ui.end_row();
-                    ui.label(text::editor::field(language, Field::Country));
-                    text_field(ui, &mut self.customer_form.country, "customer.country", 200.0, focus);
-                    ui.end_row();
-                    ui.label(text::editor::field(language, Field::VatId));
-                    text_field(ui, &mut self.customer_form.vat, "customer.vat_id", 200.0, focus);
-                    ui.end_row();
-                    ui.label(text::editor::field(language, Field::Peppol));
-                    text_field(ui, &mut self.customer_form.peppol, "customer.peppol", 200.0, focus);
-                    ui.end_row();
+                    for field in CUSTOMER_FIELDS {
+                        ui.label(text::editor::field(language, field));
+                        let id = format!("customer.{}", customer_key(field));
+                        text_field(ui, self.customer_form.field_mut(field), &id, 264.0, focus);
+                        ui.end_row();
+                    }
                 });
                 ui.horizontal(|ui| {
                     if ui.button(text::editor::save_customer_action(language)).clicked() {
@@ -1008,7 +1136,53 @@ impl Workspace {
                     }
                 });
             });
-        ui.add_space(8.0);
+        ui.add_space(10.0);
+    }
+
+    /// Saves the open customer detail editor.
+    fn save_customer_edit(&mut self, session: &Session) {
+        let language = self.language;
+        let Some(edit) = self.customer_edit.clone() else {
+            return;
+        };
+        let form = &edit.form;
+        let country = match CountryCode::parse(form.country.trim()) {
+            Ok(country) => country,
+            Err(error) => {
+                self.message = Some(Message::error(error.to_string()));
+                return;
+            }
+        };
+        let mut party = Party::new(
+            form.name.trim().to_owned(),
+            Address {
+                street: nonempty(&form.street),
+                city: form.city.trim().to_owned(),
+                postal_code: nonempty(&form.postal),
+                country,
+            },
+        );
+        party.vat_id = nonempty(&form.vat).map(|value| value.to_ascii_uppercase());
+        party.kvk_number = nonempty(&form.kvk);
+        party.peppol_id = nonempty(&form.peppol);
+        party.contact_name = nonempty(&form.contact);
+        party.email = nonempty(&form.email);
+
+        let record = CustomerRecord { id: edit.id, party };
+        match store::update_customer(session.database().connection(), &record, &store::now_rfc3339()) {
+            Ok(()) => {
+                if let Ok(list) = list_customers(session.database().connection()) {
+                    self.customers = list;
+                }
+                self.customer_edit = None;
+                self.customers_view.opened = None;
+                self.message = Some(Message::ok(text::customers::updated(
+                    language,
+                    &record.party.legal_name,
+                )));
+            }
+            Err(error) => self.message = Some(Message::error(error.to_string())),
+        }
     }
 
     /// Reads or writes the customer CSV named in the tab.
@@ -1103,11 +1277,11 @@ impl Workspace {
             theme::card(ui, text::settings::archive(language), |ui| {
                 ui.horizontal(|ui| {
                     ui.weak(text::settings::database(language));
-                    ui.label(egui::RichText::new(session.database_path().display().to_string()).monospace());
+                    theme::value_mono(ui, session.database_path().display().to_string());
                 });
                 ui.horizontal(|ui| {
                     ui.weak(text::settings::encryption(language));
-                    ui.label(store::encryption_label());
+                    theme::value(ui, store::encryption_label());
                 });
             });
             ui.add_space(8.0);
@@ -1117,10 +1291,10 @@ impl Workspace {
 
             theme::card(ui, text::settings::backup(language), |ui| {
                 ui.weak(text::settings::backup_note(language));
-                ui.label(text::settings::backup_directory(
-                    language,
-                    &backup_directory(session).display().to_string(),
-                ));
+                theme::value_mono(
+                    ui,
+                    text::settings::backup_directory(language, &backup_directory(session).display().to_string()),
+                );
                 if ui.button(text::settings::backup_now(language)).clicked() {
                     backup = true;
                 }
@@ -1199,7 +1373,7 @@ impl Workspace {
         if let Some(key) = &self.security.recovery_key {
             ui.add_space(6.0);
             ui.colored_label(tokens.warning, text::shell::keep_key_note(language));
-            ui.label(egui::RichText::new(key.as_str()).monospace());
+            theme::value_mono(ui, key.as_str());
             if ui.button(text::security::done_action(language)).clicked() {
                 done = true;
             }
@@ -1297,20 +1471,19 @@ impl Workspace {
         };
 
         ui.horizontal(|ui| {
-            ui.label(text::health::schema(language, health.schema_version));
+            theme::value(ui, text::health::schema(language, health.schema_version));
             ui.label("·");
-            ui.label(health.encryption);
+            theme::value(ui, health.encryption);
             ui.label("·");
-            ui.label(text::health::size(language, health.database_bytes / 1024));
+            theme::value(ui, text::health::size(language, health.database_bytes / 1024));
         });
 
         match &health.chain {
             Some(head) => {
                 let short = health.short_head().unwrap_or_default();
                 ui.horizontal(|ui| {
-                    ui.label(text::health::chain(language, head.seq));
-                    ui.label(egui::RichText::new(short).monospace())
-                        .on_hover_text(head.hash.as_str());
+                    theme::value(ui, text::health::chain(language, head.seq));
+                    theme::value_mono(ui, short).on_hover_text(head.hash.as_str());
                 });
             }
             None => {
@@ -1341,7 +1514,10 @@ impl Workspace {
 
         match &health.last_backup {
             Some(backup) => {
-                ui.label(text::health::last_backup(language, &backup.name, backup.bytes / 1024));
+                theme::value(
+                    ui,
+                    text::health::last_backup(language, &backup.name, backup.bytes / 1024),
+                );
             }
             None => {
                 ui.label(text::health::no_backup(language));
@@ -1513,17 +1689,23 @@ impl Workspace {
         if let Some(issued) = &self.issued {
             let credit_note = issued.number.contains("-C");
             ui.heading(text::editor::issued_heading(credit_note));
-            ui.label(text::editor::number_line(language, &issued.number));
-            ui.label(text::editor::issue_date_line(language, &issued.issue_date.to_string()));
-            ui.label(text::editor::payable_line(language, &money_text(issued.totals.gross)));
-            ui.label(text::editor::ubl_hash_line(language, &issued.ubl_sha256));
+            theme::value(ui, text::editor::number_line(language, &issued.number));
+            theme::value(
+                ui,
+                text::editor::issue_date_line(language, &issued.issue_date.to_string()),
+            );
+            theme::value(
+                ui,
+                text::editor::payable_line(language, &money_text(issued.totals.gross)),
+            );
+            theme::value_mono(ui, text::editor::ubl_hash_line(language, &issued.ubl_sha256));
         }
 
         if self.issued.is_some() {
             let is_credit_note = self.issued.as_ref().is_some_and(|issued| issued.number.contains("-C"));
             let mut save_pdf = false;
             if let Some(pdf) = &self.pdf {
-                ui.label(text::editor::pdf_hash_line(language, &pdf.hash));
+                theme::value_mono(ui, text::editor::pdf_hash_line(language, &pdf.hash));
                 ui.horizontal(|ui| {
                     ui.label(text::editor::save_pdf_to(language));
                     ui.add(egui::TextEdit::singleline(&mut self.pdf_path).desired_width(420.0));
@@ -1627,17 +1809,41 @@ impl Workspace {
 
             egui::Grid::new("header-form").num_columns(4).show(ui, |ui| {
                 ui.label(text::editor::issue_date_label(language));
-                text_field(ui, &mut editor.issue_date, "issue_date", 110.0, focus);
+                date_field(
+                    ui,
+                    language,
+                    &mut editor.issue_date,
+                    &mut editor.date_popup,
+                    DateField::Issue,
+                    false,
+                    focus,
+                );
                 ui.label(text::editor::due_date_label(language));
-                text_field(ui, &mut editor.due_date, "due_date", 110.0, focus);
+                date_field(
+                    ui,
+                    language,
+                    &mut editor.due_date,
+                    &mut editor.date_popup,
+                    DateField::Due,
+                    true,
+                    focus,
+                );
                 ui.end_row();
                 ui.label(text::editor::buyer_reference_label(language));
-                text_field(ui, &mut editor.buyer_reference, "buyer_reference", 110.0, focus);
+                text_field(ui, &mut editor.buyer_reference, "buyer_reference", 130.0, focus);
                 ui.label(text::editor::order_reference_label(language));
-                text_field(ui, &mut editor.order_reference, "order_reference", 110.0, focus);
+                text_field(ui, &mut editor.order_reference, "order_reference", 130.0, focus);
                 ui.end_row();
                 ui.label(text::editor::delivery_date_label(language));
-                text_field(ui, &mut editor.delivery_date, "delivery_date", 110.0, focus);
+                date_field(
+                    ui,
+                    language,
+                    &mut editor.delivery_date,
+                    &mut editor.date_popup,
+                    DateField::Delivery,
+                    true,
+                    focus,
+                );
                 ui.label(text::editor::document_language_label(language));
                 egui::ComboBox::from_id_salt("editor.language")
                     .selected_text(match editor.document_language {
@@ -1650,13 +1856,40 @@ impl Workspace {
                     });
                 ui.end_row();
             });
-            ui.horizontal(|ui| {
-                ui.label(text::editor::note_label(language));
-                text_field(ui, &mut editor.note, "note", 420.0, focus);
-            });
+
+            let mut popup_action = CalendarOutcome::Keep;
+            if let Some(popup) = editor.date_popup.as_mut() {
+                popup_action = date_picker(ui.ctx(), language, popup);
+            }
+            match popup_action {
+                CalendarOutcome::Keep => {}
+                CalendarOutcome::Close => editor.date_popup = None,
+                CalendarOutcome::Pick(day) => {
+                    match editor.date_popup.map(|popup| popup.field) {
+                        Some(DateField::Issue) => editor.issue_date = day,
+                        Some(DateField::Due) => editor.due_date = day,
+                        Some(DateField::Delivery) => editor.delivery_date = day,
+                        None => {}
+                    }
+                    editor.date_popup = None;
+                }
+            }
 
             ui.add_space(8.0);
-            egui::ScrollArea::vertical().max_height(240.0).show(ui, |ui| {
+            ui.label(text::editor::note_label(language));
+            let note = ui.add(
+                egui::TextEdit::multiline(&mut editor.note)
+                    .id(egui::Id::unique("note"))
+                    .desired_rows(3)
+                    .desired_width(ui.available_width()),
+            );
+            if focus == Some("note") {
+                note.request_focus();
+            }
+
+            ui.add_space(10.0);
+            let name_width = (ui.available_width() - 380.0).max(220.0);
+            egui::ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
                 egui::Grid::new("lines-form")
                     .num_columns(6)
                     .striped(true)
@@ -1668,16 +1901,16 @@ impl Workspace {
                         ui.end_row();
 
                         for (index, line) in editor.lines.iter_mut().enumerate() {
-                            text_field(ui, &mut line.name, &format!("lines[{index}].name"), 180.0, focus);
-                            text_field(ui, &mut line.quantity, &format!("lines[{index}].quantity"), 60.0, focus);
+                            text_field(ui, &mut line.name, &format!("lines[{index}].name"), name_width, focus);
+                            text_field(ui, &mut line.quantity, &format!("lines[{index}].quantity"), 64.0, focus);
                             text_field(
                                 ui,
                                 &mut line.unit_price,
                                 &format!("lines[{index}].unit_price"),
-                                80.0,
+                                96.0,
                                 focus,
                             );
-                            text_field(ui, &mut line.rate, &format!("lines[{index}].rate"), 50.0, focus);
+                            text_field(ui, &mut line.rate, &format!("lines[{index}].rate"), 56.0, focus);
                             let vat_field = format!("lines[{index}].vat_category");
                             let combo = egui::ComboBox::from_id_salt(("vat", index))
                                 .selected_text(category_label(line.category))
@@ -1879,7 +2112,10 @@ impl Workspace {
             },
         );
         party.vat_id = nonempty(&form.vat).map(|value| value.to_ascii_uppercase());
+        party.kvk_number = nonempty(&form.kvk);
         party.peppol_id = nonempty(&form.peppol);
+        party.contact_name = nonempty(&form.contact);
+        party.email = nonempty(&form.email);
 
         let record = CustomerRecord {
             id: CustomerId::new(),
@@ -2067,6 +2303,75 @@ fn backup_directory(session: &Session) -> PathBuf {
         .join("backups")
 }
 
+/// The fields the customer forms edit, in the order they are shown.
+const CUSTOMER_FIELDS: [Field; 10] = [
+    Field::Name,
+    Field::Street,
+    Field::PostCode,
+    Field::City,
+    Field::Country,
+    Field::VatId,
+    Field::Kvk,
+    Field::Peppol,
+    Field::Contact,
+    Field::Email,
+];
+
+fn customer_key(field: Field) -> &'static str {
+    match field {
+        Field::LegalName | Field::Name => "name",
+        Field::Street => "street",
+        Field::PostCode => "postal_code",
+        Field::City => "city",
+        Field::Country => "country",
+        Field::VatId => "vat_id",
+        Field::Kvk => "kvk_number",
+        Field::Peppol => "peppol",
+        Field::Contact => "contact",
+        Field::Email => "email",
+    }
+}
+
+/// Draws the inline editor for one customer. Returns whether Save or Cancel was
+/// clicked; the caller applies it after the table has finished borrowing.
+fn customer_edit_ui(
+    ui: &mut egui::Ui,
+    language: Language,
+    edit: &mut CustomerEdit,
+    focus: Option<&str>,
+) -> (bool, bool) {
+    let tokens = *theme::palette(ui.ctx());
+    let mut save = false;
+    let mut cancel = false;
+    ui.add_space(2.0);
+    egui::Frame::new()
+        .fill(tokens.surface_alt)
+        .stroke(egui::Stroke::new(1.0, tokens.border))
+        .corner_radius(6)
+        .inner_margin(egui::Margin::same(14))
+        .show(ui, |ui| {
+            ui.strong(text::customers::edit_heading(language));
+            egui::Grid::new("customer-edit").num_columns(2).show(ui, |ui| {
+                for field in CUSTOMER_FIELDS {
+                    ui.label(text::editor::field(language, field));
+                    let id = format!("edit.customer.{}", customer_key(field));
+                    text_field(ui, edit.form.field_mut(field), &id, 300.0, focus);
+                    ui.end_row();
+                }
+            });
+            ui.horizontal(|ui| {
+                if ui.button(text::editor::save_customer_action(language)).clicked() {
+                    save = true;
+                }
+                if ui.button(text::customers::cancel_action(language)).clicked() {
+                    cancel = true;
+                }
+            });
+        });
+    ui.add_space(4.0);
+    (save, cancel)
+}
+
 /// Case-insensitive match over the fields the customer table shows.
 fn matches_filter(party: &Party, needle: &str) -> bool {
     if needle.is_empty() {
@@ -2196,6 +2501,163 @@ fn suppressed_by(finding: &Finding, suppressions: &[Suppression]) -> bool {
             .any(|suppression| suppression.code == finding.code && suppression.field == finding.field)
 }
 
+/// What the calendar popup asks the caller to do.
+enum CalendarOutcome {
+    /// Still open.
+    Keep,
+    /// Closed without a choice.
+    Close,
+    /// A date was picked, as `YYYY-MM-DD`.
+    Pick(String),
+}
+
+/// A text field with a calendar button. Typing stays possible, so a date can be
+/// pasted or corrected without opening anything.
+fn date_field(
+    ui: &mut egui::Ui,
+    language: Language,
+    value: &mut String,
+    popup: &mut Option<DatePopup>,
+    field: DateField,
+    optional: bool,
+    focus: Option<&str>,
+) {
+    ui.horizontal(|ui| {
+        let response = text_field(ui, value, field.id(), 104.0, focus);
+        let open = popup.as_ref().is_some_and(|open| open.field == field);
+        let glyph = if open { "▴" } else { "▾" };
+        if ui
+            .small_button(glyph)
+            .on_hover_text(text::editor::choose_date(language))
+            .clicked()
+        {
+            if open {
+                *popup = None;
+            } else {
+                let day = LocalDate::parse_iso(value.trim())
+                    .map(|date| date.as_date())
+                    .unwrap_or_else(|_| LocalDate::today_utc().as_date());
+                *popup = Some(DatePopup {
+                    field,
+                    month: first_of_month(day),
+                    pos: response.rect.left_bottom(),
+                });
+            }
+        }
+        if optional
+            && !value.trim().is_empty()
+            && ui
+                .small_button("×")
+                .on_hover_text(text::editor::clear_date(language))
+                .clicked()
+        {
+            value.clear();
+        }
+    });
+}
+
+/// Draws the floating month grid and reports what the user did.
+fn date_picker(ctx: &egui::Context, language: Language, popup: &mut DatePopup) -> CalendarOutcome {
+    let tokens = *theme::palette(ctx);
+    let mut outcome = CalendarOutcome::Keep;
+    egui::Window::new("date-picker")
+        .id(egui::Id::unique("date-picker"))
+        .title_bar(false)
+        .resizable(false)
+        .collapsible(false)
+        .fixed_pos(popup.pos)
+        .show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                if ui.small_button("‹").clicked() {
+                    popup.month = shift_month(popup.month, -1);
+                }
+                ui.add_sized(
+                    [124.0, 20.0],
+                    egui::Label::new(
+                        egui::RichText::new(format!(
+                            "{} {}",
+                            text::editor::month_name(language, popup.month.month()),
+                            popup.month.year()
+                        ))
+                        .strong(),
+                    )
+                    .halign(egui::Align::Center),
+                );
+                if ui.small_button("›").clicked() {
+                    popup.month = shift_month(popup.month, 1);
+                }
+            });
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                for day in text::editor::weekdays(language) {
+                    ui.add_sized(
+                        [26.0, 16.0],
+                        egui::Label::new(egui::RichText::new(day).small().color(tokens.muted))
+                            .halign(egui::Align::Center),
+                    );
+                }
+            });
+            for week in month_grid(popup.month).chunks(7) {
+                ui.horizontal(|ui| {
+                    for date in week {
+                        let in_month = date.month() == popup.month.month();
+                        let colour = if in_month { tokens.text } else { tokens.muted };
+                        let label = egui::RichText::new(date.day().to_string()).color(colour);
+                        if ui
+                            .add_sized([26.0, 24.0], egui::Button::new(label).frame(in_month))
+                            .clicked()
+                        {
+                            outcome = CalendarOutcome::Pick(date.to_string());
+                        }
+                    }
+                });
+            }
+            ui.add_space(4.0);
+            if ui.button(text::editor::cancel_action(language)).clicked() {
+                outcome = CalendarOutcome::Close;
+            }
+        });
+    if matches!(outcome, CalendarOutcome::Keep) && ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
+        outcome = CalendarOutcome::Close;
+    }
+    outcome
+}
+
+/// The first day of the month containing `date`.
+fn first_of_month(date: time::Date) -> time::Date {
+    time::Date::from_calendar_date(date.year(), date.month(), 1).unwrap_or(date)
+}
+
+/// Moves a month back or forward, landing on its first day.
+fn shift_month(date: time::Date, delta: i32) -> time::Date {
+    let mut year = date.year();
+    let mut month = i32::from(u8::from(date.month()));
+    month += delta;
+    while month < 1 {
+        month += 12;
+        year -= 1;
+    }
+    while month > 12 {
+        month -= 12;
+        year += 1;
+    }
+    u8::try_from(month)
+        .ok()
+        .and_then(|month| time::Month::try_from(month).ok())
+        .and_then(|month| time::Date::from_calendar_date(year, month, 1).ok())
+        .unwrap_or(date)
+}
+
+/// Six weeks of days covering the month, Monday first.
+fn month_grid(month: time::Date) -> Vec<time::Date> {
+    let first = first_of_month(month);
+    let offset = i64::from(first.weekday().number_days_from_monday());
+    let start = first - time::Duration::days(offset);
+    (0..42)
+        .filter_map(|index| start.checked_add(time::Duration::days(index)))
+        .collect()
+}
+
 fn text_field(ui: &mut egui::Ui, value: &mut String, field: &str, width: f32, focus: Option<&str>) -> egui::Response {
     let response = ui.add(
         egui::TextEdit::singleline(value)
@@ -2307,29 +2769,35 @@ fn document_panel(ui: &mut egui::Ui, language: Language, view: &DocumentView) ->
             }
             ui.end_row();
             for line in &view.lines {
-                ui.label(line.position.to_string());
-                ui.label(line.name.as_str());
-                ui.label(format!("{} {}", line.quantity.to_trimmed_string(), line.unit.as_str()));
-                ui.label(money_text(line.unit_price));
-                ui.label(line.vat_rate.percent_string());
-                ui.label(money_text(line.line_net));
+                theme::value(ui, line.position.to_string());
+                theme::value(ui, line.name.as_str());
+                theme::value(
+                    ui,
+                    format!("{} {}", line.quantity.to_trimmed_string(), line.unit.as_str()),
+                );
+                theme::value(ui, money_text(line.unit_price));
+                theme::value(ui, line.vat_rate.percent_string());
+                theme::value(ui, money_text(line.line_net));
                 ui.end_row();
             }
         });
 
     ui.add_space(6.0);
-    ui.label(text::find::totals(
-        language,
-        &money_text(view.totals.net),
-        &money_text(view.totals.tax),
-        &money_text(view.totals.gross),
-    ));
+    theme::value(
+        ui,
+        text::find::totals(
+            language,
+            &money_text(view.totals.net),
+            &money_text(view.totals.tax),
+            &money_text(view.totals.gross),
+        ),
+    );
 
     if !view.events.is_empty() {
         ui.add_space(6.0);
         ui.strong(text::find::history_label(language));
         for event in &view.events {
-            ui.label(format!("{} · {} · {}", event.at, event.kind, event.actor));
+            theme::value(ui, format!("{} · {} · {}", event.at, event.kind, event.actor));
         }
     }
 
@@ -2337,12 +2805,10 @@ fn document_panel(ui: &mut egui::Ui, language: Language, view: &DocumentView) ->
         ui.add_space(6.0);
         ui.strong(text::find::artefacts_label(language));
         for artefact in &view.artefacts {
-            ui.label(text::find::artefact_line(
-                language,
-                &artefact.kind,
-                artefact.size_bytes,
-                &artefact.bytes_hash,
-            ));
+            theme::value(
+                ui,
+                text::find::artefact_line(language, &artefact.kind, artefact.size_bytes, &artefact.bytes_hash),
+            );
         }
     }
 
@@ -2351,7 +2817,11 @@ fn document_panel(ui: &mut egui::Ui, language: Language, view: &DocumentView) ->
 
 fn fact(ui: &mut egui::Ui, language: Language, fact: Fact, value: &str) {
     ui.weak(text::find::fact(language, fact));
-    ui.label(value);
+    if fact == Fact::SemanticHash {
+        theme::value_mono(ui, value);
+    } else {
+        theme::value(ui, value);
+    }
     ui.end_row();
 }
 
@@ -2939,5 +3409,42 @@ mod tests {
             "an exemption reason is required",
         );
         assert!(!suppressed_by(&blocking, &suppressions));
+    }
+
+    #[test]
+    fn shifting_a_month_wraps_both_ways() {
+        let january = time::Date::from_calendar_date(2026, time::Month::January, 15).unwrap();
+        assert_eq!(shift_month(january, -1).to_string(), "2025-12-01");
+        assert_eq!(shift_month(january, 1).to_string(), "2026-02-01");
+        let december = time::Date::from_calendar_date(2026, time::Month::December, 31).unwrap();
+        assert_eq!(shift_month(december, 1).to_string(), "2027-01-01");
+        assert_eq!(shift_month(december, -12).to_string(), "2025-12-01");
+    }
+
+    #[test]
+    fn the_calendar_grid_is_six_weeks_starting_on_monday() {
+        for month in [time::Month::January, time::Month::February, time::Month::August] {
+            let first = time::Date::from_calendar_date(2026, month, 1).unwrap();
+            let grid = month_grid(first);
+            assert_eq!(grid.len(), 42, "{month:?} needs six full weeks");
+            assert_eq!(grid[0].weekday(), time::Weekday::Monday);
+            assert!(grid.contains(&first));
+            for pair in grid.windows(2) {
+                assert_eq!(pair[1] - pair[0], time::Duration::days(1));
+            }
+        }
+    }
+
+    #[test]
+    fn opening_a_customer_fills_the_editor_from_the_record() {
+        let record = CustomerRecord {
+            id: CustomerId::new(),
+            party: Party::new("Klant BV", Address::new("Leiden", CountryCode::NL)),
+        };
+        let edit = CustomerEdit::from_record(&record);
+        assert_eq!(edit.id, record.id);
+        assert_eq!(edit.form.name, "Klant BV");
+        assert_eq!(edit.form.city, "Leiden");
+        assert_eq!(edit.form.country, "NL");
     }
 }

@@ -61,23 +61,23 @@ pub struct Palette {
 
 /// The light palette: cool grey paper with a blue accent.
 pub const LIGHT: Palette = Palette {
-    bg: Color32::from_rgb(0xF3, 0xF4, 0xF7),
-    panel: Color32::from_rgb(0xFF, 0xFF, 0xFF),
-    rail: Color32::from_rgb(0xEB, 0xED, 0xF1),
+    bg: Color32::from_rgb(0xE7, 0xEA, 0xEF),
+    panel: Color32::from_rgb(0xF6, 0xF7, 0xF9),
+    rail: Color32::from_rgb(0xDE, 0xE2, 0xE8),
     surface: Color32::from_rgb(0xFF, 0xFF, 0xFF),
-    surface_alt: Color32::from_rgb(0xF7, 0xF8, 0xFA),
-    border: Color32::from_rgb(0xD8, 0xDC, 0xE3),
-    text: Color32::from_rgb(0x1C, 0x22, 0x2E),
-    muted: Color32::from_rgb(0x5E, 0x69, 0x78),
-    accent: Color32::from_rgb(0x2F, 0x6F, 0xEB),
+    surface_alt: Color32::from_rgb(0xEC, 0xF0, 0xF5),
+    border: Color32::from_rgb(0xC2, 0xC8, 0xD1),
+    text: Color32::from_rgb(0x15, 0x1A, 0x22),
+    muted: Color32::from_rgb(0x46, 0x50, 0x5E),
+    accent: Color32::from_rgb(0x1F, 0x5F, 0xD8),
     accent_text: Color32::WHITE,
-    accent_weak: Color32::from_rgb(0xE2, 0xEB, 0xFD),
-    success: Color32::from_rgb(0x1E, 0x7B, 0x4F),
-    warning: Color32::from_rgb(0x8A, 0x5D, 0x00),
-    error: Color32::from_rgb(0xB4, 0x23, 0x18),
-    stripe: Color32::from_rgb(0xF4, 0xF6, 0xF9),
-    hover: Color32::from_rgb(0xEA, 0xEE, 0xF4),
-    selection: Color32::from_rgb(0xD9, 0xE6, 0xFD),
+    accent_weak: Color32::from_rgb(0xD9, 0xE5, 0xFA),
+    success: Color32::from_rgb(0x16, 0x6B, 0x45),
+    warning: Color32::from_rgb(0x7A, 0x52, 0x00),
+    error: Color32::from_rgb(0xA1, 0x1B, 0x12),
+    stripe: Color32::from_rgb(0xEF, 0xF2, 0xF6),
+    hover: Color32::from_rgb(0xDE, 0xE5, 0xF0),
+    selection: Color32::from_rgb(0xCF, 0xE0, 0xFA),
 };
 
 /// The dark palette: charcoal surfaces with a brighter blue accent.
@@ -162,6 +162,8 @@ fn style(theme: Theme) -> Style {
     visuals.window_stroke = Stroke::new(1.0, tokens.border);
     visuals.window_corner_radius = CornerRadius::same(10);
     visuals.menu_corner_radius = radius;
+    visuals.weak_text_color = Some(tokens.muted);
+    visuals.weak_text_alpha = 1.0;
 
     visuals.widgets.noninteractive = widget(tokens.panel, tokens.border, tokens.text, radius);
     visuals.widgets.inactive = widget(tokens.surface_alt, tokens.border, tokens.text, radius);
@@ -173,9 +175,12 @@ fn style(theme: Theme) -> Style {
         visuals,
         ..Default::default()
     };
-    style.spacing.item_spacing = vec2(8.0, 6.0);
-    style.spacing.button_padding = vec2(10.0, 5.0);
-    style.spacing.interact_size.y = 26.0;
+    style.spacing.item_spacing = vec2(10.0, 8.0);
+    style.spacing.button_padding = vec2(12.0, 6.0);
+    style.spacing.interact_size = vec2(48.0, 28.0);
+    style.spacing.window_margin = Margin::same(16);
+    style.spacing.menu_margin = Margin::same(8);
+    style.spacing.indent = 18.0;
     style.spacing.scroll.bar_width = 10.0;
     style.spacing.scroll.bar_inner_margin = 4.0;
     // The user reads the archive; selecting a label is never what a click meant.
@@ -210,7 +215,7 @@ pub fn card<R>(ui: &mut Ui, title: &str, add: impl FnOnce(&mut Ui) -> R) -> R {
         .fill(tokens.surface)
         .stroke(Stroke::new(1.0, tokens.border))
         .corner_radius(8)
-        .inner_margin(Margin::same(14))
+        .inner_margin(Margin::same(16))
         .show(ui, |ui| {
             ui.label(RichText::new(title).strong().size(15.0));
             ui.add_space(4.0);
@@ -378,6 +383,17 @@ pub fn cell_label(ui: &mut Ui, rect: Rect, value: &str, align: Align, strong: bo
     .inner
 }
 
+/// A read-only value: prose around it is not selectable, but an amount, a name,
+/// a hash, or a reference is something the user may want to copy.
+pub fn value(ui: &mut Ui, text: impl Into<String>) -> Response {
+    ui.add(egui::Label::new(RichText::new(text).color(palette(ui.ctx()).text)).selectable(true))
+}
+
+/// The same, in the monospaced face, for identifiers and digests.
+pub fn value_mono(ui: &mut Ui, text: impl Into<String>) -> Response {
+    ui.add(egui::Label::new(RichText::new(text).monospace().color(palette(ui.ctx()).text)).selectable(true))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -392,6 +408,47 @@ mod tests {
         }
         assert!(LIGHT.text.r() < LIGHT.bg.r(), "light text is dark");
         assert!(DARK.text.r() > DARK.bg.r(), "dark text is light");
+    }
+
+    #[test]
+    fn text_holds_contrast_on_every_surface() {
+        for palette in [&LIGHT, &DARK] {
+            for (name, background) in [
+                ("panel", palette.panel),
+                ("surface", palette.surface),
+                ("surface_alt", palette.surface_alt),
+                ("rail", palette.rail),
+                ("selection", palette.selection),
+            ] {
+                let primary = contrast(palette.text, background);
+                assert!(primary >= 4.5, "text on {name}: {primary:.2}");
+                let secondary = contrast(palette.muted, background);
+                assert!(secondary >= 3.0, "muted text on {name}: {secondary:.2}");
+            }
+            let button = contrast(palette.text, palette.surface_alt);
+            assert!(button >= 4.5, "button text: {button:.2}");
+            let accent = contrast(palette.accent_text, palette.accent);
+            assert!(accent >= 4.5, "text on the accent: {accent:.2}");
+        }
+    }
+
+    fn contrast(left: Color32, right: Color32) -> f32 {
+        let left = luminance(left);
+        let right = luminance(right);
+        let (light, dark) = if left > right { (left, right) } else { (right, left) };
+        (light + 0.05) / (dark + 0.05)
+    }
+
+    fn luminance(colour: Color32) -> f32 {
+        fn channel(value: u8) -> f32 {
+            let value = f32::from(value) / 255.0;
+            if value <= 0.039_28 {
+                value / 12.92
+            } else {
+                ((value + 0.055) / 1.055).powf(2.4)
+            }
+        }
+        0.2126 * channel(colour.r()) + 0.7152 * channel(colour.g()) + 0.0722 * channel(colour.b())
     }
 
     #[test]
