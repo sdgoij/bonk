@@ -26,7 +26,6 @@ publish = false
 [workspace.dependencies]
 crux = { path = "crates/crux" }
 conformance = { path = "crates/conformance" }
-conformance-official = { path = "crates/conformance-official" }
 syntax = { path = "crates/syntax" }
 store = { path = "crates/store" }
 render = { path = "crates/render" }

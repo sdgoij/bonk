@@ -38,10 +38,17 @@ allow = [
     # free licences, and both are already inside every egui binary.
     "OFL-1.1",
     "Ubuntu-font-1.0",
+    # SQLCipher's bundled SQLite sources: the SQLite blessing and, for one small
+    # part, the WTFPL. Both are permissions rather than obligations.
+    "blessing",
+    "WTFPL",
 ]
 
 [bans]
 multiple-versions = "warn"
+# A path dependency without a version is how the crates in this workspace refer
+# to each other; they are never published, so there is no version to pin.
+allow-wildcard-paths = true
 wildcards = "deny"
 deny = [
     # Copyleft PDF/networking stacks that would poison distribution.
