@@ -368,7 +368,19 @@ fn draw_icon(painter: &Painter, rect: Rect, icon: Icon, colour: Color32) {
 }
 
 /// Truncates a single line of text to the width of its rectangle.
-pub fn cell_label(ui: &mut Ui, rect: Rect, value: &str, align: Align, strong: bool, colour: Color32) -> Response {
+///
+/// `selectable` decides whether the text may be dragged over and copied. Headers
+/// are labels; cell values are data, and a number in a table is exactly what
+/// someone wants to paste into a spreadsheet.
+pub fn cell_label(
+    ui: &mut Ui,
+    rect: Rect,
+    value: &str,
+    align: Align,
+    strong: bool,
+    colour: Color32,
+    selectable: bool,
+) -> Response {
     let layout = match align {
         Align::Max => egui::Layout::right_to_left(Align::Center),
         _ => egui::Layout::left_to_right(Align::Center),
@@ -378,7 +390,7 @@ pub fn cell_label(ui: &mut Ui, rect: Rect, value: &str, align: Align, strong: bo
         rich = rich.strong();
     }
     ui.scope_builder(egui::UiBuilder::new().max_rect(rect).layout(layout), |ui| {
-        ui.add(egui::Label::new(rich).truncate().selectable(false))
+        ui.add(egui::Label::new(rich).truncate().selectable(selectable))
     })
     .inner
 }

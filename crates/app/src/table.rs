@@ -92,7 +92,7 @@ impl Table {
                 pos2(x + CELL_PADDING, rect.top()),
                 pos2(x + cell_width - CELL_PADDING, rect.bottom()),
             );
-            theme::cell_label(ui, label, title, Align::Min, true, tokens.text);
+            theme::cell_label(ui, label, title, Align::Min, true, tokens.text, false);
 
             // The separator owns the last few points of the column, so a click
             // there resizes instead of sorting.
@@ -144,8 +144,13 @@ impl Table {
     }
 
     /// Draws one row and returns its click response.
+    ///
+    /// Cell text is selectable, and a selectable label keeps the click that
+    /// starts a selection. The label's response is folded into the row's, so a
+    /// click on the text still opens the row and only a drag selects.
     pub fn row(&self, ui: &mut Ui, width: f32, cells: &[Cell], selected: bool, striped: bool) -> Response {
         let (rect, response) = ui.allocate_exact_size(vec2(width, ROW_HEIGHT), Sense::click());
+        let mut response = response;
         if response.hovered() {
             ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
         }
@@ -171,7 +176,8 @@ impl Table {
                 pos2(x + widths[index] - CELL_PADDING, rect.bottom()),
             );
             let colour = if cell.muted { tokens.muted } else { tokens.text };
-            theme::cell_label(ui, area, &cell.text, cell.align, cell.strong, colour);
+            let label = theme::cell_label(ui, area, &cell.text, cell.align, cell.strong, colour, true);
+            response = response.union(label);
             x += widths[index];
         }
         response
@@ -242,5 +248,59 @@ mod tests {
         let widths = table.pixel_widths(600.0);
         assert!(widths[0] >= MIN_COLUMN - 0.01, "{widths:?}");
         assert!(widths[1] >= MIN_COLUMN - 0.01, "{widths:?}");
+    }
+
+    /// A cell is a selectable label now, and a selectable label keeps the click
+    /// that starts a selection. If the row stopped reporting clicks that landed
+    /// on text, the table would look alive and do nothing.
+    #[test]
+    fn a_click_on_the_text_still_counts_as_a_row_click() {
+        fn input(events: Vec<egui::Event>) -> egui::RawInput {
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(800.0, 600.0))),
+                events,
+                ..egui::RawInput::default()
+            }
+        }
+
+        fn draw(context: &egui::Context, input: egui::RawInput, rect: &mut Rect, clicked: &mut bool) {
+            let table = Table::new(&[1.0, 1.0]);
+            let cells = [Cell::left("2026-0001"), Cell::right("121.00 EUR")];
+            let output = context.run_ui(input, |ui| {
+                let response = table.row(ui, 400.0, &cells, false, false);
+                *rect = response.rect;
+                *clicked |= response.clicked();
+            });
+            output.drop_without_applying_deltas();
+        }
+
+        let context = egui::Context::default();
+        let mut rect = Rect::NOTHING;
+        let mut clicked = false;
+
+        draw(&context, input(Vec::new()), &mut rect, &mut clicked);
+        let target = rect.center();
+        draw(
+            &context,
+            input(vec![egui::Event::PointerMoved(target)]),
+            &mut rect,
+            &mut clicked,
+        );
+        let press = egui::Event::PointerButton {
+            pos: target,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: egui::Modifiers::default(),
+        };
+        draw(&context, input(vec![press]), &mut rect, &mut clicked);
+        let release = egui::Event::PointerButton {
+            pos: target,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::default(),
+        };
+        draw(&context, input(vec![release]), &mut rect, &mut clicked);
+
+        assert!(clicked, "the row stopped opening when the click landed on text");
     }
 }

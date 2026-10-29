@@ -1028,7 +1028,7 @@ impl Workspace {
                     Cell::left(side).muted(),
                     Cell::left(hit.party.as_str()),
                     Cell::left(hit.issue_date.to_iso_string()),
-                    Cell::right(format!("{} {}", money_text(hit.gross), hit.currency.as_str())),
+                    Cell::right(money_text(hit.gross)),
                     Cell::left(text::find::status(language, hit.status)),
                 ];
                 if self
@@ -3891,6 +3891,12 @@ mod tests {
         assert_eq!(reopened.id, draft.id);
         assert_eq!(reopened.customer, Some(customer.id));
         assert!(workspace.message.is_none());
+    }
+
+    #[test]
+    fn an_amount_prints_its_currency_once() {
+        let amount = Money::from_major_units(132, Currency::EUR).unwrap();
+        assert_eq!(money_text(amount), "132.00 EUR");
     }
 
     #[test]
