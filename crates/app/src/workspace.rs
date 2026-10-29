@@ -80,6 +80,10 @@ pub struct Workspace {
     export_path: String,
     /// The preview of the composer's invoice, once one has been asked for.
     preview: Option<Preview>,
+    /// Whether this device keeps the archive key, as read when the workspace
+    /// opened and kept in step with the credentials panel. Asking the operating
+    /// system every frame would be a syscall per repaint.
+    device_remembered: bool,
     conformance_findings: Vec<Finding>,
     suppressions: Vec<Suppression>,
     suppress_target: Option<SuppressionTarget>,
@@ -675,6 +679,7 @@ impl Workspace {
             pdf_path: String::new(),
             export_path: String::new(),
             preview: None,
+            device_remembered: Session::device_ready(session.keystore_path(), &store::device::Keychain),
             conformance_findings: Vec::new(),
             suppressions: Vec::new(),
             suppress_target: None,
@@ -751,7 +756,7 @@ impl Workspace {
                 match self.tab {
                     Tab::Search => self.search_ui(ui, session, focus.as_deref()),
                     Tab::Customers => self.customers_ui(ui, session, focus.as_deref()),
-                    Tab::Settings => self.settings_ui(ui, session, appearance),
+                    Tab::Settings => self.settings_ui(ui, session, appearance, &store::device::Keychain),
                 }
             }
         });
@@ -1340,7 +1345,13 @@ impl Workspace {
     }
 
     /// Draws archive settings, health, backup, and credentials.
-    fn settings_ui(&mut self, ui: &mut egui::Ui, session: &Session, appearance: &mut egui::ThemePreference) {
+    fn settings_ui(
+        &mut self,
+        ui: &mut egui::Ui,
+        session: &Session,
+        appearance: &mut egui::ThemePreference,
+        device: &dyn store::DeviceStore,
+    ) {
         let language = self.language;
         let mut check = false;
         let mut backup = false;
@@ -1408,7 +1419,7 @@ impl Workspace {
             ui.add_space(8.0);
 
             theme::card(ui, text::settings::credentials(language), |ui| {
-                self.security_details_ui(ui, session);
+                self.security_details_ui(ui, session, device);
             });
         });
 
@@ -1443,14 +1454,13 @@ impl Workspace {
     }
 
     /// The security panel's contents, drawn directly by the headless test.
-    fn security_details_ui(&mut self, ui: &mut egui::Ui, session: &Session) {
+    fn security_details_ui(&mut self, ui: &mut egui::Ui, session: &Session, device: &dyn store::DeviceStore) {
         let language = self.language;
         let tokens = *theme::palette(ui.ctx());
         let mut change = false;
         let mut add_key = false;
         let mut done = false;
-        let mut remember = false;
-        let mut forget = false;
+        let mut device_toggle = None;
 
         ui.label(text::security::note(language));
         egui::Grid::new("security-form").num_columns(2).show(ui, |ui| {
@@ -1486,13 +1496,24 @@ impl Workspace {
         }
 
         ui.add_space(6.0);
-        ui.horizontal(|ui| {
-            if ui.button(text::security::remember_action(language)).clicked() {
-                remember = true;
-            }
-            if ui.button(text::security::forget_action(language)).clicked() {
-                forget = true;
-            }
+        // One switch: the state is the control. Which way it moves is what the
+        // button does, so a remembered device is not offered a "remember"
+        // button it cannot use, nor a forgotten one a "forget" button.
+        let mut remembered = self.device_remembered;
+        let toggle = ui
+            .toggle_value(&mut remembered, text::security::remember_action(language))
+            .on_hover_text(if self.device_remembered {
+                text::security::forget_hint(language)
+            } else {
+                text::security::remember_hint(language)
+            });
+        if toggle.changed() {
+            device_toggle = Some(remembered);
+        }
+        ui.weak(if self.device_remembered {
+            text::security::device_on_note(language)
+        } else {
+            text::security::device_off_note(language)
         });
 
         if change {
@@ -1533,26 +1554,35 @@ impl Workspace {
             self.forget_recovery_key();
         }
 
-        if remember {
+        if let Some(wanted) = device_toggle {
+            self.apply_device_toggle(session, device, wanted);
+        }
+    }
+
+    /// Turns "remember this device" on or off and records what happened.
+    fn apply_device_toggle(&mut self, session: &Session, device: &dyn store::DeviceStore, wanted: bool) {
+        let language = self.language;
+        if wanted {
             if self.security.current.trim().is_empty() {
                 self.message = Some(Message::error(text::security::enter_current(language)));
-            } else {
-                match session.remember_device(&self.security.current, &store::device::Keychain) {
-                    Ok(()) => {
-                        self.security.forget_secrets();
-                        self.message = Some(Message::ok(text::security::device_remembered(language)));
-                    }
-                    Err(error) => self.message = Some(Message::error(error.to_string())),
-                }
+                return;
             }
-        }
-
-        if forget {
-            match session.forget_device(&store::device::Keychain) {
+            match session.remember_device(&self.security.current, device) {
+                Ok(()) => {
+                    self.security.forget_secrets();
+                    self.device_remembered = true;
+                    self.message = Some(Message::ok(text::security::device_remembered(language)));
+                }
+                Err(error) => self.message = Some(Message::error(error.to_string())),
+            }
+        } else {
+            match session.forget_device(device) {
                 Ok(true) => {
+                    self.device_remembered = false;
                     self.message = Some(Message::ok(text::security::device_forgotten(language)));
                 }
                 Ok(false) => {
+                    self.device_remembered = false;
                     self.message = Some(Message::ok(text::security::device_no_key(language)));
                 }
                 Err(error) => self.message = Some(Message::error(error.to_string())),
@@ -3585,7 +3615,8 @@ mod tests {
             // Panels are collapsed by default, so draw their contents directly:
             // a broken widget inside a closed header is still a broken widget.
             let _ = workspace.health_details_ui(ui);
-            workspace.security_details_ui(ui, &session);
+            let device = store::device::MemoryStore::default();
+            workspace.security_details_ui(ui, &session, &device);
         });
         output.drop_without_applying_deltas();
         assert_eq!(action, WorkspaceAction::None);
@@ -3891,6 +3922,53 @@ mod tests {
         assert_eq!(reopened.id, draft.id);
         assert_eq!(reopened.customer, Some(customer.id));
         assert!(workspace.message.is_none());
+    }
+
+    #[test]
+    fn the_device_switch_remembers_and_forgets() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let session = Session::create(
+            dir.path().join("bonk.db"),
+            dir.path().join("keystore.bin"),
+            "passphrase",
+        )
+        .unwrap();
+        let device = store::device::MemoryStore::default();
+        let mut workspace = Workspace::new(&session).unwrap();
+        workspace.security.current = "passphrase".to_owned();
+        workspace.device_remembered = false;
+
+        workspace.apply_device_toggle(&session, &device, true);
+        assert!(workspace.device_remembered, "the switch follows the store");
+        assert!(Session::device_ready(session.keystore_path(), &device));
+        assert!(workspace.message.as_ref().is_some_and(|message| !message.error));
+        assert!(
+            workspace.security.current.is_empty(),
+            "remembering a device wipes the passphrase it was given"
+        );
+
+        workspace.apply_device_toggle(&session, &device, false);
+        assert!(!workspace.device_remembered);
+        assert!(!Session::device_ready(session.keystore_path(), &device));
+    }
+
+    #[test]
+    fn turning_the_switch_on_needs_the_passphrase() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let session = Session::create(
+            dir.path().join("bonk.db"),
+            dir.path().join("keystore.bin"),
+            "passphrase",
+        )
+        .unwrap();
+        let device = store::device::MemoryStore::default();
+        let mut workspace = Workspace::new(&session).unwrap();
+        workspace.device_remembered = false;
+
+        workspace.apply_device_toggle(&session, &device, true);
+        assert!(!workspace.device_remembered, "nothing was stored");
+        assert!(!Session::device_ready(session.keystore_path(), &device));
+        assert!(workspace.message.as_ref().is_some_and(|message| message.error));
     }
 
     #[test]

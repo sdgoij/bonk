@@ -1277,9 +1277,24 @@ pub mod security {
         "Remember this device"
     }
 
-    /// Stops this device from keeping the key.
-    pub fn forget_action(_: Language) -> &'static str {
-        "Forget this device"
+    /// Tooltip when the switch is off.
+    pub fn remember_hint(_: Language) -> &'static str {
+        "Keep the archive key in this machine's credential store, so your login opens it instead of the passphrase."
+    }
+
+    /// Tooltip when the switch is on.
+    pub fn forget_hint(_: Language) -> &'static str {
+        "Remove the stored key; the passphrase opens this archive again."
+    }
+
+    /// What the switch means while it is on.
+    pub fn device_on_note(_: Language) -> &'static str {
+        "On — this archive opens with your login, not the passphrase."
+    }
+
+    /// What the switch means while it is off.
+    pub fn device_off_note(_: Language) -> &'static str {
+        "Off — the passphrase opens this archive."
     }
 
     /// The device now holds the key.
