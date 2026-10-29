@@ -35,7 +35,7 @@ mod unix {
     use std::os::unix::fs::PermissionsExt;
     use std::path::{Path, PathBuf};
 
-    use store::{Database, KdfParams, KeyStore, backup, permissions};
+    use store::{Database, KdfParams, KeyStore, permissions};
     use tempfile::TempDir;
 
     fn mode(path: &Path) -> u32 {
@@ -111,7 +111,8 @@ mod unix {
         let database = Database::create(&database_path, &keystore).unwrap();
 
         let backups = root.path().join("backups");
-        let report = backup(&database, &keystore, &backups, "2026-10-27T12:00:00Z", 3).unwrap();
+        // `backup` is also a module name, so the function is named by its path.
+        let report = store::backup::backup(&database, &keystore, &backups, "2026-10-27T12:00:00Z", 3).unwrap();
 
         assert_eq!(mode(&backups), 0o700);
         assert_eq!(mode(&report.path), 0o600);

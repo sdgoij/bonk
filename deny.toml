@@ -13,6 +13,10 @@ yanked = "deny"
 [licenses]
 version = 2
 confidence-threshold = 0.9
+# Every crate here says `publish = false`, so nothing in this workspace is
+# distributed as a crate; ignoring private crates keeps that distinction visible
+# rather than relying on every manifest staying perfectly licensed.
+private = { ignore = true }
 allow = [
     "MIT",
     "MIT-0",
@@ -30,6 +34,10 @@ allow = [
     "OpenSSL",
     "BSL-1.0",
     "Unlicense",
+    # The fonts egui embeds for a window without a system font stack. Both are
+    # free licences, and both are already inside every egui binary.
+    "OFL-1.1",
+    "Ubuntu-font-1.0",
 ]
 
 [bans]

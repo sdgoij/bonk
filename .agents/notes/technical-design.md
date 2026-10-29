@@ -1699,7 +1699,7 @@ members = [
 [workspace.package]
 edition = "2024"
 rust-version = "1.98"
-license = "Proprietary"
+license = "MIT OR Apache-2.0"
 publish = false
 ```
 

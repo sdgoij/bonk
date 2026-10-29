@@ -10,7 +10,16 @@ fn bonk() -> Command {
     Command::new(env!("CARGO_BIN_EXE_bonk"))
 }
 
+/// Runs the binary and returns stdout, asserting it succeeded.
 fn bonk_ok(args: &[&str]) -> String {
+    bonk_split(args).0
+}
+
+/// Runs the binary and returns stdout and stderr separately, asserting success.
+///
+/// Warnings are written to stderr — a missing renderer is not an error — so a
+/// test that looks for one has to read the other stream.
+fn bonk_split(args: &[&str]) -> (String, String) {
     let output = bonk().args(args).output().expect("binary runs");
     assert!(
         output.status.success(),
@@ -18,7 +27,10 @@ fn bonk_ok(args: &[&str]) -> String {
         String::from_utf8_lossy(&output.stderr),
         String::from_utf8_lossy(&output.stdout)
     );
-    String::from_utf8_lossy(&output.stdout).into_owned()
+    (
+        String::from_utf8_lossy(&output.stdout).into_owned(),
+        String::from_utf8_lossy(&output.stderr).into_owned(),
+    )
 }
 
 fn field(output: &str, prefix: &str) -> String {
@@ -602,7 +614,7 @@ fn full_slice_through_the_cli() {
 
     let mut args = vec!["issue", &draft, "--out", out];
     args.extend(common);
-    let issued_output = bonk_ok(&args);
+    let (issued_output, issued_warnings) = bonk_split(&args);
     assert!(issued_output.contains("issued: 2026-0001"), "{issued_output}");
 
     let xml = std::fs::read_to_string(output_dir.join("2026-0001.xml")).expect("ubl file");
@@ -620,7 +632,10 @@ fn full_slice_through_the_cli() {
         assert!(issued_output.contains("pdf:"), "{issued_output}");
     } else {
         assert!(!pdf_path.exists(), "PDF written without typst");
-        assert!(issued_output.contains("warning: PDF not rendered"), "{issued_output}");
+        assert!(
+            issued_warnings.contains("warning: PDF not rendered"),
+            "{issued_warnings}"
+        );
     }
 
     // Evidence for the invoice we just issued, taken while the number still
