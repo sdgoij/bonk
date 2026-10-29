@@ -1009,14 +1009,23 @@ impl Workspace {
 
             for (index, hit) in self.search.results.iter().enumerate() {
                 let selected = self.search.opened.as_ref().is_some_and(|view| view.id == hit.id);
-                let number = if hit.status == DocumentStatus::Draft {
-                    text::find::draft_number(language)
+                // A draft has no number and no side yet; the status column says
+                // what it is, so the other two stay blank rather than repeating
+                // it in a column that means something else.
+                let draft = hit.status == DocumentStatus::Draft;
+                let number = if draft {
+                    text::find::no_value(language)
                 } else {
                     hit.number.as_str()
                 };
+                let side = if draft {
+                    text::find::no_value(language)
+                } else {
+                    text::find::direction(language, hit.direction)
+                };
                 let cells = [
                     Cell::left(number).strong(),
-                    Cell::left(text::find::direction(language, hit.direction)).muted(),
+                    Cell::left(side).muted(),
                     Cell::left(hit.party.as_str()),
                     Cell::left(hit.issue_date.to_iso_string()),
                     Cell::right(format!("{} {}", money_text(hit.gross), hit.currency.as_str())),

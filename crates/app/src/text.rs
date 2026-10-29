@@ -320,9 +320,9 @@ pub mod find {
         }
     }
 
-    /// The number column for a draft, which has no number yet.
-    pub fn draft_number(_: Language) -> &'static str {
-        "(draft)"
+    /// What an empty cell shows.
+    pub fn no_value(_: Language) -> &'static str {
+        "—"
     }
 
     /// Result columns, in order.
