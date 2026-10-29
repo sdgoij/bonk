@@ -2,3 +2,6 @@
 *.sh text eol=lf
 *.typ text eol=lf
 .githooks/* text eol=lf
+# The build hashes these files; a CRLF checkout would change the bytes that
+# `include_str!` embeds and make the manifest look wrong on Windows only.
+crates/conformance/codelists/** text eol=lf

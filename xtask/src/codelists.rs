@@ -263,15 +263,17 @@ fn check_bundle(directory: &Path, manifest: &str, files: &[(&Bundle, String)]) -
     let mut stale = Vec::new();
     for (bundle, content) in files {
         let path = directory.join(bundle.file);
+        // A checkout may have given the file the platform's line endings; the
+        // comparison is about the codes, not about how they were transported.
         match fs::read_to_string(&path) {
-            Ok(committed) if &committed == content => {}
+            Ok(committed) if committed.replace("\r\n", "\n") == *content => {}
             Ok(_) => stale.push(bundle.file),
             Err(_) => stale.push(bundle.file),
         }
     }
     let manifest_path = directory.join("manifest.json");
     match fs::read_to_string(&manifest_path) {
-        Ok(committed) if committed == manifest => {}
+        Ok(committed) if committed.replace("\r\n", "\n") == manifest => {}
         _ => stale.push("manifest.json"),
     }
 

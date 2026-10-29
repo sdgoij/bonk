@@ -162,6 +162,17 @@ mod tests {
         Sha256::digest(bytes).iter().map(|byte| format!("{byte:02x}")).collect()
     }
 
+    /// The content as generated, whichever way git checked the file out.
+    ///
+    /// The manifest hashes the text the extractor wrote, and the extractor
+    /// always writes `\n`. A checkout on a platform with native line endings
+    /// turns those into `\r\n`, which would otherwise make the embedded bytes
+    /// disagree with the manifest on Windows and agree on Linux for no reason a
+    /// reader could see.
+    fn normalised(raw: &str) -> String {
+        raw.replace("\r\n", "\n")
+    }
+
     fn manifest() -> serde_json::Value {
         serde_json::from_str(MANIFEST).expect("the bundle manifest is valid JSON")
     }
@@ -178,7 +189,7 @@ mod tests {
             assert_eq!(entry["name"].as_str(), Some(codelist.file()));
             assert_eq!(
                 entry["sha256"].as_str(),
-                Some(sha256_hex(codelist.bundle().raw.as_bytes()).as_str()),
+                Some(sha256_hex(normalised(codelist.bundle().raw).as_bytes()).as_str()),
                 "{} does not match its manifest hash",
                 codelist.file()
             );
