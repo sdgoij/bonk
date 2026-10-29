@@ -1501,7 +1501,10 @@ impl Workspace {
         // button it cannot use, nor a forgotten one a "forget" button.
         let mut remembered = self.device_remembered;
         let toggle = ui
-            .toggle_value(&mut remembered, text::security::remember_action(language))
+            .toggle_value(
+                &mut remembered,
+                text::security::device_action(self.device_remembered, language),
+            )
             .on_hover_text(if self.device_remembered {
                 text::security::forget_hint(language)
             } else {

@@ -1277,6 +1277,24 @@ pub mod security {
         "Remember this device"
     }
 
+    /// Stops this device from keeping the key.
+    pub fn forget_action(_: Language) -> &'static str {
+        "Forget this device"
+    }
+
+    /// The switch's label: what pressing it will do.
+    ///
+    /// The switch already shows the state by being filled or not; the words say
+    /// which way it moves, so a remembered device offers to forget and a
+    /// forgotten one offers to remember.
+    pub fn device_action(remembered: bool, language: Language) -> &'static str {
+        if remembered {
+            forget_action(language)
+        } else {
+            remember_action(language)
+        }
+    }
+
     /// Tooltip when the switch is off.
     pub fn remember_hint(_: Language) -> &'static str {
         "Keep the archive key in this machine's credential store, so your login opens it instead of the passphrase."
@@ -1316,6 +1334,13 @@ pub mod security {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_device_switch_says_what_it_will_do() {
+        let language = Language::default();
+        assert_eq!(security::device_action(false, language), "Remember this device");
+        assert_eq!(security::device_action(true, language), "Forget this device");
+    }
 
     #[test]
     fn every_level_has_its_own_word() {
