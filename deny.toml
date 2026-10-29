@@ -9,6 +9,15 @@ all-features = true
 [advisories]
 version = 2
 yanked = "deny"
+ignore = [
+    # Unmaintained, not vulnerable. zvariant_derive reaches us through the Linux
+    # desktop stacks only — atspi for screen readers, and the Secret Service
+    # store inside keyring — and both still build on zbus 5, which has no release
+    # on 6 yet. The advisory is about the crate being folded into zbus, not about
+    # a defect, and the code never compiles into the Windows or macOS binaries.
+    # Revisit when accesskit and keyring move to zbus 6.
+    "RUSTSEC-2026-0372",
+]
 
 [licenses]
 version = 2
