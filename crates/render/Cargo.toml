@@ -10,9 +10,15 @@ publish = false
 crux.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-tempfile.workspace = true
 thiserror.workspace = true
 time.workspace = true
+
+embedded-typst.workspace = true
+typst.workspace = true
+typst-layout.workspace = true
+typst-pdf.workspace = true
+typst-render.workspace = true
+tiny-skia.workspace = true
 
 [lints]
 workspace = true

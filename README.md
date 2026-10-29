@@ -12,9 +12,9 @@ Blocking findings cannot be suppressed. The UBL writer emits exemption reasons
 and delivery data for the standard, zero-rated, exempt, reverse-charge,
 intra-community, export, and outside-scope categories. The domain core, encrypted
 keystore, migrations, CLI, GUI workspace, deterministic UBL writer, and visual PDF
-via the Typst CLI all work end to end. A 20-invoice corpus and a 7-category VAT
-matrix pass Mustangproject against EN 16931 and Peppol BIS 3.0 with zero
-failures.
+via the embedded Typst compiler all work end to end. A 20-invoice corpus and a
+7-category VAT matrix pass Mustangproject against EN 16931 and Peppol BIS 3.0
+with zero failures.
 
 Design documents live in [`.agents/notes/`](.agents/notes/README.md):
 
@@ -48,7 +48,9 @@ sh tools/cargo-strawberry.sh test --workspace
 ```
 
 Set `STRAWBERRY_PERL_BIN` if it is not installed at `C:\Strawberry`. A cold
-build takes about six minutes (OpenSSL); later builds are incremental.
+build takes about ten minutes — OpenSSL, and Typst with its fonts — and later
+builds are incremental. The release binary is about 70 MB for the same reason:
+the PDF compiler and the fonts the template uses are inside it.
 
 **macOS / Linux:** the system Perl is sufficient.
 
@@ -319,16 +321,18 @@ Line format: `name|quantity|unit_price|rate[|category[|unit[|exemption_code[|exe
 ```
 
 Intra-community supply also needs `--delivery YYYY-MM-DD`; the deliver-to country
-is taken from the customer address. `issue` writes `<number>.xml` and, when Typst
-is installed, `<number>.pdf`; both are stored as artefacts. `--language nl` prints
-the Dutch form labels and anything else in English; the default follows the
-seller's locale. `verify` recomputes
-the audit chain, every artefact hash, and every stored payload — imported files
-included — and reports unreferenced blobs without failing on them.
+is taken from the customer address. `issue` writes `<number>.xml` and
+`<number>.pdf`; both are stored as artefacts. `--language nl` prints the Dutch
+form labels and anything else in English; the default follows the seller's
+locale. `verify` recomputes the audit chain, every artefact hash, and every
+stored payload — imported files included — and reports unreferenced blobs without
+failing on them.
 
-PDF rendering shells out to `typst` 0.14 (override with `BONK_TYPST`). If Typst
-is unavailable, issuing still succeeds and prints a warning; the UBL artefact is
-unaffected.
+PDF rendering compiles the Typst template in-process: Typst is linked into the
+binary, together with the fonts the template uses, so nothing has to be installed
+and the same invoice produces the same bytes on every machine. If the template
+fails to compile, issuing still succeeds and prints a warning; the UBL artefact
+is unaffected.
 
 The printed document's labels are chosen per document: English or Dutch, defaulting
 from the seller's locale. That is the language of the form ("Factuur aan", "BTW",

@@ -221,6 +221,8 @@ with live totals and BT-tagged findings, save, issue) shares the UBL renderer,
 renders the same PDF, and can save it from the Issued screen. PDF bytes are
 deterministic for the same input. 132 tests workspace-wide.
 
+**Typst is linked in (2026-10-29).** The renderer used to shell out to the `typst` CLI through a temporary directory, which made issuing an invoice depend on a tool installed on the machine, failed on CI runners without it, and made the artefact bytes a property of the host. `render::TypstRenderer` now compiles the same template in-process through `embedded-typst`: the world is the template plus one in-memory `data.json`, the fonts are Typst's bundled set rather than the system's, and the creation time comes from the issue date as before. The preview is a PNG rasterised from that same compiled document with `typst-render`, so it cannot disagree with the PDF. Artefacts record `typst-0.15`; the cost is a much heavier build and a larger binary.
+
 External validation: `tools/validate-m1.sh` generates 20 varied invoices and
 runs Mustangproject 2.17.0 against every UBL file. **20/20 pass EN 16931 and
 Peppol BIS 3.0 with zero failed rules.** The corpus is generated through the CLI

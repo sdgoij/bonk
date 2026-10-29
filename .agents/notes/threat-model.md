@@ -99,7 +99,7 @@ the machine, not a machine an attacker is already logged into.
 | Encrypted or malformed PDF | Refused with a reason; page content is never parsed, so a visual-only PDF is simply not an invoice | OCR is out of scope |
 | Document with a misleading XMP packet | `fx:DocumentFileName` and `fx:DocumentType` must agree with the attachment | Both are attacker-controlled; the check catches inconsistency, not intent |
 | Parser crash on hostile bytes | Property tests and mutation tests assert the readers answer or refuse and never panic; parser paths are also bounded by design | Not yet running libFuzzer (see O4) |
-| Imported document triggers network or code | There is no network code in the binary and nothing executes imported content | `typst` is a local binary invoked for PDF rendering only |
+| Imported document triggers network or code | There is no network code in the binary and nothing executes imported content | Typst is a linked library, not an invoked binary: it renders our template only, and its world is the template and one in-memory JSON file |
 | Phishing inside an invoice | Content is displayed as text; nothing auto-opens links or attachments | The user can still be socially engineered by what they read |
 
 ### 4.5 Outbound artefacts

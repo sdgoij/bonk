@@ -159,16 +159,17 @@ pub struct LineData {
 
 /// Rendering failures.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum RenderError {
-    /// The `typst` executable was not found.
-    #[error("typst is not installed or not on PATH (set BONK_TYPST to override)")]
-    ToolMissing,
-    /// Typst rejected the document.
-    #[error("typst failed: {0}")]
+    /// The template did not compile, or Typst refused to export it.
+    #[error("typst rejected the document: {0}")]
     Typst(String),
-    /// Filesystem failure while staging the template.
-    #[error("I/O error: {0}")]
-    Io(#[from] std::io::Error),
+    /// The template produced no pages, so there is nothing to export.
+    #[error("the template produced no pages")]
+    NoPages,
+    /// Encoding the raster preview failed.
+    #[error("could not encode the preview: {0}")]
+    Png(String),
     /// Serialising the template data failed.
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
@@ -189,140 +190,117 @@ pub trait PdfRenderer {
 
     /// Renders the document.
     fn render(&self, data: &InvoiceData) -> Result<Vec<u8>, RenderError>;
+
+    /// Renders the first page as a PNG, for a preview inside the window.
+    fn render_png(&self, data: &InvoiceData, ppi: f32) -> Result<Vec<u8>, RenderError>;
 }
 
-/// Renders through the Typst command-line tool.
-#[derive(Clone, Debug)]
-pub struct TypstCliRenderer {
-    binary: String,
+/// The Typst version compiled into the binary, recorded on every artefact.
+pub const RENDERER_VERSION: &str = "typst-0.15";
+
+/// Renders with Typst as a library.
+///
+/// The compiler, the template, and the fonts it needs all live in the binary,
+/// so issuing an invoice needs nothing installed on the machine and produces the
+/// same bytes everywhere. Building the font database is the expensive part, so
+/// one renderer is built per process and shared.
+pub struct TypstRenderer {
+    fonts: std::sync::Arc<embedded_typst::Fonts>,
 }
 
-impl TypstCliRenderer {
-    /// Creates a renderer using a specific binary path or name.
-    pub fn new(binary: impl Into<String>) -> Self {
-        Self { binary: binary.into() }
+impl TypstRenderer {
+    /// Builds the renderer: Typst's bundled fonts, and nothing from the system.
+    ///
+    /// System fonts would make the same invoice render differently on two
+    /// machines, which is exactly what an archive must not do.
+    pub fn new() -> Self {
+        Self {
+            fonts: std::sync::Arc::new(embedded_typst::Fonts::builder().typst_fonts().build()),
+        }
     }
 
-    /// Uses `BONK_TYPST` when set, otherwise `typst` from `PATH`.
-    pub fn from_environment() -> Self {
-        let binary = std::env::var("BONK_TYPST").unwrap_or_else(|_| "typst".to_owned());
-        Self::new(binary)
+    /// Compiles the template with the payload as the file `data.json`.
+    ///
+    /// `sys.inputs.data` names a file, exactly as the Typst CLI was handed it, so
+    /// the template stays usable by hand and by an editor with no renderer in the
+    /// loop.
+    fn compile(&self, data: &InvoiceData) -> Result<typst_layout::PagedDocument, RenderError> {
+        use typst::foundations::{Dict, Str, Value};
+        use typst::syntax::VirtualPath;
+
+        let main = VirtualPath::new("invoice.typ").map_err(|error| RenderError::Typst(error.to_string()))?;
+        let payload = VirtualPath::new("data.json").map_err(|error| RenderError::Typst(error.to_string()))?;
+
+        let world = embedded_typst::EmbeddedWorld::new(main, TEMPLATE, self.fonts.clone())
+            .with_creation_timestamp(creation_timestamp(&data.issue_date));
+        world.add_file(payload, serde_json::to_vec(data)?);
+
+        let mut inputs = Dict::new();
+        inputs.insert(Str::from("data"), Value::Str(Str::from("data.json")));
+        let world = world.with_inputs(inputs);
+
+        typst::compile::<typst_layout::PagedDocument>(&world)
+            .output
+            .map_err(|errors| RenderError::Typst(describe(&errors)))
     }
 }
 
-impl Default for TypstCliRenderer {
+impl Default for TypstRenderer {
     fn default() -> Self {
-        Self::from_environment()
+        Self::new()
     }
 }
 
-impl PdfRenderer for TypstCliRenderer {
+/// The process-wide renderer.
+///
+/// Building the font database is the expensive part, and it does not depend on
+/// the document, so one instance serves every render in the process.
+pub fn renderer() -> &'static TypstRenderer {
+    static RENDERER: std::sync::OnceLock<TypstRenderer> = std::sync::OnceLock::new();
+    RENDERER.get_or_init(TypstRenderer::new)
+}
+
+impl PdfRenderer for TypstRenderer {
     fn renderer_version(&self) -> &str {
-        "typst-cli-0.14"
+        RENDERER_VERSION
     }
 
     fn render(&self, data: &InvoiceData) -> Result<Vec<u8>, RenderError> {
-        render_pdf(&self.binary, data)
+        let document = self.compile(data)?;
+        typst_pdf::pdf(&document, &typst_pdf::PdfOptions::default())
+            .map_err(|errors| RenderError::Typst(describe(&errors)))
+    }
+
+    fn render_png(&self, data: &InvoiceData, ppi: f32) -> Result<Vec<u8>, RenderError> {
+        let document = self.compile(data)?;
+        let page = document.pages().first().ok_or(RenderError::NoPages)?;
+        let options = typst_render::RenderOptions {
+            pixel_per_pt: typst::utils::Scalar::new(pixels_per_point(ppi)),
+            render_bleed: false,
+        };
+        typst_render::render(page, &options)
+            .encode_png()
+            .map_err(|error| RenderError::Png(error.to_string()))
     }
 }
 
-impl TypstCliRenderer {
-    /// Renders the first page as PNG, for a preview inside the window.
-    ///
-    /// The same template that produces the PDF is compiled with Typst's PNG
-    /// export, so what the preview shows is what issuing writes; nothing here
-    /// re-implements the layout.
-    pub fn render_png(&self, data: &InvoiceData, ppi: f32) -> Result<Vec<u8>, RenderError> {
-        render_png(&self.binary, data, ppi)
+/// Joins the diagnostics of a failed compilation into one sentence.
+fn describe(errors: &[typst::diag::SourceDiagnostic]) -> String {
+    let messages: Vec<String> = errors.iter().map(|error| error.message.to_string()).collect();
+    if messages.is_empty() {
+        "unknown error".to_owned()
+    } else {
+        messages.join("; ")
     }
 }
 
-/// Stages the template and data in a temporary directory and compiles them.
-pub fn render_pdf(binary: &str, data: &InvoiceData) -> Result<Vec<u8>, RenderError> {
-    let directory = tempfile::tempdir()?;
-    let data_path = directory.path().join("data.json");
-    let source_path = directory.path().join("invoice.typ");
-    let output_path = directory.path().join("invoice.pdf");
-
-    std::fs::write(&data_path, serde_json::to_vec(data)?)?;
-    std::fs::write(&source_path, TEMPLATE)?;
-
-    // A fixed timestamp keeps the PDF bytes stable for the same invoice.
-    let timestamp = creation_timestamp(&data.issue_date);
-
-    let result = std::process::Command::new(binary)
-        .arg("compile")
-        .arg("--root")
-        .arg(directory.path())
-        .arg("--creation-timestamp")
-        .arg(timestamp.to_string())
-        .arg("--input")
-        .arg("data=data.json")
-        .arg(&source_path)
-        .arg(&output_path)
-        .output();
-
-    let result = match result {
-        Ok(result) => result,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Err(RenderError::ToolMissing);
-        }
-        Err(error) => return Err(error.into()),
-    };
-
-    if !result.status.success() {
-        return Err(RenderError::Typst(
-            String::from_utf8_lossy(&result.stderr).trim().to_owned(),
-        ));
-    }
-
-    Ok(std::fs::read(output_path)?)
-}
-
-/// Compiles the template to a PNG preview of its first page.
+/// Pixels per Typst point for a preview at `ppi`.
 ///
-/// Typst writes one file per page when the output path contains `{p}`; an
-/// invoice template is one page, so page 1 is the whole document.
-pub fn render_png(binary: &str, data: &InvoiceData, ppi: f32) -> Result<Vec<u8>, RenderError> {
-    let directory = tempfile::tempdir()?;
-    let data_path = directory.path().join("data.json");
-    let source_path = directory.path().join("invoice.typ");
-    let output_path = directory.path().join("preview-{p}.png");
-
-    std::fs::write(&data_path, serde_json::to_vec(data)?)?;
-    std::fs::write(&source_path, TEMPLATE)?;
-
-    let result = std::process::Command::new(binary)
-        .arg("compile")
-        .arg("--root")
-        .arg(directory.path())
-        .arg("--creation-timestamp")
-        .arg(creation_timestamp(&data.issue_date).to_string())
-        .arg("--input")
-        .arg("data=data.json")
-        .arg("--format")
-        .arg("png")
-        .arg("--ppi")
-        .arg(format!("{ppi}"))
-        .arg(&source_path)
-        .arg(&output_path)
-        .output();
-
-    let result = match result {
-        Ok(result) => result,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Err(RenderError::ToolMissing);
-        }
-        Err(error) => return Err(error.into()),
-    };
-
-    if !result.status.success() {
-        return Err(RenderError::Typst(
-            String::from_utf8_lossy(&result.stderr).trim().to_owned(),
-        ));
-    }
-
-    Ok(std::fs::read(directory.path().join("preview-1.png"))?)
+/// Typst measures in points, 1/72 inch. Rasterising is the one place in this
+/// crate that needs floating point; it never touches an amount.
+#[allow(clippy::float_arithmetic)]
+fn pixels_per_point(ppi: f32) -> f64 {
+    f64::from(ppi) / 72.0
 }
 
 /// Midnight UTC on the issue date, as a UNIX timestamp. Zero if unparseable.
@@ -389,63 +367,36 @@ mod tests {
         assert_eq!(english.net, "Net");
     }
 
+    /// The eight bytes every PNG starts with, spelled out so no escape can be
+    /// mangled on the way into this file.
+    const PNG_MAGIC: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
+
     #[test]
-    fn template_compiles_without_external_data_for_editors() {
-        let directory = tempfile::tempdir().unwrap();
-        let source = directory.path().join("invoice.typ");
-        let output = directory.path().join("preview.pdf");
-        std::fs::write(&source, TEMPLATE).unwrap();
-
-        let result = std::process::Command::new("typst")
-            .arg("compile")
-            .arg("--root")
-            .arg(directory.path())
-            .arg(&source)
-            .arg(&output)
-            .output();
-
-        let result = match result {
-            Ok(result) => result,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                eprintln!("skipping: typst is not installed");
-                return;
-            }
-            Err(error) => panic!("typst failed to start: {error}"),
-        };
-        assert!(
-            result.status.success(),
-            "preview compile failed: {}",
-            String::from_utf8_lossy(&result.stderr)
-        );
-        assert!(std::fs::read(&output).unwrap().starts_with(b"%PDF-"));
+    fn renders_a_pdf() {
+        let renderer = TypstRenderer::new();
+        let pdf = renderer.render(&sample()).expect("render");
+        assert!(pdf.starts_with(b"%PDF-"), "not a PDF");
+        assert!(pdf.len() > 1_000, "suspiciously small PDF: {}", pdf.len());
+        assert_eq!(renderer.renderer_version(), RENDERER_VERSION);
     }
 
     #[test]
-    fn renders_a_pdf_when_typst_is_installed() {
-        match render_pdf("typst", &sample()) {
-            Ok(bytes) => {
-                assert!(bytes.starts_with(b"%PDF-"), "not a PDF");
-                assert!(bytes.len() > 1_000, "suspiciously small PDF: {}", bytes.len());
-            }
-            Err(RenderError::ToolMissing) => {
-                eprintln!("skipping: typst is not installed");
-            }
-            Err(other) => panic!("render failed: {other}"),
-        }
-    }
-
-    #[test]
-    fn output_is_deterministic_when_typst_is_installed() {
-        let first = match render_pdf("typst", &sample()) {
-            Ok(bytes) => bytes,
-            Err(RenderError::ToolMissing) => {
-                eprintln!("skipping: typst is not installed");
-                return;
-            }
-            Err(other) => panic!("render failed: {other}"),
-        };
-        let second = render_pdf("typst", &sample()).expect("second render");
+    fn output_is_deterministic() {
+        let renderer = TypstRenderer::new();
+        let first = renderer.render(&sample()).expect("first render");
+        let second = renderer.render(&sample()).expect("second render");
         assert_eq!(first, second, "PDF bytes must be stable for the same input");
+    }
+
+    #[test]
+    fn the_same_invoice_printing_dutch_is_a_different_document() {
+        let renderer = TypstRenderer::new();
+        let english = renderer.render(&sample()).expect("english");
+        let mut dutch = sample();
+        dutch.labels = Language::Dutch.labels();
+        dutch.title = Language::Dutch.document_title(false).to_owned();
+        let dutch = renderer.render(&dutch).expect("dutch");
+        assert_ne!(english, dutch, "the printed language reaches the page");
     }
 
     #[test]
@@ -456,22 +407,9 @@ mod tests {
     }
 
     #[test]
-    fn missing_tool_is_reported_clearly() {
-        let error = render_pdf("definitely-not-typst", &sample()).unwrap_err();
-        assert!(matches!(error, RenderError::ToolMissing));
-    }
-
-    #[test]
-    fn previews_a_png_when_typst_is_installed() {
-        match render_png("typst", &sample(), 96.0) {
-            Ok(bytes) => {
-                assert_eq!(&bytes[..8], b"\x89PNG\r\n\x1a\n", "not a PNG");
-                assert!(bytes.len() > 1_000, "suspiciously small PNG: {}", bytes.len());
-            }
-            Err(RenderError::ToolMissing) => {
-                eprintln!("skipping: typst is not installed");
-            }
-            Err(other) => panic!("preview failed: {other}"),
-        }
+    fn previews_a_png() {
+        let png = TypstRenderer::new().render_png(&sample(), 96.0).expect("preview");
+        assert!(png.starts_with(&PNG_MAGIC), "not a PNG");
+        assert!(png.len() > 1_000, "suspiciously small PNG: {}", png.len());
     }
 }

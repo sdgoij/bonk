@@ -1,8 +1,9 @@
 #set page(paper: "a4", margin: (x: 2cm, y: 1.8cm))
 #set text(size: 9.5pt)
 
-// The renderer passes the real payload through `--input data=data.json`.
-// The inline payload keeps the template compilable by editors and previewers.
+// The renderer hands the payload over as the file `data.json` and names it in
+// `sys.inputs.data`. The inline payload keeps the template compilable by editors
+// and previewers.
 #let data = if "data" in sys.inputs {
   json(sys.inputs.data)
 } else {

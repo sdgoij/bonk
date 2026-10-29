@@ -20,6 +20,7 @@ plain = ["app/plain", "store/plain", "import/plain"]
 app = { path = "../app", default-features = false }
 crux.workspace = true
 import = { path = "../import", default-features = false }
+render = { path = "../render" }
 store = { path = "../store", default-features = false }
 
 clap.workspace = true

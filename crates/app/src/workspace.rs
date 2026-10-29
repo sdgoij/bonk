@@ -30,6 +30,7 @@ use crate::text::editor::Field;
 use crate::text::find::Fact;
 use crate::text::{self, Language};
 use crate::theme;
+use render::PdfRenderer as _;
 
 const CATEGORIES: [VatCategory; 6] = [
     VatCategory::Standard,
@@ -2057,7 +2058,7 @@ impl Workspace {
             &totals,
             editor.document_language,
         );
-        let bytes = match render::TypstCliRenderer::from_environment().render_png(&data, 110.0) {
+        let bytes = match render::renderer().render_png(&data, 110.0) {
             Ok(bytes) => bytes,
             Err(error) => {
                 self.message = Some(Message::error(text::editor::preview_failed(
@@ -2586,7 +2587,7 @@ impl Workspace {
                             issued.id,
                             "pdf",
                             &bytes,
-                            "typst-cli-0.14",
+                            render::RENDERER_VERSION,
                             &now,
                         ) {
                             Ok(hash) => hash,

@@ -12,14 +12,6 @@ fn bonk() -> Command {
 
 /// Runs the binary and returns stdout, asserting it succeeded.
 fn bonk_ok(args: &[&str]) -> String {
-    bonk_split(args).0
-}
-
-/// Runs the binary and returns stdout and stderr separately, asserting success.
-///
-/// Warnings are written to stderr — a missing renderer is not an error — so a
-/// test that looks for one has to read the other stream.
-fn bonk_split(args: &[&str]) -> (String, String) {
     let output = bonk().args(args).output().expect("binary runs");
     assert!(
         output.status.success(),
@@ -27,10 +19,7 @@ fn bonk_split(args: &[&str]) -> (String, String) {
         String::from_utf8_lossy(&output.stderr),
         String::from_utf8_lossy(&output.stdout)
     );
-    (
-        String::from_utf8_lossy(&output.stdout).into_owned(),
-        String::from_utf8_lossy(&output.stderr).into_owned(),
-    )
+    String::from_utf8_lossy(&output.stdout).into_owned()
 }
 
 fn field(output: &str, prefix: &str) -> String {
@@ -68,14 +57,6 @@ fn run_init(dir: &TempDir) -> (String, String) {
         database.to_str().expect("temp path is UTF-8").to_owned(),
         keystore.to_str().expect("temp path is UTF-8").to_owned(),
     )
-}
-
-fn typst_available() -> bool {
-    let binary = std::env::var("BONK_TYPST").unwrap_or_else(|_| "typst".to_owned());
-    Command::new(binary)
-        .arg("--version")
-        .output()
-        .is_ok_and(|output| output.status.success())
 }
 
 #[test]
@@ -614,7 +595,7 @@ fn full_slice_through_the_cli() {
 
     let mut args = vec!["issue", &draft, "--out", out];
     args.extend(common);
-    let (issued_output, issued_warnings) = bonk_split(&args);
+    let issued_output = bonk_ok(&args);
     assert!(issued_output.contains("issued: 2026-0001"), "{issued_output}");
 
     let xml = std::fs::read_to_string(output_dir.join("2026-0001.xml")).expect("ubl file");
@@ -624,19 +605,11 @@ fn full_slice_through_the_cli() {
         "{xml}"
     );
 
+    // Typst is linked into the binary, so the PDF is written wherever this runs.
     let pdf_path = output_dir.join("2026-0001.pdf");
-    let pdf_expected = typst_available();
-    if pdf_expected {
-        let pdf = std::fs::read(&pdf_path).expect("pdf file");
-        assert!(pdf.starts_with(b"%PDF-"), "not a PDF");
-        assert!(issued_output.contains("pdf:"), "{issued_output}");
-    } else {
-        assert!(!pdf_path.exists(), "PDF written without typst");
-        assert!(
-            issued_warnings.contains("warning: PDF not rendered"),
-            "{issued_warnings}"
-        );
-    }
+    let pdf = std::fs::read(&pdf_path).expect("pdf file");
+    assert!(pdf.starts_with(b"%PDF-"), "not a PDF");
+    assert!(issued_output.contains("pdf:"), "{issued_output}");
 
     // Evidence for the invoice we just issued, taken while the number still
     // points at one document; the check needs no keystore at all.
@@ -683,9 +656,7 @@ fn full_slice_through_the_cli() {
     let verified = bonk_ok(&args);
     assert!(verified.contains("audit:    4 events verified"), "{verified}");
     assert!(verified.contains("hashes verified"), "{verified}");
-    if pdf_expected {
-        assert!(verified.contains("artefacts: 4 hashes verified"), "{verified}");
-    }
+    assert!(verified.contains("artefacts: 4 hashes verified"), "{verified}");
 
     // Importing our own file back proves the inbound path end to end: it lands in
     // the same table with the same number and does not collide with the outbound

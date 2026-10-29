@@ -1185,7 +1185,7 @@ fn run(cli: Cli) -> Result<(), CliError> {
                         issued.id,
                         "pdf",
                         &pdf,
-                        "typst-cli-0.14",
+                        render::RENDERER_VERSION,
                         &now,
                     ) {
                         Ok(hash) => println!("pdf:    {} ({hash})", pdf_path.display()),

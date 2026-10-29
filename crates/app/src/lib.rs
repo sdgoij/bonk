@@ -377,8 +377,8 @@ pub fn render_issue(view: &IssueView<'_>) -> Result<Vec<u8>, StoreError> {
 
 /// Renders the visual invoice PDF for an issued document.
 ///
-/// Uses the Typst CLI in M1; the template is shared data, so the backend can
-/// become the embedded Typst library when PDF/A-3 work starts.
+/// Typst is linked in, so this needs nothing installed and produces the same
+/// bytes wherever it runs.
 pub fn invoice_pdf(
     number: &str,
     draft: &InvoiceDraft,
@@ -389,15 +389,15 @@ pub fn invoice_pdf(
 ) -> Result<Vec<u8>, StoreError> {
     let data = pdf_data(number, draft, seller, customer, totals, language);
 
-    render::TypstCliRenderer::from_environment()
+    render::renderer()
         .render(&data)
         .map_err(|error| StoreError::Render(error.to_string()))
 }
 
 /// The payload handed to the template.
 ///
-/// Kept apart from the renderer so the shape can be checked without shelling out
-/// to Typst, and so the words the document prints are decided in one place.
+/// Kept apart from the renderer so the shape can be checked without compiling a
+/// document, and so the words the document prints are decided in one place.
 pub fn pdf_data(
     number: &str,
     draft: &InvoiceDraft,
