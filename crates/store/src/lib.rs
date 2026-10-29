@@ -42,12 +42,12 @@ pub use integrity::IntegrityReport;
 pub use keystore::{KdfParams, KeyStore};
 pub use repo::{
     CustomerRecord, Direction, DocumentRecord, DocumentStatus, ImportSource, IssueRequest, IssueView, IssuedReference,
-    ReceivedDocument, ReceivedLine, ReceivedSummary, SEARCH_LIMIT, SearchHit, SearchRequest, SellerRecord, Suppression,
-    advance_status, attach_artefact, credit_note_for, document_status, find_import_by_payload, find_inbound_number,
-    find_issued_reference, first_seller, insert_customer, insert_draft, insert_seller, issue_draft, list_customers,
-    list_received, list_suppressions, load_customer, load_draft, load_seller, now_rfc3339, record_received,
-    resolve_customer, resolve_document, resolve_received, save_draft, save_suppression, search, set_supplier_match,
-    update_customer, verify_artefacts,
+    ReceivedDocument, ReceivedLine, ReceivedSummary, SEARCH_LIMIT, SearchCounts, SearchHit, SearchRequest,
+    SellerRecord, Suppression, advance_status, attach_artefact, credit_note_for, document_status,
+    find_import_by_payload, find_inbound_number, find_issued_reference, first_seller, insert_customer, insert_draft,
+    insert_seller, issue_draft, list_customers, list_received, list_suppressions, load_customer, load_draft,
+    load_seller, now_rfc3339, record_received, resolve_customer, resolve_document, resolve_received, save_draft,
+    save_suppression, search, search_counts, set_supplier_match, update_customer, verify_artefacts,
 };
 pub use saved::SavedSearch;
 pub use support::SupportSummary;

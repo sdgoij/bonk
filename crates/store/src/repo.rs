@@ -1286,55 +1286,24 @@ pub fn search(
         return Ok(hits);
     }
 
-    let expression = match request.query {
-        Some(query) => Some(match_expression(query)?),
-        None => None,
-    };
+    let filters = document_filters(owner_id, request)?;
 
     // The index holds one row per document, so it is the party name's single
     // definition for both a search and a plain listing. Status is the latest
     // event, or the state the document was recorded in when it has none.
-    let mut sql = format!(
+    let sql = format!(
         "SELECT d.id, d.direction, d.number, d.issue_date_local, d.currency, d.totals_json,
                 invoice_fts.party_name,
                 COALESCE({LATEST_STATUS}, d.state) AS status
          FROM invoice_fts
          JOIN document d ON d.id = invoice_fts.document_id
-         WHERE d.owner_id = ?1"
+         WHERE d.owner_id = ?1{}
+         ORDER BY {} LIMIT {SEARCH_LIMIT}",
+        filters.clauses, filters.order
     );
-    let mut parameters = vec![owner_id.to_string()];
-    let mut order = "d.issue_date_local DESC, d.number DESC".to_owned();
-
-    if let Some(expression) = expression {
-        parameters.push(expression);
-        let index = parameters.len();
-        sql.push_str(&format!(" AND invoice_fts MATCH ?{index}"));
-        order = format!("bm25(invoice_fts, 0.0, 5.0, 1.0, 1.0, 1.0), {order}");
-    }
-    if let Some(direction) = request.direction {
-        parameters.push(direction.code().to_owned());
-        let index = parameters.len();
-        sql.push_str(&format!(" AND d.direction = ?{index}"));
-    }
-    if let Some(from) = request.from {
-        parameters.push(from.to_iso_string());
-        let index = parameters.len();
-        sql.push_str(&format!(" AND d.issue_date_local >= ?{index}"));
-    }
-    if let Some(to) = request.to {
-        parameters.push(to.to_iso_string());
-        let index = parameters.len();
-        sql.push_str(&format!(" AND d.issue_date_local <= ?{index}"));
-    }
-    if let Some(status) = request.status {
-        parameters.push(status.code().to_owned());
-        let index = parameters.len();
-        sql.push_str(&format!(" AND COALESCE({LATEST_STATUS}, d.state) = ?{index}"));
-    }
-    sql.push_str(&format!(" ORDER BY {order} LIMIT {SEARCH_LIMIT}"));
 
     let mut statement = conn.prepare(&sql)?;
-    let mut rows = statement.query(rusqlite::params_from_iter(parameters))?;
+    let mut rows = statement.query(rusqlite::params_from_iter(filters.parameters))?;
     while let Some(row) = rows.next()? {
         let id: String = row.get(0)?;
         let direction: String = row.get(1)?;
@@ -1361,6 +1330,110 @@ pub fn search(
         });
     }
     Ok(hits)
+}
+
+/// How many documents a request matches, and how many the archive holds.
+///
+/// The list is capped so one frame does not try to draw an archive of a hundred
+/// thousand rows; the footer still needs the real numbers, and they are cheaper
+/// to count in SQL than to infer from a capped list.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct SearchCounts {
+    /// Documents the current filters match, drafts included.
+    pub matched: u64,
+    /// Documents the archive holds for this seller, drafts included.
+    pub total: u64,
+}
+
+/// Counts what the find panel would list and what there is to list.
+pub fn search_counts(
+    conn: &Connection,
+    owner_id: SellerId,
+    request: &SearchRequest<'_>,
+) -> Result<SearchCounts, StoreError> {
+    let total: i64 = conn.query_row(
+        "SELECT (SELECT COUNT(*) FROM document WHERE owner_id = ?1)
+              + (SELECT COUNT(*) FROM invoice_draft WHERE owner_id = ?1)",
+        [owner_id.to_string()],
+        |row| row.get(0),
+    )?;
+    let total = u64::try_from(total).unwrap_or(0);
+
+    let mut matched = 0_u64;
+    if request.direction != Some(Direction::Inbound) {
+        matched += u64::try_from(draft_hits(conn, owner_id, request)?.len()).unwrap_or(0);
+    }
+    if request.status != Some(DocumentStatus::Draft) {
+        let filters = document_filters(owner_id, request)?;
+        let sql = format!(
+            "SELECT COUNT(*)
+             FROM invoice_fts
+             JOIN document d ON d.id = invoice_fts.document_id
+             WHERE d.owner_id = ?1{}",
+            filters.clauses
+        );
+        let mut statement = conn.prepare(&sql)?;
+        let documents: i64 = statement.query_row(rusqlite::params_from_iter(filters.parameters), |row| row.get(0))?;
+        matched += u64::try_from(documents).unwrap_or(0);
+    }
+    Ok(SearchCounts { matched, total })
+}
+
+/// The clauses, parameters, and order a request adds to the document query.
+///
+/// Shared by the list and the count so the number in the footer cannot describe
+/// a different query than the rows above it.
+struct DocumentFilters {
+    /// Appended after `WHERE d.owner_id = ?1`, each starting with ` AND`.
+    clauses: String,
+    /// Bound in order; the first is the owner.
+    parameters: Vec<String>,
+    /// The `ORDER BY` body.
+    order: String,
+}
+
+fn document_filters(owner_id: SellerId, request: &SearchRequest<'_>) -> Result<DocumentFilters, StoreError> {
+    let expression = match request.query {
+        Some(query) => Some(match_expression(query)?),
+        None => None,
+    };
+
+    let mut clauses = String::new();
+    let mut parameters = vec![owner_id.to_string()];
+    let mut order = "d.issue_date_local DESC, d.number DESC".to_owned();
+
+    if let Some(expression) = expression {
+        parameters.push(expression);
+        let index = parameters.len();
+        clauses.push_str(&format!(" AND invoice_fts MATCH ?{index}"));
+        order = format!("bm25(invoice_fts, 0.0, 5.0, 1.0, 1.0, 1.0), {order}");
+    }
+    if let Some(direction) = request.direction {
+        parameters.push(direction.code().to_owned());
+        let index = parameters.len();
+        clauses.push_str(&format!(" AND d.direction = ?{index}"));
+    }
+    if let Some(from) = request.from {
+        parameters.push(from.to_iso_string());
+        let index = parameters.len();
+        clauses.push_str(&format!(" AND d.issue_date_local >= ?{index}"));
+    }
+    if let Some(to) = request.to {
+        parameters.push(to.to_iso_string());
+        let index = parameters.len();
+        clauses.push_str(&format!(" AND d.issue_date_local <= ?{index}"));
+    }
+    if let Some(status) = request.status {
+        parameters.push(status.code().to_owned());
+        let index = parameters.len();
+        clauses.push_str(&format!(" AND COALESCE({LATEST_STATUS}, d.state) = ?{index}"));
+    }
+
+    Ok(DocumentFilters {
+        clauses,
+        parameters,
+        order,
+    })
 }
 
 /// Finds drafts whose customer, references, or note mention the typed words.

@@ -330,13 +330,11 @@ pub mod find {
         ["Number", "Side", "Party", "Issued", "Gross", "Status"]
     }
 
-    /// Under the results: how many, in what order, and how to open one.
-    pub fn footer(language: Language, count: usize, limit: u32) -> String {
-        match language {
-            Language::English => {
-                format!("{count} document(s), best match or newest first, at most {limit}. Select a row to read it.")
-            }
-        }
+    /// The pinned footer: how many the filters match, and how many the archive
+    /// holds. `42/1337` is easier to read than a sentence, and the second number
+    /// says what a wider search would find.
+    pub fn count_line(_: Language, matched: u64, total: u64) -> String {
+        format!("{matched}/{total}")
     }
 
     /// Above the results, for the first visit.
@@ -1447,8 +1445,7 @@ mod tests {
         assert_eq!(find::columns(language).len(), 6);
         assert_eq!(find::line_columns(language).len(), 6);
 
-        let footer = find::footer(language, 3, 500);
-        assert!(footer.contains('3') && footer.contains("500"), "{footer}");
+        assert_eq!(find::count_line(language, 3, 500), "3/500");
 
         let title = find::document_title(language, "2026-0001", true);
         assert!(title.contains("2026-0001"), "{title}");

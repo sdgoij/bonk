@@ -15,10 +15,10 @@ use crux::{
     UnitCode, VatCategory, VatRate, calculate_totals, has_blocking, validate_draft,
 };
 use store::{
-    CustomerRecord, Direction, DocumentRecord, DocumentStatus, IssueRequest, SavedSearch, SearchHit, SearchRequest,
-    SellerRecord, StoreError, Suppression, archive::DocumentView, attach_artefact, credit_note_for, first_seller,
-    insert_customer, insert_seller, issue_draft, list_customers, list_suppressions, save_draft, save_suppression,
-    search,
+    CustomerRecord, Direction, DocumentRecord, DocumentStatus, IssueRequest, SavedSearch, SearchCounts, SearchHit,
+    SearchRequest, SellerRecord, StoreError, Suppression, archive::DocumentView, attach_artefact, credit_note_for,
+    first_seller, insert_customer, insert_seller, issue_draft, list_customers, list_suppressions, save_draft,
+    save_suppression, search,
 };
 use zeroize::Zeroize;
 
@@ -110,6 +110,9 @@ struct SearchView {
     /// True once a query has run, which is what separates "nothing found" from
     /// "nothing asked yet".
     ran: bool,
+    /// How many documents the current filters match, and how many the archive
+    /// holds. Shown in the footer even when the list is capped.
+    counts: SearchCounts,
     /// Why the last query failed, if it did.
     query_error: Option<String>,
     /// The result the user opened, read back from the archive.
@@ -136,6 +139,7 @@ impl Default for SearchView {
             table: Table::new(&[1.2, 0.8, 2.6, 1.0, 1.1, 1.0]),
             last_request: None,
             ran: false,
+            counts: SearchCounts::default(),
             query_error: None,
             opened: None,
             open_error: None,
@@ -213,6 +217,12 @@ impl SearchView {
                 Err(error)
             }
         };
+        if outcome.is_ok() {
+            match store::search_counts(database.connection(), owner, &request) {
+                Ok(counts) => self.counts = counts,
+                Err(error) => self.query_error = Some(error.to_string()),
+            }
+        }
         // Record the request even on failure: retrying the same impossible
         // query every frame would turn one error into a busy loop.
         self.last_request = Some(self.request_key());
@@ -534,6 +544,10 @@ struct Editor {
     /// True when this composer reopened a draft that is already stored, which is
     /// only used to say so in the heading.
     saved: bool,
+    /// True when the editor is drawn inside its own result row rather than in
+    /// the card above the list. A stored draft belongs to a row; a new invoice
+    /// has no row to belong to.
+    inline: bool,
 }
 
 impl Clone for Editor {
@@ -553,6 +567,7 @@ impl Clone for Editor {
             lines: self.lines.clone(),
             date_popup: self.date_popup,
             saved: self.saved,
+            inline: self.inline,
         }
     }
 }
@@ -574,6 +589,7 @@ impl Editor {
             lines: vec![LineForm::default()],
             date_popup: None,
             saved: false,
+            inline: false,
         }
     }
 
@@ -866,7 +882,9 @@ impl Workspace {
             return;
         };
         let tokens = *theme::palette(ui.ctx());
-        let composing = self.editor.is_some() || self.issued.is_some();
+        // A draft being edited in its row is not the card above the list, so the
+        // new-invoice button stays available next to it.
+        let composing = self.editor.as_ref().is_some_and(|editor| !editor.inline) || self.issued.is_some();
         let mut new_invoice = false;
 
         ui.horizontal(|ui| {
@@ -959,7 +977,7 @@ impl Workspace {
             ui.colored_label(tokens.error, error.as_str());
         }
 
-        if self.editor.is_some() || self.issued.is_some() {
+        if composing {
             let mut close = false;
             let max_height = (ui.available_height() * 0.62).max(240.0);
             egui::Frame::new()
@@ -989,6 +1007,21 @@ impl Workspace {
             ui.add_space(8.0);
         }
 
+        // The footer is pinned to the bottom of the window rather than scrolled
+        // with the rows: how many of how many is a property of the view, not of
+        // where the list happens to be scrolled to.
+        egui::Panel::bottom("find-footer")
+            .frame(egui::Frame::new().inner_margin(egui::Margin::symmetric(0, 6)))
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    let counts = self.search.counts;
+                    theme::value(ui, text::find::count_line(language, counts.matched, counts.total));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.weak(text::find::sort_hint(language));
+                    });
+                });
+            });
+
         let width = (ui.available_width() - ui.spacing().scroll.bar_width).max(320.0);
         if self
             .search
@@ -1000,6 +1033,7 @@ impl Workspace {
 
         let mut toggle = None;
         let mut close_panel = false;
+        let mut close_draft = false;
         let mut save_artefact = None;
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             ui.set_width(width);
@@ -1012,38 +1046,77 @@ impl Workspace {
                 });
             }
 
-            for (index, hit) in self.search.results.iter().enumerate() {
-                let selected = self.search.opened.as_ref().is_some_and(|view| view.id == hit.id);
-                // A draft has no number and no side yet; the status column says
-                // what it is, so the other two stay blank rather than repeating
-                // it in a column that means something else.
-                let draft = hit.status == DocumentStatus::Draft;
-                let number = if draft {
-                    text::find::no_value(language)
-                } else {
-                    hit.number.as_str()
+            // Indexed rather than iterated: the row below an open draft borrows
+            // `self` mutably to draw the editor, and a live borrow of the list
+            // would forbid that. The bound is re-read every pass because saving
+            // a draft from inside the row re-runs the query and can shorten it.
+            let mut index = 0;
+            while index < self.search.results.len() {
+                let (id, draft, selected, cells) = {
+                    let hit = &self.search.results[index];
+                    let selected = self.search.opened.as_ref().is_some_and(|view| view.id == hit.id);
+                    // A draft has no number and no side yet; the status column says
+                    // what it is, so the other two stay blank rather than repeating
+                    // it in a column that means something else.
+                    let draft = hit.status == DocumentStatus::Draft;
+                    let number = if draft {
+                        text::find::no_value(language)
+                    } else {
+                        hit.number.as_str()
+                    };
+                    let side = if draft {
+                        text::find::no_value(language)
+                    } else {
+                        text::find::direction(language, hit.direction)
+                    };
+                    let cells = [
+                        Cell::left(number).strong(),
+                        Cell::left(side).muted(),
+                        Cell::left(hit.party.as_str()),
+                        Cell::left(hit.issue_date.to_iso_string()),
+                        Cell::right(money_text(hit.gross)),
+                        Cell::left(text::find::status(language, hit.status)),
+                    ];
+                    (hit.id, draft, selected, cells)
                 };
-                let side = if draft {
-                    text::find::no_value(language)
-                } else {
-                    text::find::direction(language, hit.direction)
-                };
-                let cells = [
-                    Cell::left(number).strong(),
-                    Cell::left(side).muted(),
-                    Cell::left(hit.party.as_str()),
-                    Cell::left(hit.issue_date.to_iso_string()),
-                    Cell::right(money_text(hit.gross)),
-                    Cell::left(text::find::status(language, hit.status)),
-                ];
                 if self
                     .search
                     .table
                     .row(ui, width, &cells, selected, index % 2 == 1)
                     .clicked()
                 {
-                    toggle = Some(hit.id);
+                    toggle = Some(id);
                 }
+
+                if draft
+                    && let Some(editor) = self.editor.as_ref()
+                    && editor.inline
+                    && editor.id == id
+                {
+                    ui.add_space(2.0);
+                    let mut closed = false;
+                    egui::Frame::new()
+                        .fill(tokens.surface_alt)
+                        .stroke(egui::Stroke::new(1.0, tokens.border))
+                        .corner_radius(6)
+                        .inner_margin(egui::Margin::same(12))
+                        .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                ui.strong(text::editor::draft_heading(language));
+                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                    closed = ui
+                                        .small_button("×")
+                                        .on_hover_text(text::editor::close_composer(language))
+                                        .clicked();
+                                });
+                            });
+                            self.editor_ui(ui, session, focus);
+                            self.preview_ui(ui);
+                        });
+                    close_draft |= closed;
+                    ui.add_space(4.0);
+                }
+
                 if selected {
                     ui.add_space(2.0);
                     let action = egui::Frame::new()
@@ -1063,18 +1136,13 @@ impl Workspace {
                     }
                     ui.add_space(4.0);
                 }
+                index += 1;
             }
 
             if let Some(error) = &self.search.open_error {
                 ui.colored_label(tokens.error, error.as_str());
             }
             ui.add_space(8.0);
-            ui.weak(text::find::sort_hint(language));
-            ui.weak(text::find::footer(
-                language,
-                self.search.results.len(),
-                store::SEARCH_LIMIT,
-            ));
         });
 
         if let Some(id) = toggle {
@@ -1084,10 +1152,23 @@ impl Workspace {
                 .iter()
                 .any(|hit| hit.id == id && hit.status == DocumentStatus::Draft);
             if draft {
-                self.open_draft(session, id);
+                let open = self
+                    .editor
+                    .as_ref()
+                    .is_some_and(|editor| editor.inline && editor.id == id);
+                if open {
+                    self.reset_document();
+                } else {
+                    self.open_draft(session, id);
+                }
             } else if self.search.opened.as_ref().is_some_and(|view| view.id == id) {
                 self.search.opened = None;
             } else {
+                // One fold at a time: opening a document puts an inline draft
+                // away, and opening a draft does the same to a document.
+                if self.editor.as_ref().is_some_and(|editor| editor.inline) {
+                    self.reset_document();
+                }
                 self.search.open(session.database(), id);
                 if let Some(number) = self.search.opened.as_ref().map(|view| view.number.clone()) {
                     self.export_path = default_pdf_path(session, &number);
@@ -1099,6 +1180,9 @@ impl Workspace {
         }
         if close_panel {
             self.search.opened = None;
+        }
+        if close_draft {
+            self.reset_document();
         }
     }
 
@@ -2013,7 +2097,9 @@ impl Workspace {
         match store::load_draft(session.database().connection(), id) {
             Ok(Some(draft)) => {
                 self.reset_document();
-                self.editor = Some(Editor::from_draft(&draft, language));
+                let mut editor = Editor::from_draft(&draft, language);
+                editor.inline = true;
+                self.editor = Some(editor);
                 self.search.opened = None;
                 self.search.open_error = None;
                 if let Ok(suppressions) = list_suppressions(session.database().connection(), id) {
@@ -3376,6 +3462,8 @@ mod tests {
         assert_eq!(view.results.len(), 1);
         assert_eq!(view.results[0].party, "Acme BV");
         assert_eq!(view.results[0].status, DocumentStatus::Issued);
+        assert_eq!(view.counts.matched, 1, "one of one");
+        assert_eq!(view.counts.total, 1);
 
         view.query = "nothing-matches-this".to_owned();
         view.run(&database, seller_id).unwrap();
@@ -3924,7 +4012,47 @@ mod tests {
         let reopened = workspace.editor.as_ref().expect("the draft reopened");
         assert_eq!(reopened.id, draft.id);
         assert_eq!(reopened.customer, Some(customer.id));
+        assert!(reopened.inline, "a stored draft opens in its row, not above the list");
         assert!(workspace.message.is_none());
+    }
+
+    #[test]
+    fn a_draft_editor_draws_inside_its_row() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let mut session = Session::create(
+            dir.path().join("bonk.db"),
+            dir.path().join("keystore.bin"),
+            "passphrase",
+        )
+        .unwrap();
+        let seller = seller();
+        insert_seller(session.database().connection(), &seller, NOW).unwrap();
+        let customer = CustomerRecord {
+            id: CustomerId::new(),
+            party: Party::new("Acme BV", Address::new("Rotterdam", CountryCode::NL)),
+        };
+        insert_customer(session.database().connection(), &customer, NOW).unwrap();
+
+        let mut form = editor();
+        form.customer = Some(customer.id);
+        let draft = build_draft(&form, &seller).unwrap();
+        insert_draft(session.database().connection(), &draft, NOW).unwrap();
+
+        let mut workspace = Workspace::new(&session).unwrap();
+        workspace.open_draft(&session, draft.id);
+
+        // The frame runs the query for the first time, then draws the row with
+        // the editor folded open beneath it: a broken widget id or an index past
+        // a shortened list would show up here as a panic.
+        let context = egui::Context::default();
+        let mut appearance = egui::ThemePreference::System;
+        let output = context.run_ui(egui::RawInput::default(), |ui| {
+            let _ = workspace.ui(ui, &mut session, &mut appearance);
+        });
+        output.drop_without_applying_deltas();
+
+        assert_eq!(workspace.search.results.len(), 1, "the draft is a result");
+        assert!(workspace.editor.as_ref().is_some_and(|editor| editor.inline));
     }
 
     #[test]

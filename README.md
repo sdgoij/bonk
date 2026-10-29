@@ -172,10 +172,12 @@ not start against it. Search is a continuous table over the archive; typing or
 changing a filter re-runs it, a row opens in place with the stored document, and
 headings sort when clicked and resize when dragged. **New invoice** in the same
 row opens the composer over the list — the list stays underneath — and a saved
-draft appears in the results and reopens in that composer when clicked, which is
-how unfinished work is found. The composer's **Preview** renders the invoice
-through the same Typst template that issuing uses, so what the preview shows is
-what gets filed; after issuing, the panel offers the PDF and the UBL again.
+draft appears in the results and folds open under its own row, which is how
+unfinished work is found. The footer is pinned to the bottom of the window and
+reads `42/1337`: what the filters match, of what the archive holds. The
+composer's **Preview** renders the invoice through the same Typst template that
+issuing uses, so what the preview shows is what gets filed; after issuing, the
+panel offers the PDF and the UBL again.
 
 Clicking a customer opens it in place and every field is editable, including a
 phone number, which is normalised to E.164 against the party's country

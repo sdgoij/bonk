@@ -160,6 +160,39 @@ fn issuing_a_draft_removes_it_from_the_list() {
 }
 
 #[test]
+fn the_footer_counts_what_the_filters_match_and_what_is_there() {
+    let (_dir, mut database, seller, customer, cafe) = fixture();
+    issue(&mut database, seller, customer, "PO-1", "Advice", "2026-10-27");
+    issue(&mut database, seller, cafe, "PO-2", "Review", "2026-09-01");
+    draft(&database, seller, customer, "Concept", "2026-10-20");
+
+    let counts = store::search_counts(database.connection(), seller, &SearchRequest::default()).unwrap();
+    assert_eq!((counts.matched, counts.total), (3, 3));
+
+    let counts = store::search_counts(
+        database.connection(),
+        seller,
+        &SearchRequest {
+            query: Some("2026-0002"),
+            ..SearchRequest::default()
+        },
+    )
+    .unwrap();
+    assert_eq!((counts.matched, counts.total), (1, 3), "one match, three on file");
+
+    let counts = store::search_counts(
+        database.connection(),
+        seller,
+        &SearchRequest {
+            direction: Some(Direction::Inbound),
+            ..SearchRequest::default()
+        },
+    )
+    .unwrap();
+    assert_eq!((counts.matched, counts.total), (0, 3));
+}
+
+#[test]
 fn a_draft_is_only_listed_where_it_belongs() {
     let (_dir, database, seller, customer, _cafe) = fixture();
     draft(&database, seller, customer, "Concept", "2026-10-20");
