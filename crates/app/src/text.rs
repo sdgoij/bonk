@@ -337,11 +337,6 @@ pub mod find {
         format!("{matched}/{total}")
     }
 
-    /// Above the results, for the first visit.
-    pub fn sort_hint(_: Language) -> &'static str {
-        "Click a heading to sort; drag the edge between headings to resize."
-    }
-
     /// The heading of an opened document.
     pub fn document_title(language: Language, number: &str, credit_note: bool) -> String {
         let kind = match (language, credit_note) {

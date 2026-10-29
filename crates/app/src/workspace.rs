@@ -891,12 +891,6 @@ impl Workspace {
             // The trailing controls are laid out from the right edge so the
             // query field can take whatever space is left over.
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                new_invoice = ui
-                    .add_enabled(
-                        !composing,
-                        egui::Button::new(text::editor::new_invoice_action(language)),
-                    )
-                    .clicked();
                 if ui.button(text::find::clear_action(language)).clicked() {
                     self.search.query.clear();
                     self.search.direction = None;
@@ -916,9 +910,6 @@ impl Workspace {
                 }
             });
         });
-        if new_invoice {
-            self.start_invoice();
-        }
 
         let mut apply_saved = None;
         let mut save_current = false;
@@ -1009,7 +1000,9 @@ impl Workspace {
 
         // The footer is pinned to the bottom of the window rather than scrolled
         // with the rows: how many of how many is a property of the view, not of
-        // where the list happens to be scrolled to.
+        // where the list happens to be scrolled to. It is also where starting an
+        // invoice belongs — the action is about the list as a whole, not about
+        // the query beside it.
         egui::Panel::bottom("find-footer")
             .frame(egui::Frame::new().inner_margin(egui::Margin::symmetric(0, 6)))
             .show(ui, |ui| {
@@ -1017,10 +1010,18 @@ impl Workspace {
                     let counts = self.search.counts;
                     theme::value(ui, text::find::count_line(language, counts.matched, counts.total));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.weak(text::find::sort_hint(language));
+                        new_invoice = ui
+                            .add_enabled(
+                                !composing,
+                                egui::Button::new(text::editor::new_invoice_action(language)),
+                            )
+                            .clicked();
                     });
                 });
             });
+        if new_invoice {
+            self.start_invoice();
+        }
 
         let width = (ui.available_width() - ui.spacing().scroll.bar_width).max(320.0);
         if self
