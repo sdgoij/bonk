@@ -858,6 +858,26 @@ pub mod editor {
         "Preview"
     }
 
+    /// Title over the question asked when a row click would lose work.
+    pub fn unsaved_title(_: Language) -> &'static str {
+        "Unsaved invoice"
+    }
+
+    /// What that question asks.
+    pub fn unsaved_note(_: Language) -> &'static str {
+        "This invoice has not been saved yet. Save it as a draft, or discard it?"
+    }
+
+    /// Throws the work away and does what was clicked.
+    pub fn discard_action(_: Language) -> &'static str {
+        "Discard"
+    }
+
+    /// Stays on the invoice.
+    pub fn keep_editing_action(_: Language) -> &'static str {
+        "Keep editing"
+    }
+
     /// Heading over the rendered preview.
     pub fn preview_heading(_: Language) -> &'static str {
         "Preview"

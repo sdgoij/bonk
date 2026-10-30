@@ -77,6 +77,11 @@ pub struct Workspace {
     customer_edit: Option<CustomerEdit>,
     tab: Tab,
     editor: Option<Editor>,
+    /// What the open editor held when it was opened, so closing it can tell
+    /// unsaved work from a form that was merely opened.
+    opened_form: Option<Editor>,
+    /// A row click that is waiting for the user to decide about that work.
+    pending_row: Option<PendingRow>,
     issued: Option<DocumentRecord>,
     pdf: Option<PdfDocument>,
     /// The supplier chosen for the open inbound document, before it is recorded.
@@ -577,6 +582,24 @@ impl Clone for Editor {
 }
 
 impl Editor {
+    /// Whether both editors hold the same work.
+    ///
+    /// The date popup and the flags are not the work: a picker left open is not an
+    /// edit, and a draft that reopened is still the invoice it was stored as.
+    fn same_work(&self, other: &Self) -> bool {
+        self.doc_type == other.doc_type
+            && self.customer == other.customer
+            && self.issue_date == other.issue_date
+            && self.due_date == other.due_date
+            && self.delivery_date == other.delivery_date
+            && self.note == other.note
+            && self.buyer_reference == other.buyer_reference
+            && self.order_reference == other.order_reference
+            && self.currency == other.currency
+            && self.document_language == other.document_language
+            && self.lines == other.lines
+    }
+
     fn new(customer: Option<CustomerId>, document_language: render::Language, currency: Currency) -> Self {
         Self {
             id: DocumentId::new(),
@@ -639,7 +662,27 @@ impl Editor {
     }
 }
 
-#[derive(Clone)]
+/// What a row click should do once the composer is out of the way.
+#[derive(Clone, Copy)]
+enum PendingRow {
+    /// Fold the open draft's editor shut.
+    Fold,
+    /// Open the row that was clicked.
+    Open(DocumentId),
+}
+
+/// The answers to the question about unsaved work.
+#[derive(Clone, Copy)]
+enum UnsavedChoice {
+    /// Store the work as a draft, then do what was clicked.
+    Save,
+    /// Throw the work away and do what was clicked.
+    Discard,
+    /// Stay where the user is.
+    Keep,
+}
+
+#[derive(Clone, PartialEq)]
 struct LineForm {
     name: String,
     quantity: String,
@@ -688,6 +731,8 @@ impl Workspace {
             customer_edit: None,
             tab: Tab::Search,
             editor: None,
+            opened_form: None,
+            pending_row: None,
             issued: None,
             pdf: None,
             match_target: None,
@@ -1155,6 +1200,8 @@ impl Workspace {
             self.search.opened = None;
             self.match_target = None;
         }
+
+        self.unsaved_dialog(ui, session);
     }
 
     /// The seller's locale is the sensible default for what gets printed, and
@@ -2103,13 +2150,22 @@ impl Workspace {
     fn start_invoice(&mut self) {
         self.reset_document();
         let customer = self.customers.first().map(|customer| customer.id);
-        self.editor = Some(Editor::new(
+        self.show_editor(Editor::new(
             customer,
             self.default_document_language(),
             self.default_currency(),
         ));
         self.search.opened = None;
         self.search.open_error = None;
+    }
+
+    /// Puts an editor on screen and remembers what it held.
+    ///
+    /// The record is what lets closing the form tell unsaved work from a form that
+    /// was merely opened, so every path that opens one goes through here.
+    fn show_editor(&mut self, editor: Editor) {
+        self.opened_form = Some(editor.clone());
+        self.editor = Some(editor);
     }
 
     /// Reopens a stored draft in the composer, so unfinished work is editable
@@ -2121,7 +2177,7 @@ impl Workspace {
                 self.reset_document();
                 let mut editor = Editor::from_draft(&draft, language);
                 editor.inline = true;
-                self.editor = Some(editor);
+                self.show_editor(editor);
                 self.search.opened = None;
                 self.search.open_error = None;
                 if let Ok(suppressions) = list_suppressions(session.database().connection(), id) {
@@ -2138,33 +2194,113 @@ impl Workspace {
     /// What a click on a result row does.
     ///
     /// A draft opens in its row and closes again on a second click. A document
-    /// opens its panel. Any click on a row that is not the open draft's own puts
-    /// the composer away: the row is what the window is about, and the composer
-    /// has no close button of its own.
+    /// opens its panel. Either way the composer is put away first, and if that
+    /// would throw work away the user is asked about it rather than losing it.
     fn activate_row(&mut self, session: &Session, id: DocumentId) {
+        let own_draft_row = self
+            .editor
+            .as_ref()
+            .is_some_and(|editor| editor.inline && editor.id == id);
+        let next = if own_draft_row {
+            PendingRow::Fold
+        } else {
+            PendingRow::Open(id)
+        };
+
+        if self.composer_is_dirty() {
+            // Nothing is thrown away unasked: a discarded invoice cannot be
+            // brought back, and a draft saved by accident cannot be deleted.
+            self.pending_row = Some(next);
+            return;
+        }
+
+        self.reset_document();
+        self.go_to_row(session, next);
+    }
+
+    /// Whether closing the composer now would throw work away.
+    fn composer_is_dirty(&self) -> bool {
+        let (Some(editor), Some(opened)) = (&self.editor, &self.opened_form) else {
+            return false;
+        };
+        !editor.same_work(opened)
+    }
+
+    /// Does what the clicked row asked for.
+    fn go_to_row(&mut self, session: &Session, next: PendingRow) {
+        let PendingRow::Open(id) = next else {
+            return;
+        };
         let draft = self
             .search
             .results
             .iter()
             .any(|hit| hit.id == id && hit.status == DocumentStatus::Draft);
         if draft {
-            let open = self
-                .editor
-                .as_ref()
-                .is_some_and(|editor| editor.inline && editor.id == id);
-            if open {
-                self.reset_document();
-            } else {
-                self.open_draft(session, id);
-            }
-            return;
-        }
-
-        self.reset_document();
-        if self.search.opened.as_ref().is_some_and(|view| view.id == id) {
+            self.open_draft(session, id);
+        } else if self.search.opened.as_ref().is_some_and(|view| view.id == id) {
             self.search.opened = None;
         } else {
             self.search.open(session.database(), id);
+        }
+    }
+
+    /// Answers the question about unsaved work.
+    fn resolve_unsaved(&mut self, session: &Session, choice: UnsavedChoice) {
+        let Some(next) = self.pending_row else {
+            return;
+        };
+        match choice {
+            UnsavedChoice::Keep => self.pending_row = None,
+            UnsavedChoice::Discard => {
+                self.reset_document();
+                self.go_to_row(session, next);
+            }
+            UnsavedChoice::Save => {
+                // A form that cannot be stored keeps the question open; the message
+                // says what is wrong with it.
+                if self.save_draft(session) {
+                    self.reset_document();
+                    self.go_to_row(session, next);
+                }
+            }
+        }
+    }
+
+    /// Asks what to do with work that a row click would otherwise throw away.
+    fn unsaved_dialog(&mut self, ui: &mut egui::Ui, session: &Session) {
+        if self.pending_row.is_none() {
+            return;
+        }
+        let language = self.language;
+        let storable = self
+            .editor
+            .as_ref()
+            .zip(self.seller.as_ref())
+            .is_some_and(|(editor, seller)| build_draft(editor, seller).is_ok());
+
+        let mut choice = None;
+        egui::Window::new(text::editor::unsaved_title(language))
+            .collapsible(false)
+            .resizable(false)
+            .show(ui.ctx(), |ui| {
+                ui.label(text::editor::unsaved_note(language));
+                ui.horizontal(|ui| {
+                    let save = ui.add_enabled(storable, egui::Button::new(text::editor::save_draft_action(language)));
+                    if save.clicked() {
+                        choice = Some(UnsavedChoice::Save);
+                    }
+                    if ui.button(text::editor::discard_action(language)).clicked() {
+                        choice = Some(UnsavedChoice::Discard);
+                    }
+                    if ui.button(text::editor::keep_editing_action(language)).clicked() {
+                        choice = Some(UnsavedChoice::Keep);
+                    }
+                });
+            });
+
+        if let Some(choice) = choice {
+            self.resolve_unsaved(session, choice);
         }
     }
 
@@ -2479,6 +2615,8 @@ impl Workspace {
     fn reset_document(&mut self) {
         self.issued = None;
         self.editor = None;
+        self.opened_form = None;
+        self.pending_row = None;
         self.pdf = None;
         self.preview = None;
         self.match_target = None;
@@ -2511,7 +2649,7 @@ impl Workspace {
             Ok(Some(draft)) => match Editor::credit_note(&draft, document_language) {
                 Some(editor) => {
                     self.reset_document();
-                    self.editor = Some(editor);
+                    self.show_editor(editor);
                     self.message = Some(Message::ok(text::editor::credit_note_started(language, &number)));
                 }
                 None => {
@@ -2593,18 +2731,19 @@ impl Workspace {
         }
     }
 
-    fn save_draft(&mut self, session: &Session) {
+    /// Stores the composer's invoice as a draft. Returns whether it was stored.
+    fn save_draft(&mut self, session: &Session) -> bool {
         let Some(seller) = self.seller.clone() else {
-            return;
+            return false;
         };
         let Some(editor) = self.editor.clone() else {
-            return;
+            return false;
         };
         let draft = match build_draft(&editor, &seller) {
             Ok(draft) => draft,
             Err(error) => {
                 self.message = Some(Message::error(error));
-                return;
+                return false;
             }
         };
 
@@ -2612,8 +2751,12 @@ impl Workspace {
             Ok(()) => {
                 self.message = Some(Message::ok(text::editor::draft_saved(self.language)));
                 self.refresh_search(session);
+                true
             }
-            Err(error) => self.message = Some(Message::error(error.to_string())),
+            Err(error) => {
+                self.message = Some(Message::error(error.to_string()));
+                false
+            }
         }
     }
 
@@ -4236,8 +4379,8 @@ mod tests {
         drop(dir);
     }
 
-    #[test]
-    fn a_row_click_puts_the_composer_away() {
+    /// A session with a seller, a customer, and one issued invoice to click on.
+    fn session_with_one_issued() -> (tempfile::TempDir, Session, SellerRecord) {
         let dir = tempfile::TempDir::new().unwrap();
         let mut session = Session::create(
             dir.path().join("bonk.db"),
@@ -4270,7 +4413,28 @@ mod tests {
         )
         .unwrap();
 
+        (dir, session, seller)
+    }
+
+    /// A composer holding work that is not stored yet, with the only row in the
+    /// archive already looked up.
+    fn composer_with_unsaved_work(session: &Session, seller: &SellerRecord) -> (Workspace, DocumentId) {
+        let mut workspace = Workspace::new(session).unwrap();
+        workspace.start_invoice();
+        if let Some(editor) = workspace.editor.as_mut() {
+            editor.lines[0].name = "Consulting".to_owned();
+            editor.lines[0].unit_price = "100.00".to_owned();
+        }
+        workspace.search.run(session.database(), seller.id).unwrap();
+        let id = workspace.search.results[0].id;
+        (workspace, id)
+    }
+
+    #[test]
+    fn a_row_click_puts_the_composer_away() {
+        let (_dir, session, seller) = session_with_one_issued();
         let mut workspace = Workspace::new(&session).unwrap();
+        // An opened but untouched invoice holds no work, so nothing is asked.
         workspace.start_invoice();
         assert!(workspace.editor.is_some(), "the composer is open");
 
@@ -4278,13 +4442,86 @@ mod tests {
         let id = workspace.search.results[0].id;
         workspace.activate_row(&session, id);
 
-        // The composer has no close button, so this is what dismisses it.
         assert!(workspace.editor.is_none(), "a row click closed the composer");
+        assert!(workspace.pending_row.is_none(), "nothing to ask about");
         assert_eq!(
             workspace.search.opened.as_ref().map(|view| view.id),
             Some(id),
             "and opened the row it was clicked on"
         );
+    }
+
+    #[test]
+    fn a_row_click_asks_before_throwing_work_away() {
+        let (_dir, mut session, seller) = session_with_one_issued();
+        let (mut workspace, id) = composer_with_unsaved_work(&session, &seller);
+
+        workspace.activate_row(&session, id);
+
+        assert!(workspace.editor.is_some(), "the work is still on screen");
+        assert!(workspace.pending_row.is_some(), "the click is waiting for an answer");
+        assert!(workspace.search.opened.is_none(), "nothing opened yet");
+
+        // The question is a window, so it has to draw: a duplicate id or a missing
+        // title would show up here rather than at the user.
+        let context = egui::Context::default();
+        let mut appearance = egui::ThemePreference::System;
+        let output = context.run_ui(egui::RawInput::default(), |ui| {
+            let _ = workspace.ui(ui, &mut session, &mut appearance);
+        });
+        output.drop_without_applying_deltas();
+        assert!(workspace.pending_row.is_some(), "it waits until it is answered");
+    }
+
+    #[test]
+    fn saving_from_the_question_stores_the_work() {
+        let (_dir, session, seller) = session_with_one_issued();
+        let (mut workspace, id) = composer_with_unsaved_work(&session, &seller);
+        workspace.activate_row(&session, id);
+
+        workspace.resolve_unsaved(&session, UnsavedChoice::Save);
+
+        assert!(workspace.editor.is_none(), "the composer closed");
+        assert!(workspace.pending_row.is_none());
+        assert_eq!(workspace.search.opened.as_ref().map(|view| view.id), Some(id));
+
+        workspace.search.run(session.database(), seller.id).unwrap();
+        assert_eq!(workspace.search.results.len(), 2, "the work became a draft");
+        assert!(
+            workspace
+                .search
+                .results
+                .iter()
+                .any(|hit| hit.status == DocumentStatus::Draft),
+            "and the draft is listed"
+        );
+    }
+
+    #[test]
+    fn discarding_from_the_question_leaves_no_draft() {
+        let (_dir, session, seller) = session_with_one_issued();
+        let (mut workspace, id) = composer_with_unsaved_work(&session, &seller);
+        workspace.activate_row(&session, id);
+
+        workspace.resolve_unsaved(&session, UnsavedChoice::Discard);
+
+        assert!(workspace.editor.is_none(), "the composer closed");
+        assert_eq!(workspace.search.opened.as_ref().map(|view| view.id), Some(id));
+        workspace.search.run(session.database(), seller.id).unwrap();
+        assert_eq!(workspace.search.results.len(), 1, "nothing was stored");
+    }
+
+    #[test]
+    fn keeping_the_work_leaves_the_form_open() {
+        let (_dir, session, seller) = session_with_one_issued();
+        let (mut workspace, id) = composer_with_unsaved_work(&session, &seller);
+        workspace.activate_row(&session, id);
+
+        workspace.resolve_unsaved(&session, UnsavedChoice::Keep);
+
+        assert!(workspace.editor.is_some(), "the work is still there");
+        assert!(workspace.pending_row.is_none(), "the question is closed");
+        assert!(workspace.search.opened.is_none(), "no row was opened");
     }
 
     #[test]
