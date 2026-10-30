@@ -432,24 +432,14 @@ pub mod find {
         }
     }
 
-    /// Label beside the export path field.
-    pub fn save_to(_: Language) -> &'static str {
-        "Save to"
-    }
-
-    /// Writes the filed PDF.
+    /// Writes the filed PDF, after the platform's save panel asks where.
     pub fn save_pdf_action(_: Language) -> &'static str {
-        "Save PDF"
+        "Save PDF…"
     }
 
-    /// Writes the filed UBL.
+    /// Writes the filed UBL, after the platform's save panel asks where.
     pub fn save_ubl_action(_: Language) -> &'static str {
-        "Save UBL"
-    }
-
-    /// No export path was typed.
-    pub fn choose_export_path(_: Language) -> &'static str {
-        "Choose where to save the export first."
+        "Save UBL…"
     }
 
     /// What was written, and where.
@@ -462,19 +452,9 @@ pub mod find {
         format!("Could not save the export: {error}")
     }
 
-    /// Footer action that records an invoice received from a supplier.
+    /// Footer action that opens a file and records the invoice it holds.
     pub fn import_action(_: Language) -> &'static str {
-        "Import received"
-    }
-
-    /// Hint in the import path field.
-    pub fn import_hint(_: Language) -> &'static str {
-        "path to a UBL, CII, or Factur-X file"
-    }
-
-    /// No import path was typed.
-    pub fn choose_import_path(_: Language) -> &'static str {
-        "Type the path of the file to import."
+        "Import received…"
     }
 
     /// What an import did.
@@ -586,19 +566,15 @@ pub mod customers {
         "No customers match that filter."
     }
 
-    /// Label above the CSV path.
-    pub fn path_label(_: Language) -> &'static str {
-        "CSV file"
-    }
-
-    /// Reads the CSV.
+    /// A successful export.
+    /// Opens a CSV of customers to read.
     pub fn import_action(_: Language) -> &'static str {
-        "Import"
+        "Import…"
     }
 
-    /// Writes the CSV.
+    /// Opens a save panel for the customer CSV.
     pub fn export_action(_: Language) -> &'static str {
-        "Export"
+        "Export…"
     }
 
     /// What the file holds.
@@ -950,13 +926,9 @@ pub mod editor {
     }
 
     /// Label above the PDF path field.
-    pub fn save_pdf_to(_: Language) -> &'static str {
-        "Save PDF to"
-    }
-
-    /// Writes the PDF to the named path.
+    /// Writes the PDF, after the platform's save panel asks where.
     pub fn save_pdf_action(_: Language) -> &'static str {
-        "Save PDF"
+        "Save PDF…"
     }
 
     /// Starts a credit note for the issued invoice.
@@ -1182,12 +1154,7 @@ pub mod editor {
         }
     }
 
-    /// The PDF path field is empty.
-    pub fn choose_pdf_path(_: Language) -> &'static str {
-        "Choose a file name for the PDF."
-    }
-
-    /// The PDF was written.
+    /// The PDF was written, and where.
     pub fn pdf_saved(language: Language, path: &str) -> String {
         match language {
             Language::English => format!("PDF saved to {path}"),

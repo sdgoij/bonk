@@ -24,6 +24,7 @@ import = { path = "../import", default-features = false }
 time.workspace = true
 eframe.workspace = true
 egui.workspace = true
+rfd.workspace = true
 
 serde_json.workspace = true
 zeroize.workspace = true

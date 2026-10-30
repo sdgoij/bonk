@@ -24,6 +24,7 @@ use zeroize::Zeroize;
 
 use crate::Session;
 use crate::customers;
+use crate::dialog;
 use crate::health::Health;
 use crate::table::{Cell, Table};
 use crate::text::editor::Field;
@@ -78,12 +79,6 @@ pub struct Workspace {
     editor: Option<Editor>,
     issued: Option<DocumentRecord>,
     pdf: Option<PdfDocument>,
-    pdf_path: String,
-    /// Where an export of the open stored document goes; the extension decides
-    /// which artefact is written.
-    export_path: String,
-    /// Where the next import reads from.
-    import_path: String,
     /// The supplier chosen for the open inbound document, before it is recorded.
     match_target: Option<CustomerId>,
     /// The preview of the composer's invoice, once one has been asked for.
@@ -163,8 +158,6 @@ impl Default for SearchView {
 struct CustomersView {
     filter: String,
     table: Table,
-    /// Where import reads and export writes.
-    path: String,
     /// The customer whose detail editor is open, if any.
     opened: Option<CustomerId>,
 }
@@ -676,13 +669,6 @@ impl Workspace {
     /// Loads the seller and customer list for a freshly unlocked session.
     pub fn new(session: &Session) -> Result<Self, StoreError> {
         let connection = session.database().connection();
-        let csv_path = session
-            .database_path()
-            .parent()
-            .unwrap_or(Path::new("."))
-            .join("customers.csv")
-            .display()
-            .to_string();
         let mut workspace = Self {
             seller: first_seller(connection)?,
             customers: list_customers(connection)?,
@@ -692,7 +678,6 @@ impl Workspace {
             customers_view: CustomersView {
                 filter: String::new(),
                 table: Table::new(&[2.6, 1.4, 0.8, 1.6, 1.6]),
-                path: csv_path,
                 opened: None,
             },
             customer_edit: None,
@@ -700,9 +685,6 @@ impl Workspace {
             editor: None,
             issued: None,
             pdf: None,
-            pdf_path: String::new(),
-            export_path: String::new(),
-            import_path: String::new(),
             match_target: None,
             preview: None,
             device_remembered: Session::device_ready(session.keystore_path(), &store::device::Keychain),
@@ -1020,12 +1002,6 @@ impl Workspace {
                 ui.horizontal(|ui| {
                     let counts = self.search.counts;
                     theme::value(ui, text::find::count_line(language, counts.matched, counts.total));
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.import_path)
-                            .id(egui::Id::unique("find.import-path"))
-                            .hint_text(text::find::import_hint(language))
-                            .desired_width(300.0),
-                    );
                     import_file = ui.button(text::find::import_action(language)).clicked();
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         new_invoice = ui
@@ -1040,8 +1016,8 @@ impl Workspace {
         if new_invoice {
             self.start_invoice();
         }
-        if import_file {
-            self.import_received(session);
+        if import_file && let Some(path) = dialog::open("Import received invoice", &["xml", "pdf"]) {
+            self.import_received(session, &path);
         }
 
         let width = (ui.available_width() - ui.spacing().scroll.bar_width).max(320.0);
@@ -1149,14 +1125,7 @@ impl Workspace {
                         .corner_radius(6)
                         .inner_margin(egui::Margin::same(12))
                         .show(ui, |ui| match &self.search.opened {
-                            Some(view) => document_panel(
-                                ui,
-                                language,
-                                view,
-                                &mut self.export_path,
-                                &self.customers,
-                                &mut self.match_target,
-                            ),
+                            Some(view) => document_panel(ui, language, view, &self.customers, &mut self.match_target),
                             None => DocumentAction::None,
                         })
                         .inner;
@@ -1205,13 +1174,20 @@ impl Workspace {
                 }
                 self.match_target = None;
                 self.search.open(session.database(), id);
-                if let Some(number) = self.search.opened.as_ref().map(|view| view.number.clone()) {
-                    self.export_path = default_pdf_path(session, &number);
-                }
             }
         }
         if let Some(kind) = save_artefact {
-            self.save_artefact(session, kind);
+            let number = self
+                .search
+                .opened
+                .as_ref()
+                .map(|view| view.number.clone())
+                .unwrap_or_default();
+            let extension = artefact_extension(kind);
+            let description = if kind == "pdf" { "Save PDF" } else { "Save UBL" };
+            if let Some(path) = dialog::save(description, &format!("{number}.{extension}"), extension) {
+                self.save_artefact(session, kind, &path);
+            }
         }
         if let Some(status) = settle {
             self.advance_opened(session, status);
@@ -1260,8 +1236,6 @@ impl Workspace {
                 if ui.button(text::customers::import_action(language)).clicked() {
                     import = true;
                 }
-                ui.add(egui::TextEdit::singleline(&mut self.customers_view.path).desired_width(300.0));
-                ui.label(text::customers::path_label(language));
             });
         });
         ui.weak(text::customers::csv_note(language));
@@ -1355,8 +1329,11 @@ impl Workspace {
             self.save_customer_edit(session);
         }
 
-        if import || export {
-            self.transfer_customers(session, import);
+        if import && let Some(path) = dialog::open("Import customer list", &["csv"]) {
+            self.import_customers(session, &path);
+        }
+        if export && let Some(path) = dialog::save("Export customer list", "customers.csv", "csv") {
+            self.export_customers(&path);
         }
     }
 
@@ -1422,50 +1399,48 @@ impl Workspace {
         }
     }
 
-    /// Reads or writes the customer CSV named in the tab.
-    fn transfer_customers(&mut self, session: &Session, import: bool) {
+    /// Reads the customer CSV the user chose.
+    fn import_customers(&mut self, session: &Session, path: &Path) {
         let language = self.language;
-        let path = self.customers_view.path.trim().to_owned();
-        if path.is_empty() {
-            self.message = Some(Message::error(text::customers::failed(language, "the path is empty")));
-            return;
-        }
-
-        if import {
-            let parsed = std::fs::read_to_string(&path)
-                .map_err(|error| error.to_string())
-                .and_then(|text| customers::parse(&text));
-            match parsed {
-                Ok(rows) => match customers::import(session.database(), &rows, &store::now_rfc3339()) {
-                    Ok(report) => {
-                        if let Ok(list) = list_customers(session.database().connection()) {
-                            self.customers = list;
-                        }
-                        let summary =
-                            text::customers::imported(language, report.imported, report.skipped, report.errors.len());
-                        self.message = Some(if report.errors.is_empty() {
-                            Message::ok(summary)
-                        } else {
-                            let detail = report.errors.iter().take(3).cloned().collect::<Vec<_>>().join("; ");
-                            Message::error(format!("{summary} {detail}"))
-                        });
+        let parsed = std::fs::read_to_string(path)
+            .map_err(|error| error.to_string())
+            .and_then(|text| customers::parse(&text));
+        match parsed {
+            Ok(rows) => match customers::import(session.database(), &rows, &store::now_rfc3339()) {
+                Ok(report) => {
+                    if let Ok(list) = list_customers(session.database().connection()) {
+                        self.customers = list;
                     }
-                    Err(error) => self.message = Some(Message::error(error.to_string())),
-                },
-                Err(error) => self.message = Some(Message::error(text::customers::failed(language, &error))),
+                    let summary =
+                        text::customers::imported(language, report.imported, report.skipped, report.errors.len());
+                    self.message = Some(if report.errors.is_empty() {
+                        Message::ok(summary)
+                    } else {
+                        let detail = report.errors.iter().take(3).cloned().collect::<Vec<_>>().join("; ");
+                        Message::error(format!("{summary} {detail}"))
+                    });
+                }
+                Err(error) => self.message = Some(Message::error(error.to_string())),
+            },
+            Err(error) => self.message = Some(Message::error(text::customers::failed(language, &error))),
+        }
+    }
+
+    /// Writes the customer list where the user chose.
+    fn export_customers(&mut self, path: &Path) {
+        match std::fs::write(path, customers::export(&self.customers)) {
+            Ok(()) => {
+                self.message = Some(Message::ok(text::customers::exported(
+                    self.language,
+                    self.customers.len(),
+                    &path.display().to_string(),
+                )));
             }
-        } else {
-            match std::fs::write(&path, customers::export(&self.customers)) {
-                Ok(()) => {
-                    self.message = Some(Message::ok(text::customers::exported(
-                        language,
-                        self.customers.len(),
-                        &path,
-                    )));
-                }
-                Err(error) => {
-                    self.message = Some(Message::error(text::customers::failed(language, &error.to_string())))
-                }
+            Err(error) => {
+                self.message = Some(Message::error(text::customers::failed(
+                    self.language,
+                    &error.to_string(),
+                )))
             }
         }
     }
@@ -1985,11 +1960,7 @@ impl Workspace {
             let mut save_pdf = false;
             if let Some(pdf) = &self.pdf {
                 theme::value_mono(ui, text::editor::pdf_hash_line(language, &pdf.hash));
-                ui.horizontal(|ui| {
-                    ui.label(text::editor::save_pdf_to(language));
-                    ui.add(egui::TextEdit::singleline(&mut self.pdf_path).desired_width(420.0));
-                    save_pdf = ui.button(text::editor::save_pdf_action(language)).clicked();
-                });
+                save_pdf = ui.button(text::editor::save_pdf_action(language)).clicked();
             }
 
             ui.add_space(8.0);
@@ -2451,7 +2422,6 @@ impl Workspace {
         self.issued = None;
         self.editor = None;
         self.pdf = None;
-        self.pdf_path.clear();
         self.preview = None;
         self.match_target = None;
         self.conformance_findings.clear();
@@ -2671,12 +2641,10 @@ impl Workspace {
                                 String::new()
                             }
                         };
-                        self.pdf_path = default_pdf_path(session, &issued.number);
                         self.pdf = Some(PdfDocument { bytes, hash });
                     }
                     Err(error) => {
                         self.pdf = None;
-                        self.pdf_path.clear();
                         self.message = Some(Message::ok(text::editor::issued_without_pdf(
                             self.language,
                             &error.to_string(),
@@ -2713,13 +2681,20 @@ impl Workspace {
         let Some(pdf) = &self.pdf else {
             return;
         };
-        let path = self.pdf_path.trim();
-        if path.is_empty() {
-            self.message = Some(Message::error(text::editor::choose_pdf_path(self.language)));
+        let name = self
+            .issued
+            .as_ref()
+            .map_or_else(|| "invoice".to_owned(), |issued| issued.number.clone());
+        let Some(path) = dialog::save("Save PDF", &format!("{name}.pdf"), "pdf") else {
             return;
-        }
-        match std::fs::write(path, &pdf.bytes) {
-            Ok(()) => self.message = Some(Message::ok(text::editor::pdf_saved(self.language, path))),
+        };
+        match std::fs::write(&path, &pdf.bytes) {
+            Ok(()) => {
+                self.message = Some(Message::ok(text::editor::pdf_saved(
+                    self.language,
+                    &path.display().to_string(),
+                )))
+            }
             Err(error) => {
                 self.message = Some(Message::error(text::editor::pdf_save_failed(
                     self.language,
@@ -2730,17 +2705,12 @@ impl Workspace {
     }
 
     /// Reads an invoice a supplier sent us and folds it open in the list.
-    fn import_received(&mut self, session: &Session) {
+    fn import_received(&mut self, session: &Session, path: &Path) {
         let language = self.language;
         let Some(owner) = self.seller.as_ref().map(|seller| seller.id) else {
             return;
         };
-        let path = self.import_path.trim().to_owned();
-        if path.is_empty() {
-            self.message = Some(Message::error(text::find::choose_import_path(language)));
-            return;
-        }
-        let outcome = match import::import_file(session.database(), owner, Path::new(&path), &store::now_rfc3339()) {
+        let outcome = match import::import_file(session.database(), owner, path, &store::now_rfc3339()) {
             Ok(outcome) => outcome,
             Err(error) => {
                 self.message = Some(Message::error(text::find::import_failed(language, &error.to_string())));
@@ -2825,45 +2795,33 @@ impl Workspace {
         }
     }
 
-    /// Writes a stored document's artefact where the export field points.
+    /// Writes a stored document's artefact where the user chose to save it.
     ///
     /// The bytes are the ones filed with the document, hash-checked by the
     /// store, so this is a copy and not a re-render.
-    fn save_artefact(&mut self, session: &Session, kind: &str) {
+    fn save_artefact(&mut self, session: &Session, kind: &str, path: &Path) {
         let Some(view) = &self.search.opened else {
             return;
         };
         let id = view.id;
-        if self.export_path.trim().is_empty() {
-            self.message = Some(Message::error(text::find::choose_export_path(self.language)));
-            return;
-        }
         match store::artefact_bytes(session.database().connection(), id, kind) {
-            Ok(bytes) => {
-                let path = sibling_path(&self.export_path, artefact_extension(kind));
-                match std::fs::write(&path, &bytes) {
-                    Ok(()) => {
-                        self.message = Some(Message::ok(text::find::export_saved(
-                            self.language,
-                            &path.display().to_string(),
-                        )))
-                    }
-                    Err(error) => {
-                        self.message = Some(Message::error(text::find::export_failed(
-                            self.language,
-                            &error.to_string(),
-                        )))
-                    }
+            Ok(bytes) => match std::fs::write(path, &bytes) {
+                Ok(()) => {
+                    self.message = Some(Message::ok(text::find::export_saved(
+                        self.language,
+                        &path.display().to_string(),
+                    )))
                 }
-            }
+                Err(error) => {
+                    self.message = Some(Message::error(text::find::export_failed(
+                        self.language,
+                        &error.to_string(),
+                    )))
+                }
+            },
             Err(error) => self.message = Some(Message::error(error.to_string())),
         }
     }
-}
-
-fn default_pdf_path(session: &Session, number: &str) -> String {
-    let directory = session.database_path().parent().unwrap_or(std::path::Path::new("."));
-    directory.join(format!("{number}.pdf")).display().to_string()
 }
 
 /// The file extension an artefact kind is written with.
@@ -2872,15 +2830,6 @@ fn artefact_extension(kind: &str) -> &'static str {
         "ubl" => "xml",
         _ => "pdf",
     }
-}
-
-/// Replaces the extension of the export path, so one stem names both formats.
-fn sibling_path(base: &str, extension: &str) -> PathBuf {
-    let path = Path::new(base.trim());
-    if path.as_os_str().is_empty() {
-        return PathBuf::from(format!("export.{extension}"));
-    }
-    path.with_extension(extension)
 }
 
 /// Where the window keeps its backups.
@@ -3325,7 +3274,6 @@ fn document_panel(
     ui: &mut egui::Ui,
     language: Language,
     view: &DocumentView,
-    export_path: &mut String,
     customers: &[CustomerRecord],
     match_target: &mut Option<CustomerId>,
 ) -> DocumentAction {
@@ -3432,12 +3380,10 @@ fn document_panel(
         }
 
         // Exporting re-reads the stored bytes rather than re-rendering, so what
-        // leaves the archive is what was filed. The path is one stem for both
-        // formats: the extension decides which file is written.
+        // leaves the archive is what was filed. Each action opens the platform's
+        // save panel, named after the document.
         ui.add_space(4.0);
         ui.horizontal(|ui| {
-            ui.label(text::find::save_to(language));
-            ui.add(egui::TextEdit::singleline(export_path).desired_width(360.0));
             if view.artefacts.iter().any(|artefact| artefact.kind == "pdf")
                 && ui.button(text::find::save_pdf_action(language)).clicked()
             {
@@ -4341,13 +4287,7 @@ mod tests {
     }
 
     #[test]
-    fn an_export_path_names_both_formats() {
-        assert_eq!(
-            sibling_path("/tmp/2026-0001.pdf", "xml"),
-            Path::new("/tmp/2026-0001.xml")
-        );
-        assert_eq!(sibling_path("/tmp/out", "pdf"), Path::new("/tmp/out.pdf"));
-        assert_eq!(sibling_path("  ", "pdf"), Path::new("export.pdf"));
+    fn an_artefact_kind_names_its_extension() {
         assert_eq!(artefact_extension("ubl"), "xml");
         assert_eq!(artefact_extension("pdf"), "pdf");
     }
@@ -4421,8 +4361,7 @@ mod tests {
         std::fs::write(&incoming, &ubl).unwrap();
 
         let mut workspace = Workspace::new(&session).unwrap();
-        workspace.import_path = incoming.display().to_string();
-        workspace.import_received(&session);
+        workspace.import_received(&session, &incoming);
 
         let view = workspace.search.opened.clone().expect("the import opens the document");
         assert_eq!(view.direction, Direction::Inbound);

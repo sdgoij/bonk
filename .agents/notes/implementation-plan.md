@@ -469,19 +469,30 @@ leftovers (`.tmp`, `.part`, `~$…`, dotfiles) and subdirectories are ignored.
 Decision recorded as ADR-020.
 
 **The received register is in the window (2026-10-30).** The Search footer now
-carries an import field: a UBL, CII, or Factur-X file goes through the same
-`import::import_file` the CLI uses, the duplicate and unmatched cases come back
-as one sentence, and a successful import switches the list to the received side
-and folds the new document open rather than leaving it behind the current
-filters. An opened inbound document shows its supplier with a picker over the
-party table and **Match supplier**, plus **Approve** while it is received and
-**Mark paid** once it is approved — the same `set_supplier_match` and
-`advance_status` calls, with the same audit events, as `bonk match`, `approve`,
-and `mark-paid`. `archive::load` now exposes the recorded match as
-`DocumentView::supplier_match`, so the panel shows the decision instead of
-guessing it from the issuer snapshot, and the register still prefers the matched
-party's name. Nothing inbound is editable, as before: the actions add facts, they
-do not rewrite the document.
+carries **Import received…**: it opens the platform's own file picker (`rfd`: the
+Windows common dialog, the macOS panels, the XDG portal on Linux), and the chosen
+UBL, CII, or Factur-X file goes through the same `import::import_file` the CLI
+uses. The duplicate and unmatched cases come back as one sentence, and a
+successful import switches the list to the received side and folds the new
+document open rather than leaving it behind the current filters. An opened
+inbound document shows its supplier with a picker over the party table and
+**Match supplier**, plus **Approve** while it is received and **Mark paid** once
+it is approved — the same `set_supplier_match` and `advance_status` calls, with
+the same audit events, as `bonk match`, `approve`, and `mark-paid`.
+`archive::load` now exposes the effective match as `DocumentView::supplier_match`
+— the human decision when there is one, otherwise the match the import made — so
+the panel shows what the register already assumed, and the register still prefers
+the matched party's name. Nothing inbound is editable, as before: the actions add
+facts, they do not rewrite the document.
+
+**Paths became dialogs (2026-10-30).** The window no longer asks anyone to type a
+path: offering, receiving, exporting a document, and moving the customer CSV all
+open the platform's native picker through `app::dialog` (`rfd`, MIT). A cancelled
+dialog does nothing, so `export_path`, `pdf_path`, `import_path`, and the customer
+tab's path field are gone, along with the “choose a path first” messages and the
+stem-plus-extension helper they needed. Actions that open a dialog say so with an
+ellipsis. The handlers take the chosen `Path` instead of reading a field, which is
+what lets the received-document test drive them without a window.
 
 ---
 

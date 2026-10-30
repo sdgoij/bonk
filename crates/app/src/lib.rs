@@ -8,6 +8,7 @@
 #![forbid(unsafe_code)]
 
 pub mod customers;
+mod dialog;
 pub mod export;
 pub mod health;
 pub mod idle;

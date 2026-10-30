@@ -5,6 +5,14 @@
 
 [graph]
 all-features = true
+# Check the graphs CI actually builds. Without this, a dependency that only the
+# Linux or macOS job resolves can pass on a Windows development host and fail in
+# CI, which is the one failure mode this gate exists to prevent.
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "x86_64-pc-windows-msvc",
+    "aarch64-apple-darwin",
+]
 
 [advisories]
 version = 2

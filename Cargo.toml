@@ -52,6 +52,9 @@ serde_json = "1"
 
 eframe = { version = "0.37", features = ["persistence"] }
 egui = "0.37"
+# Native open/save dialogs: the Windows common dialog, the macOS panels, and the
+# XDG portal on Linux.
+rfd = "0.17"
 
 clap = { version = "4", features = ["derive"] }
 rpassword = "7"

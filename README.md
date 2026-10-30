@@ -191,15 +191,16 @@ headings sort when clicked and resize when dragged. **New invoice** in the foote
 opens the composer over the list — the list stays underneath — and a saved draft
 appears in the results and folds open under its own row, which is how unfinished
 work is found. The footer is pinned to the bottom of the window and reads
-**42/1337**: what the filters match, of what the archive holds. It also imports:
-type the path of a UBL, CII, or Factur-X file received from a supplier and the
-list switches to the received side with the new document folded open. An opened
-received document shows its supplier — matched, or **not matched** with a picker
-over the party table — and offers **Approve** and then **Mark paid**, recording
-the same audit events as the CLI. The composer's **Preview** lays the invoice out
-with the same engine that issuing uses — the window draws the same pages the PDF
-writer receives — so what the preview shows is what gets filed; after issuing, the
-panel offers the PDF and the UBL again.
+**42/1337**: what the filters match, of what the archive holds. **Import
+received…** opens the platform's file picker — the Windows common dialog, the
+macOS panel, or the XDG portal — and the list switches to the received side with
+the new document folded open. An opened received document shows its supplier —
+matched, or **not matched** with a picker over the party table — and offers
+**Approve** and then **Mark paid**, recording the same audit events as the CLI.
+The composer's **Preview** lays the invoice out with the same engine that issuing
+uses — the window draws the same pages the PDF writer receives — so what the
+preview shows is what gets filed; after issuing, the panel offers the PDF and the
+UBL again.
 
 Clicking a customer opens it in place and every field is editable, including a
 phone number, which is normalised to E.164 against the party's country
@@ -207,8 +208,9 @@ phone number, which is normalised to E.164 against the party's country
 on file and leaves issued documents saying what they said. Date fields carry a
 calendar button that opens a month grid, but stay typable, so a date can be
 pasted as well as picked. An opened stored document re-reads its filed artefacts
-— hash-checked — rather than re-rendering them, so **Save PDF** and **Save UBL**
-write exactly what was archived.
+— hash-checked — rather than re-rendering them, so **Save PDF…** and **Save UBL…**
+write exactly what was archived, through the same native save panel that the
+customer **Import…** and **Export…** buttons use.
 
 Settings holds appearance (System, Light, Dark), archive health, verified
 backups, and credentials. Labels are not selectable; values — amounts, names,
