@@ -468,6 +468,21 @@ same bytes, or the same supplier number, never become a second document. Editor
 leftovers (`.tmp`, `.part`, `~$…`, dotfiles) and subdirectories are ignored.
 Decision recorded as ADR-020.
 
+**The received register is in the window (2026-10-30).** The Search footer now
+carries an import field: a UBL, CII, or Factur-X file goes through the same
+`import::import_file` the CLI uses, the duplicate and unmatched cases come back
+as one sentence, and a successful import switches the list to the received side
+and folds the new document open rather than leaving it behind the current
+filters. An opened inbound document shows its supplier with a picker over the
+party table and **Match supplier**, plus **Approve** while it is received and
+**Mark paid** once it is approved — the same `set_supplier_match` and
+`advance_status` calls, with the same audit events, as `bonk match`, `approve`,
+and `mark-paid`. `archive::load` now exposes the recorded match as
+`DocumentView::supplier_match`, so the panel shows the decision instead of
+guessing it from the issuer snapshot, and the register still prefers the matched
+party's name. Nothing inbound is editable, as before: the actions add facts, they
+do not rewrite the document.
+
 ---
 
 ### M4 — PDF/A-3 and Factur-X (4 weeks, v1.2)

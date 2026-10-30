@@ -461,6 +461,78 @@ pub mod find {
     pub fn export_failed(_: Language, error: &str) -> String {
         format!("Could not save the export: {error}")
     }
+
+    /// Footer action that records an invoice received from a supplier.
+    pub fn import_action(_: Language) -> &'static str {
+        "Import received"
+    }
+
+    /// Hint in the import path field.
+    pub fn import_hint(_: Language) -> &'static str {
+        "path to a UBL, CII, or Factur-X file"
+    }
+
+    /// No import path was typed.
+    pub fn choose_import_path(_: Language) -> &'static str {
+        "Type the path of the file to import."
+    }
+
+    /// What an import did.
+    pub fn imported(language: Language, number: &str, supplier: Option<&str>, duplicate: bool) -> String {
+        match language {
+            Language::English if duplicate => format!("{number} is already in the archive."),
+            Language::English => match supplier {
+                Some(name) => format!("Imported {number} from {name}."),
+                None => format!("Imported {number}; the supplier is not matched yet."),
+            },
+        }
+    }
+
+    /// The import failed.
+    pub fn import_failed(language: Language, error: &str) -> String {
+        match language {
+            Language::English => format!("Could not import that file: {error}"),
+        }
+    }
+
+    /// Label for the supplier row of a received document.
+    pub fn supplier_label(_: Language) -> &'static str {
+        "Supplier"
+    }
+
+    /// Shown when no party matched the issuer.
+    pub fn unmatched(_: Language) -> &'static str {
+        "not matched"
+    }
+
+    /// Records the chosen supplier.
+    pub fn match_action(_: Language) -> &'static str {
+        "Match supplier"
+    }
+
+    /// Moves a received document to approved.
+    pub fn approve_action(_: Language) -> &'static str {
+        "Approve"
+    }
+
+    /// Moves an approved document to paid.
+    pub fn mark_paid_action(_: Language) -> &'static str {
+        "Mark paid"
+    }
+
+    /// What a status change did.
+    pub fn settled(language: Language, target: DocumentStatus) -> String {
+        match language {
+            Language::English => format!("Marked as {}.", status(language, target)),
+        }
+    }
+
+    /// The supplier match was recorded.
+    pub fn matched(language: Language, name: &str) -> String {
+        match language {
+            Language::English => format!("Matched to {name}."),
+        }
+    }
 }
 
 /// The customer tab.

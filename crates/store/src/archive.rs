@@ -7,8 +7,8 @@
 //! invoice says.
 
 use crux::{
-    Currency, DocType, DocumentId, InvoiceTotals, LocalDate, Money, Party, Quantity, TaxBreakdown, UnitCode,
-    VatCategory, VatRate,
+    Currency, CustomerId, DocType, DocumentId, InvoiceTotals, LocalDate, Money, Party, Quantity, TaxBreakdown,
+    UnitCode, VatCategory, VatRate,
 };
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::Value;
@@ -52,6 +52,9 @@ pub struct DocumentView {
     pub lines: Vec<StoredLine>,
     /// Current status: the latest event, or the state the document was recorded in.
     pub status: DocumentStatus,
+    /// The party this inbound document's supplier was matched to, when a human
+    /// or the import did. `None` for outbound documents and unmatched imports.
+    pub supplier_match: Option<CustomerId>,
     /// SHA-256 of the semantic record.
     pub semantic_hash: String,
     /// When the archive recorded it.
@@ -184,11 +187,26 @@ pub fn load(conn: &Connection, id: DocumentId) -> Result<Option<DocumentView>, S
         buyer: dto::party_from_value(&buyer)?,
         lines: lines(conn, id, currency)?,
         status: DocumentStatus::parse(&document.17).ok_or_else(|| data(format!("unknown status {}", document.17)))?,
+        supplier_match: supplier_match(conn, id)?,
         semantic_hash: document.14,
         recorded_at: document.15,
         events: events(conn, id)?,
         artefacts: artefacts(conn, id)?,
     }))
+}
+
+/// The supplier match recorded for a document, when there is one.
+fn supplier_match(conn: &Connection, id: DocumentId) -> Result<Option<CustomerId>, StoreError> {
+    let customer = conn
+        .query_row(
+            "SELECT customer_id FROM supplier_match WHERE document_id = ?1",
+            params![id.to_string()],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    customer
+        .map(|value| CustomerId::parse_str(&value).map_err(|error| data(error.to_string())))
+        .transpose()
 }
 
 fn lines(conn: &Connection, id: DocumentId, currency: Currency) -> Result<Vec<StoredLine>, StoreError> {

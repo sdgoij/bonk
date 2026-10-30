@@ -16,9 +16,9 @@ use crux::{
 };
 use store::{
     CustomerRecord, Direction, DocumentRecord, DocumentStatus, IssueRequest, SavedSearch, SearchCounts, SearchHit,
-    SearchRequest, SellerRecord, StoreError, Suppression, archive::DocumentView, attach_artefact, credit_note_for,
-    first_seller, insert_customer, insert_seller, issue_draft, list_customers, list_suppressions, save_draft,
-    save_suppression, search,
+    SearchRequest, SellerRecord, StoreError, Suppression, advance_status, archive::DocumentView, attach_artefact,
+    credit_note_for, first_seller, insert_customer, insert_seller, issue_draft, list_customers, list_suppressions,
+    save_draft, save_suppression, search, set_supplier_match,
 };
 use zeroize::Zeroize;
 
@@ -40,6 +40,9 @@ const CATEGORIES: [VatCategory; 6] = [
     VatCategory::IntraCommunity,
     VatCategory::Export,
 ];
+
+/// Who the window records as the actor of a decision it made.
+const ACTOR: &str = "desktop";
 
 /// The three places the window can be.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -79,6 +82,10 @@ pub struct Workspace {
     /// Where an export of the open stored document goes; the extension decides
     /// which artefact is written.
     export_path: String,
+    /// Where the next import reads from.
+    import_path: String,
+    /// The supplier chosen for the open inbound document, before it is recorded.
+    match_target: Option<CustomerId>,
     /// The preview of the composer's invoice, once one has been asked for.
     preview: Option<Preview>,
     /// Whether this device keeps the archive key, as read when the workspace
@@ -695,6 +702,8 @@ impl Workspace {
             pdf: None,
             pdf_path: String::new(),
             export_path: String::new(),
+            import_path: String::new(),
+            match_target: None,
             preview: None,
             device_remembered: Session::device_ready(session.keystore_path(), &store::device::Keychain),
             conformance_findings: Vec::new(),
@@ -887,6 +896,7 @@ impl Workspace {
         // new-invoice button stays available next to it.
         let composing = self.editor.as_ref().is_some_and(|editor| !editor.inline) || self.issued.is_some();
         let mut new_invoice = false;
+        let mut import_file = false;
 
         ui.horizontal(|ui| {
             // The trailing controls are laid out from the right edge so the
@@ -1010,6 +1020,13 @@ impl Workspace {
                 ui.horizontal(|ui| {
                     let counts = self.search.counts;
                     theme::value(ui, text::find::count_line(language, counts.matched, counts.total));
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.import_path)
+                            .id(egui::Id::unique("find.import-path"))
+                            .hint_text(text::find::import_hint(language))
+                            .desired_width(300.0),
+                    );
+                    import_file = ui.button(text::find::import_action(language)).clicked();
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         new_invoice = ui
                             .add_enabled(
@@ -1022,6 +1039,9 @@ impl Workspace {
             });
         if new_invoice {
             self.start_invoice();
+        }
+        if import_file {
+            self.import_received(session);
         }
 
         let width = (ui.available_width() - ui.spacing().scroll.bar_width).max(320.0);
@@ -1037,6 +1057,8 @@ impl Workspace {
         let mut close_panel = false;
         let mut close_draft = false;
         let mut save_artefact = None;
+        let mut settle = None;
+        let mut match_supplier = None;
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             ui.set_width(width);
             if self.search.results.is_empty() {
@@ -1127,7 +1149,14 @@ impl Workspace {
                         .corner_radius(6)
                         .inner_margin(egui::Margin::same(12))
                         .show(ui, |ui| match &self.search.opened {
-                            Some(view) => document_panel(ui, language, view, &mut self.export_path),
+                            Some(view) => document_panel(
+                                ui,
+                                language,
+                                view,
+                                &mut self.export_path,
+                                &self.customers,
+                                &mut self.match_target,
+                            ),
                             None => DocumentAction::None,
                         })
                         .inner;
@@ -1135,6 +1164,8 @@ impl Workspace {
                         DocumentAction::None => {}
                         DocumentAction::Close => close_panel = true,
                         DocumentAction::Save(kind) => save_artefact = Some(kind),
+                        DocumentAction::Advance(status) => settle = Some(status),
+                        DocumentAction::Match(customer) => match_supplier = Some(customer),
                     }
                     ui.add_space(4.0);
                 }
@@ -1165,12 +1196,14 @@ impl Workspace {
                 }
             } else if self.search.opened.as_ref().is_some_and(|view| view.id == id) {
                 self.search.opened = None;
+                self.match_target = None;
             } else {
                 // One fold at a time: opening a document puts an inline draft
                 // away, and opening a draft does the same to a document.
                 if self.editor.as_ref().is_some_and(|editor| editor.inline) {
                     self.reset_document();
                 }
+                self.match_target = None;
                 self.search.open(session.database(), id);
                 if let Some(number) = self.search.opened.as_ref().map(|view| view.number.clone()) {
                     self.export_path = default_pdf_path(session, &number);
@@ -1180,8 +1213,15 @@ impl Workspace {
         if let Some(kind) = save_artefact {
             self.save_artefact(session, kind);
         }
+        if let Some(status) = settle {
+            self.advance_opened(session, status);
+        }
+        if let Some(customer) = match_supplier {
+            self.match_opened(session, customer);
+        }
         if close_panel {
             self.search.opened = None;
+            self.match_target = None;
         }
         if close_draft {
             self.reset_document();
@@ -2413,6 +2453,7 @@ impl Workspace {
         self.pdf = None;
         self.pdf_path.clear();
         self.preview = None;
+        self.match_target = None;
         self.conformance_findings.clear();
         self.suppressions.clear();
         self.suppress_target = None;
@@ -2685,6 +2726,102 @@ impl Workspace {
                     &error.to_string(),
                 )))
             }
+        }
+    }
+
+    /// Reads an invoice a supplier sent us and folds it open in the list.
+    fn import_received(&mut self, session: &Session) {
+        let language = self.language;
+        let Some(owner) = self.seller.as_ref().map(|seller| seller.id) else {
+            return;
+        };
+        let path = self.import_path.trim().to_owned();
+        if path.is_empty() {
+            self.message = Some(Message::error(text::find::choose_import_path(language)));
+            return;
+        }
+        let outcome = match import::import_file(session.database(), owner, Path::new(&path), &store::now_rfc3339()) {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                self.message = Some(Message::error(text::find::import_failed(language, &error.to_string())));
+                return;
+            }
+        };
+        let supplier = outcome
+            .supplier
+            .and_then(|id| self.customers.iter().find(|customer| customer.id == id))
+            .map(|customer| customer.party.legal_name.clone());
+        self.message = Some(Message::ok(text::find::imported(
+            language,
+            &outcome.number,
+            supplier.as_deref(),
+            outcome.duplicate,
+        )));
+        if !outcome.duplicate {
+            // Importing is explicit, so show the register with the new document
+            // folded open rather than leaving it behind the current filters.
+            self.search.query.clear();
+            self.search.direction = Some(Direction::Inbound);
+            self.search.status = None;
+            self.search.applied = None;
+            self.match_target = None;
+            self.search.open(session.database(), outcome.document_id);
+        }
+        let _ = self.search.run(session.database(), owner);
+    }
+
+    /// Records the supplier chosen for the open received document.
+    fn match_opened(&mut self, session: &Session, customer: CustomerId) {
+        let Some(id) = self.search.opened.as_ref().map(|view| view.id) else {
+            return;
+        };
+        match set_supplier_match(
+            session.database().connection(),
+            id,
+            customer,
+            ACTOR,
+            &store::now_rfc3339(),
+        ) {
+            Ok(()) => {
+                let name = self
+                    .customers
+                    .iter()
+                    .find(|candidate| candidate.id == customer)
+                    .map(|candidate| candidate.party.legal_name.clone())
+                    .unwrap_or_default();
+                self.message = Some(Message::ok(text::find::matched(self.language, &name)));
+                self.match_target = None;
+                self.refresh_opened(session, id);
+            }
+            Err(error) => self.message = Some(Message::error(error.to_string())),
+        }
+    }
+
+    /// Moves the open received document forward one status.
+    fn advance_opened(&mut self, session: &Session, target: DocumentStatus) {
+        let Some(id) = self.search.opened.as_ref().map(|view| view.id) else {
+            return;
+        };
+        match advance_status(
+            session.database().connection(),
+            id,
+            target,
+            ACTOR,
+            &store::now_rfc3339(),
+        ) {
+            Ok(status) => {
+                self.message = Some(Message::ok(text::find::settled(self.language, status)));
+                self.refresh_opened(session, id);
+            }
+            Err(error) => self.message = Some(Message::error(error.to_string())),
+        }
+    }
+
+    /// Re-reads the open document and the list after a change to it.
+    fn refresh_opened(&mut self, session: &Session, id: DocumentId) {
+        self.search.open(session.database(), id);
+        if let Some(owner) = self.seller.as_ref().map(|seller| seller.id) {
+            let _ = self.search.run(session.database(), owner);
         }
     }
 
@@ -3177,6 +3314,10 @@ enum DocumentAction {
     Close,
     /// Write the artefact of this kind to the chosen path.
     Save(&'static str),
+    /// Move the open received document to the next status.
+    Advance(DocumentStatus),
+    /// Record the chosen supplier for the open received document.
+    Match(CustomerId),
 }
 
 /// Draws a stored document read-only.
@@ -3185,6 +3326,8 @@ fn document_panel(
     language: Language,
     view: &DocumentView,
     export_path: &mut String,
+    customers: &[CustomerRecord],
+    match_target: &mut Option<CustomerId>,
 ) -> DocumentAction {
     let mut action = DocumentAction::None;
     ui.horizontal(|ui| {
@@ -3233,6 +3376,10 @@ fn document_panel(
         });
 
     ui.add_space(6.0);
+    if view.direction == Direction::Inbound {
+        action = received_actions(ui, language, view, customers, match_target);
+        ui.add_space(6.0);
+    }
     egui::Grid::new("document-lines")
         .num_columns(6)
         .striped(true)
@@ -3304,6 +3451,55 @@ fn document_panel(
         });
     }
 
+    action
+}
+
+/// The supplier picker and status buttons of a received document.
+fn received_actions(
+    ui: &mut egui::Ui,
+    language: Language,
+    view: &DocumentView,
+    customers: &[CustomerRecord],
+    match_target: &mut Option<CustomerId>,
+) -> DocumentAction {
+    let mut action = DocumentAction::None;
+    ui.horizontal(|ui| {
+        ui.label(text::find::supplier_label(language));
+        let whose = (*match_target).or(view.supplier_match);
+        let selected = whose
+            .and_then(|id| customers.iter().find(|customer| customer.id == id))
+            .map_or_else(
+                || text::find::unmatched(language).to_owned(),
+                |customer| customer.party.legal_name.clone(),
+            );
+        egui::ComboBox::from_id_salt("document-supplier")
+            .selected_text(selected)
+            .show_ui(ui, |ui| {
+                ui.selectable_value(match_target, None, text::find::unmatched(language));
+                for customer in customers {
+                    ui.selectable_value(match_target, Some(customer.id), customer.party.legal_name.as_str());
+                }
+            });
+        let changed = match_target.is_some() && *match_target != view.supplier_match;
+        if ui
+            .add_enabled(changed, egui::Button::new(text::find::match_action(language)))
+            .clicked()
+            && let Some(customer) = *match_target
+        {
+            action = DocumentAction::Match(customer);
+        }
+        ui.separator();
+        let next = match view.status {
+            DocumentStatus::Received => Some((text::find::approve_action(language), DocumentStatus::Approved)),
+            DocumentStatus::Approved => Some((text::find::mark_paid_action(language), DocumentStatus::Paid)),
+            _ => None,
+        };
+        if let Some((label, target)) = next
+            && ui.button(label).clicked()
+        {
+            action = DocumentAction::Advance(target);
+        }
+    });
     action
 }
 
@@ -4154,5 +4350,118 @@ mod tests {
         assert_eq!(sibling_path("  ", "pdf"), Path::new("export.pdf"));
         assert_eq!(artefact_extension("ubl"), "xml");
         assert_eq!(artefact_extension("pdf"), "pdf");
+    }
+
+    /// A seller and customer complete enough for the Peppol profile the issue
+    /// path validates against.
+    fn peppol_parties() -> (SellerRecord, CustomerRecord) {
+        let mut seller = seller();
+        seller.party.address.street = Some("Main 1".to_owned());
+        seller.party.address.postal_code = Some("1000 AA".to_owned());
+        seller.party.vat_id = Some("NL123456782B01".to_owned());
+        seller.party.peppol_id = Some("0106:12345678".to_owned());
+
+        let mut party = Party::new("Acme BV", Address::new("Rotterdam", CountryCode::NL));
+        party.address.street = Some("Dam 1".to_owned());
+        party.address.postal_code = Some("3000 AA".to_owned());
+        party.peppol_id = Some("0106:87654321".to_owned());
+        let customer = CustomerRecord {
+            id: CustomerId::new(),
+            party,
+        };
+        (seller, customer)
+    }
+
+    #[test]
+    fn a_received_document_can_be_matched_and_settled() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let mut session = Session::create(
+            dir.path().join("bonk.db"),
+            dir.path().join("keystore.bin"),
+            "passphrase",
+        )
+        .unwrap();
+        let (seller, customer) = peppol_parties();
+        insert_seller(session.database().connection(), &seller, NOW).unwrap();
+        insert_customer(session.database().connection(), &customer, NOW).unwrap();
+
+        // Issue a document with the real writer, so the import has a file an
+        // archive would actually receive.
+        let mut form = editor();
+        form.customer = Some(customer.id);
+        form.buyer_reference = "PO-1".to_owned();
+        form.due_date = "2026-11-27".to_owned();
+        let draft = build_draft(&form, &seller).unwrap();
+        insert_draft(session.database().connection(), &draft, NOW).unwrap();
+        let mut ubl = Vec::new();
+        issue_draft(
+            session.database_mut().connection_mut(),
+            IssueRequest {
+                draft_id: draft.id,
+                actor: "test",
+                device: "test",
+                renderer_version: "test",
+                now: NOW,
+            },
+            |view| {
+                let bytes = crate::render_issue(view)?;
+                ubl.clone_from(&bytes);
+                Ok(bytes)
+            },
+        )
+        .unwrap();
+        let incoming = dir.path().join("received.xml");
+        std::fs::write(&incoming, &ubl).unwrap();
+
+        let mut workspace = Workspace::new(&session).unwrap();
+        workspace.import_path = incoming.display().to_string();
+        workspace.import_received(&session);
+
+        let view = workspace.search.opened.clone().expect("the import opens the document");
+        assert_eq!(view.direction, Direction::Inbound);
+        assert_eq!(view.status, DocumentStatus::Received);
+        assert_eq!(view.supplier_match, None, "the issuer is not in the party table");
+        assert_eq!(workspace.search.direction, Some(Direction::Inbound));
+
+        // The received panel draws with the picker and the settle button.
+        let context = egui::Context::default();
+        let mut appearance = egui::ThemePreference::System;
+        let output = context.run_ui(egui::RawInput::default(), |ui| {
+            let _ = workspace.ui(ui, &mut session, &mut appearance);
+        });
+        output.drop_without_applying_deltas();
+
+        workspace.match_opened(&session, customer.id);
+        assert_eq!(
+            workspace.search.opened.as_ref().map(|view| view.supplier_match),
+            Some(Some(customer.id))
+        );
+
+        workspace.advance_opened(&session, DocumentStatus::Approved);
+        assert_eq!(
+            workspace.search.opened.as_ref().map(|view| view.status),
+            Some(DocumentStatus::Approved)
+        );
+        workspace.advance_opened(&session, DocumentStatus::Paid);
+        assert_eq!(
+            workspace.search.opened.as_ref().map(|view| view.status),
+            Some(DocumentStatus::Paid)
+        );
+
+        // Status changes are document events, so the settlement stays provable.
+        // The supplier match is a separate audit entry, which the view exposes as
+        // `supplier_match` rather than as a status event.
+        let events: Vec<&str> = workspace
+            .search
+            .opened
+            .as_ref()
+            .expect("still open")
+            .events
+            .iter()
+            .map(|event| event.kind.as_str())
+            .collect();
+        for expected in ["approved", "paid"] {
+            assert!(events.contains(&expected), "{expected} missing from {events:?}");
+        }
     }
 }
