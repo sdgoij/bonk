@@ -86,6 +86,8 @@ cargo fmt --all --check
   `feat: add EN 16931 conformance foundation`.
 - Explain what changed and why in the body.
 - Write each body paragraph as one unwrapped line.
+- Tracked text is LF in the index and in the working tree, on every platform;
+  `.gitattributes` pins that. Do not commit CRLF files or a CRLF-only diff.
 - Never commit generated artefacts, databases, keystores, or downloaded
   validator jars. `target/` and the secret patterns in `.gitignore` must stay
   ignored.

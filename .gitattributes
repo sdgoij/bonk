@@ -1,7 +1,15 @@
-* text=auto
+# Line endings are LF in the repository and in the working tree, on every
+# platform. The Rust toolchain, rustfmt, the shell hooks, and the codelist
+# hashes all assume LF, and a CRLF checkout has already changed the bytes that
+# `include_str!` embeds once on Windows only. Setting `eol` here overrides
+# `core.autocrlf`, so two developers cannot see different bytes for one commit.
+* text=auto eol=lf
+
+# Scripts are executed, not read: a CRLF shebang does not run.
 *.sh text eol=lf
-*.typ text eol=lf
 .githooks/* text eol=lf
-# The build hashes these files; a CRLF checkout would change the bytes that
-# `include_str!` embeds and make the manifest look wrong on Windows only.
-crates/conformance/codelists/** text eol=lf
+
+# Never let Git guess about an artefact it cannot normalise.
+*.ttf binary
+*.png binary
+*.pdf binary
