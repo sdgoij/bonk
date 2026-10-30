@@ -853,12 +853,7 @@ pub mod editor {
         "Draft"
     }
 
-    /// Tooltip on the button that puts the composer away.
-    pub fn close_composer(_: Language) -> &'static str {
-        "Close without issuing"
-    }
-
-    /// Renders what the invoice will look like.
+    /// Toggles the rendered preview.
     pub fn preview_action(_: Language) -> &'static str {
         "Preview"
     }
@@ -866,11 +861,6 @@ pub mod editor {
     /// Heading over the rendered preview.
     pub fn preview_heading(_: Language) -> &'static str {
         "Preview"
-    }
-
-    /// Tooltip on the button that hides the preview.
-    pub fn close_preview(_: Language) -> &'static str {
-        "Hide the preview"
     }
 
     /// The number field of a preview: nothing has been allocated yet.

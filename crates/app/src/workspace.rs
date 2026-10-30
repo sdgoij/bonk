@@ -967,7 +967,6 @@ impl Workspace {
         }
 
         if composing {
-            let mut close = false;
             let max_height = (ui.available_height() * 0.62).max(240.0);
             egui::Frame::new()
                 .fill(tokens.surface_alt)
@@ -975,24 +974,13 @@ impl Workspace {
                 .corner_radius(8)
                 .inner_margin(egui::Margin::same(12))
                 .show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.strong(self.composer_heading(language));
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            close = ui
-                                .small_button("×")
-                                .on_hover_text(text::editor::close_composer(language))
-                                .clicked();
-                        });
-                    });
+                    ui.strong(self.composer_heading(language));
                     egui::ScrollArea::vertical()
                         .id_salt("composer")
                         .max_height(max_height)
                         .auto_shrink([false, false])
                         .show(ui, |ui| self.composer_ui(ui, session, focus));
                 });
-            if close {
-                self.reset_document();
-            }
             ui.add_space(8.0);
         }
 
@@ -1036,7 +1024,6 @@ impl Workspace {
 
         let mut toggle = None;
         let mut close_panel = false;
-        let mut close_draft = false;
         let mut save_artefact = None;
         let mut settle = None;
         let mut match_supplier = None;
@@ -1099,26 +1086,16 @@ impl Workspace {
                     && editor.id == id
                 {
                     ui.add_space(2.0);
-                    let mut closed = false;
                     egui::Frame::new()
                         .fill(tokens.surface_alt)
                         .stroke(egui::Stroke::new(1.0, tokens.border))
                         .corner_radius(6)
                         .inner_margin(egui::Margin::same(12))
                         .show(ui, |ui| {
-                            ui.horizontal(|ui| {
-                                ui.strong(text::editor::draft_heading(language));
-                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                    closed = ui
-                                        .small_button("×")
-                                        .on_hover_text(text::editor::close_composer(language))
-                                        .clicked();
-                                });
-                            });
+                            ui.strong(text::editor::draft_heading(language));
                             self.editor_ui(ui, session, focus);
                             self.preview_ui(ui);
                         });
-                    close_draft |= closed;
                     ui.add_space(4.0);
                 }
 
@@ -1153,33 +1130,7 @@ impl Workspace {
         });
 
         if let Some(id) = toggle {
-            let draft = self
-                .search
-                .results
-                .iter()
-                .any(|hit| hit.id == id && hit.status == DocumentStatus::Draft);
-            if draft {
-                let open = self
-                    .editor
-                    .as_ref()
-                    .is_some_and(|editor| editor.inline && editor.id == id);
-                if open {
-                    self.reset_document();
-                } else {
-                    self.open_draft(session, id);
-                }
-            } else if self.search.opened.as_ref().is_some_and(|view| view.id == id) {
-                self.search.opened = None;
-                self.match_target = None;
-            } else {
-                // One fold at a time: opening a document puts an inline draft
-                // away, and opening a draft does the same to a document.
-                if self.editor.as_ref().is_some_and(|editor| editor.inline) {
-                    self.reset_document();
-                }
-                self.match_target = None;
-                self.search.open(session.database(), id);
-            }
+            self.activate_row(session, id);
         }
         if let Some(kind) = save_artefact {
             let number = self
@@ -1203,9 +1154,6 @@ impl Workspace {
         if close_panel {
             self.search.opened = None;
             self.match_target = None;
-        }
-        if close_draft {
-            self.reset_document();
         }
     }
 
@@ -2021,12 +1969,7 @@ impl Workspace {
             return;
         };
         ui.add_space(10.0);
-        let close = ui.horizontal(|ui| {
-            ui.strong(text::editor::preview_heading(language));
-            ui.small_button("×")
-                .on_hover_text(text::editor::close_preview(language))
-                .clicked()
-        });
+        ui.strong(text::editor::preview_heading(language));
 
         if let Some(page) = preview.document.pages.first() {
             // The page fills the width it is given; the height follows the page
@@ -2087,8 +2030,16 @@ impl Workspace {
                 ui.small(text::editor::preview_more_pages(language, preview.document.pages.len()));
             }
         }
+    }
 
-        if close.inner {
+    /// Applies the preview toggle: on lays the form out, off puts the page away.
+    ///
+    /// The state it reads is the preview itself, so the control and what the form
+    /// shows cannot disagree.
+    fn set_preview(&mut self, showing: bool) {
+        if showing {
+            self.render_preview();
+        } else {
             self.preview = None;
         }
     }
@@ -2184,6 +2135,39 @@ impl Workspace {
         }
     }
 
+    /// What a click on a result row does.
+    ///
+    /// A draft opens in its row and closes again on a second click. A document
+    /// opens its panel. Any click on a row that is not the open draft's own puts
+    /// the composer away: the row is what the window is about, and the composer
+    /// has no close button of its own.
+    fn activate_row(&mut self, session: &Session, id: DocumentId) {
+        let draft = self
+            .search
+            .results
+            .iter()
+            .any(|hit| hit.id == id && hit.status == DocumentStatus::Draft);
+        if draft {
+            let open = self
+                .editor
+                .as_ref()
+                .is_some_and(|editor| editor.inline && editor.id == id);
+            if open {
+                self.reset_document();
+            } else {
+                self.open_draft(session, id);
+            }
+            return;
+        }
+
+        self.reset_document();
+        if self.search.opened.as_ref().is_some_and(|view| view.id == id) {
+            self.search.opened = None;
+        } else {
+            self.search.open(session.database(), id);
+        }
+    }
+
     fn editor_ui(&mut self, ui: &mut egui::Ui, session: &mut Session, focus: Option<&str>) {
         let language = self.language;
         let tokens = *theme::palette(ui.ctx());
@@ -2193,7 +2177,7 @@ impl Workspace {
         let customers = self.customers.clone();
         let save;
         let issue;
-        let preview;
+        let mut preview_toggle = None;
         let mut remove_line = None;
 
         {
@@ -2407,19 +2391,26 @@ impl Workspace {
             ui.add_space(8.0);
             let mut clicked_save = false;
             let mut clicked_issue = false;
-            let mut clicked_preview = false;
+            // The preview is a toggle rather than a button plus a close button:
+            // its state is what the form is showing, so the control says it.
+            let mut showing_preview = self.preview.is_some();
+            let mut toggled_preview = false;
             ui.horizontal(|ui| {
                 clicked_save = ui.button(text::editor::save_draft_action(language)).clicked();
                 clicked_issue = ui.button(text::editor::issue_action(language)).clicked();
-                clicked_preview = ui.button(text::editor::preview_action(language)).clicked();
+                toggled_preview = ui
+                    .toggle_value(&mut showing_preview, text::editor::preview_action(language))
+                    .changed();
             });
             save = clicked_save;
             issue = clicked_issue;
-            preview = clicked_preview;
+            if toggled_preview {
+                preview_toggle = Some(showing_preview);
+            }
         }
 
-        if preview {
-            self.render_preview();
+        if let Some(showing) = preview_toggle {
+            self.set_preview(showing);
         }
 
         let mut finding_action = None;
@@ -4243,6 +4234,88 @@ mod tests {
         assert_eq!(rebuilt.note, draft.note);
         assert_eq!(rebuilt.due_date, draft.due_date);
         drop(dir);
+    }
+
+    #[test]
+    fn a_row_click_puts_the_composer_away() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let mut session = Session::create(
+            dir.path().join("bonk.db"),
+            dir.path().join("keystore.bin"),
+            "passphrase",
+        )
+        .unwrap();
+        let seller = seller();
+        insert_seller(session.database().connection(), &seller, NOW).unwrap();
+        let customer = CustomerRecord {
+            id: CustomerId::new(),
+            party: Party::new("Acme BV", Address::new("Rotterdam", CountryCode::NL)),
+        };
+        insert_customer(session.database().connection(), &customer, NOW).unwrap();
+
+        let mut form = editor();
+        form.customer = Some(customer.id);
+        let draft = build_draft(&form, &seller).unwrap();
+        insert_draft(session.database().connection(), &draft, NOW).unwrap();
+        issue_draft(
+            session.database_mut().connection_mut(),
+            IssueRequest {
+                draft_id: draft.id,
+                actor: "test",
+                device: "test",
+                renderer_version: "test",
+                now: NOW,
+            },
+            |_| Ok(b"<Invoice/>".to_vec()),
+        )
+        .unwrap();
+
+        let mut workspace = Workspace::new(&session).unwrap();
+        workspace.start_invoice();
+        assert!(workspace.editor.is_some(), "the composer is open");
+
+        workspace.search.run(session.database(), seller.id).unwrap();
+        let id = workspace.search.results[0].id;
+        workspace.activate_row(&session, id);
+
+        // The composer has no close button, so this is what dismisses it.
+        assert!(workspace.editor.is_none(), "a row click closed the composer");
+        assert_eq!(
+            workspace.search.opened.as_ref().map(|view| view.id),
+            Some(id),
+            "and opened the row it was clicked on"
+        );
+    }
+
+    #[test]
+    fn the_preview_toggle_turns_the_page_on_and_off() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let session = Session::create(
+            dir.path().join("bonk.db"),
+            dir.path().join("keystore.bin"),
+            "passphrase",
+        )
+        .unwrap();
+        insert_seller(session.database().connection(), &seller(), NOW).unwrap();
+        let customer = CustomerRecord {
+            id: CustomerId::new(),
+            party: Party::new("Acme BV", Address::new("Rotterdam", CountryCode::NL)),
+        };
+        insert_customer(session.database().connection(), &customer, NOW).unwrap();
+
+        let mut workspace = Workspace::new(&session).unwrap();
+        workspace.start_invoice();
+        if let Some(editor) = workspace.editor.as_mut() {
+            editor.customer = Some(customer.id);
+            editor.lines[0].name = "Consulting".to_owned();
+            editor.lines[0].quantity = "1".to_owned();
+            editor.lines[0].unit_price = "100.00".to_owned();
+        }
+
+        workspace.set_preview(true);
+        assert!(workspace.preview.is_some(), "the toggle lays the page out");
+        workspace.set_preview(false);
+        assert!(workspace.preview.is_none(), "the toggle puts it away again");
     }
 
     #[test]
