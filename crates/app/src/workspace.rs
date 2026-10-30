@@ -2365,32 +2365,24 @@ impl Workspace {
                                     focus,
                                 );
                                 let vat_field = format!("lines[{index}].vat_category");
-                                // The combo's width is a minimum, so it is drawn in a
-                                // cell of exactly this width: a long category name
-                                // then wraps inside the cell instead of pushing the
-                                // row past the note field.
-                                let combo = ui
-                                    .allocate_ui_with_layout(
-                                        egui::vec2(LINE_VAT_WIDTH, field_height(ui)),
-                                        egui::Layout::left_to_right(egui::Align::Center),
-                                        |ui| {
-                                            egui::ComboBox::from_id_salt(("vat", index))
-                                                .width(LINE_VAT_WIDTH)
-                                                .selected_text(category_label(line.category))
-                                                .show_ui(ui, |ui| {
-                                                    for category in CATEGORIES {
-                                                        ui.selectable_value(
-                                                            &mut line.category,
-                                                            category,
-                                                            category_label(category),
-                                                        );
-                                                    }
-                                                })
-                                        },
-                                    )
-                                    .inner;
+                                // The closed cell shows the EN 16931 code, not the
+                                // description: a combo box takes its width as a
+                                // minimum and lays its label out at its natural
+                                // length, so a long description would widen the
+                                // row past the note field. The description is one
+                                // hover, or one click, away.
+                                let chosen = line.category;
+                                let combo = egui::ComboBox::from_id_salt(("vat", index))
+                                    .width(LINE_VAT_WIDTH)
+                                    .selected_text(chosen.code())
+                                    .show_ui(ui, |ui| {
+                                        for category in CATEGORIES {
+                                            ui.selectable_value(&mut line.category, category, category_label(category));
+                                        }
+                                    });
+                                let combo = combo.response.on_hover_text(category_label(chosen));
                                 if focus == Some(vat_field.as_str()) {
-                                    combo.response.request_focus();
+                                    combo.request_focus();
                                 }
                                 let remove = ui.add_sized(
                                     egui::vec2(LINE_ACTION_WIDTH, field_height(ui)),
@@ -2911,7 +2903,7 @@ fn artefact_extension(kind: &str) -> &'static str {
 const LINE_QUANTITY_WIDTH: f32 = 64.0;
 const LINE_PRICE_WIDTH: f32 = 96.0;
 const LINE_RATE_WIDTH: f32 = 56.0;
-const LINE_VAT_WIDTH: f32 = 140.0;
+const LINE_VAT_WIDTH: f32 = 72.0;
 const LINE_ACTION_WIDTH: f32 = 76.0;
 
 /// The width of the item-name column.
@@ -4415,7 +4407,7 @@ mod tests {
         let fixed =
             LINE_QUANTITY_WIDTH + LINE_PRICE_WIDTH + LINE_RATE_WIDTH + LINE_VAT_WIDTH + LINE_ACTION_WIDTH + 5.0 * 8.0;
         assert!(name_column_width(1000.0) >= 500.0, "more than half on a normal window");
-        assert_eq!(name_column_width(1400.0), 928.0);
+        assert_eq!(name_column_width(1400.0), 996.0);
         assert_eq!(name_column_width(300.0), 240.0, "a tiny row keeps the field usable");
         for available in [1000.0, 1400.0] {
             assert!(
@@ -4449,6 +4441,11 @@ mod tests {
         insert_customer(session.database().connection(), &customer, NOW).unwrap();
         let mut workspace = Workspace::new(&session).unwrap();
         workspace.start_invoice();
+        // The longest category label is what shows a row that grows with its
+        // content, so the row is measured with it selected.
+        if let Some(editor) = workspace.editor.as_mut() {
+            editor.lines[0].category = VatCategory::ReverseCharge;
+        }
 
         let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 800.0));
         let context = egui::Context::default();
@@ -4500,6 +4497,19 @@ mod tests {
             (row - note).abs() <= 1.0,
             "the item row ends at {row:.0} but the note field at {note:.0}"
         );
+    }
+
+    /// The VAT cell shows the code while the picker is closed.
+    ///
+    /// A combo box takes its width as a minimum and lays out its label at its
+    /// natural length, so the closed label has to stay short enough never to widen
+    /// the item row past the note field. The codes are one or two letters; the
+    /// descriptions live in the menu.
+    #[test]
+    fn the_closed_vat_label_is_short() {
+        for category in CATEGORIES {
+            assert!(category.code().len() <= 2, "{} would widen the row", category.code());
+        }
     }
 
     #[test]
