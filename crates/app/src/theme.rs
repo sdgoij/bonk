@@ -78,13 +78,13 @@ pub const LIGHT: Palette = Palette {
     text: Color32::from_rgb(0x38, 0x31, 0x28),
     muted: Color32::from_rgb(0x63, 0x5A, 0x4C),
     accent: Color32::from_rgb(0xA1, 0x3F, 0x0D),
-    accent_text: Color32::from_rgb(0xA1, 0x3F, 0x0D),
+    accent_text: Color32::from_rgb(0xFF, 0xFF, 0xFF),
     accent_weak: Color32::from_rgb(0xE9, 0xD8, 0xCC),
     success: Color32::from_rgb(0x0F, 0x6B, 0x2F),
     warning: Color32::from_rgb(0x92, 0x61, 0x0A),
     error: Color32::from_rgb(0x9C, 0x2F, 0x22),
     stripe: Color32::from_rgb(0xEE, 0xE8, 0xDF),
-    hover: Color32::from_rgb(0, 255, 0),
+    hover: Color32::from_rgb(0xEF, 0xE4, 0xDB),
     selection: Color32::from_rgb(0xE9, 0xD8, 0xCC),
 };
 
