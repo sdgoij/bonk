@@ -91,9 +91,76 @@ What it costs us in capability is real but narrow: no complex-script shaping
 beyond what `rustybuzz` does, no bidirectional layout, no math, no user-editable
 templates unless we design them. Our market prints Dutch and English invoices.
 
+## Template customisation
+
+Typst gave users a programming language to write templates in. That is the one
+thing worth keeping from it, and it is also the thing we cannot keep: a template
+that can compute, loop, or read files is a security surface and an integrity
+risk in a document that has legal weight. The replacement is a declarative
+template — data, not code — that describes the *document*, not the drawing.
+
+```json
+{
+  "version": 1,
+  "name": "House style",
+  "page": { "size": "A4", "margin_pt": { "top": 51, "right": 57, "bottom": 51, "left": 57 } },
+  "text": { "family": ["Liberation Serif", "DejaVu Serif"], "size_pt": 9.5, "title_size_pt": 18, "colour": "#111111" },
+  "rules": { "colour": "#999999", "width_pt": 0.5 },
+  "logo": { "path": "logo.png", "height_pt": 24 },
+  "sections": ["header", "parties", "lines", "totals", "note", "footer"],
+  "lines": {
+    "columns": [
+      { "field": "item", "width": "1fr" },
+      { "field": "qty", "width": "50pt", "align": "right" },
+      { "field": "unit_price", "width": "70pt", "align": "right" },
+      { "field": "vat", "width": "45pt", "align": "right" },
+      { "field": "total", "width": "75pt", "align": "right" }
+    ]
+  },
+  "labels": { "due": "Vervaldatum", "bill_to": "Factuur aan" },
+  "footer": { "text": "KvK {{seller.kvk}} · BTW {{seller.vat}} · IBAN {{seller.iban}}", "size_pt": 7.5 }
+}
+```
+
+Rules that make it safe and small:
+
+- **No expressions.** `sections` reorders or omits known blocks; `labels`
+  overrides built-in words; `lines.columns` chooses fields and widths. Nothing
+  can compute.
+- **Placeholders are a fixed table.** `{{seller.kvk}}`, `{{customer.name}}`,
+  `{{invoice.number}}`, `{{totals.gross}}`, `{{page.number}}`, and a short list
+  more. An unknown name is a validation error with its field path, not an empty
+  string.
+- **Widths are `pt` or `fr`.** The engine resolves them and owns page breaks,
+  so an overflowing line list paginates whatever the template says.
+- **Unknown keys are errors.** Denying unknown fields turns a typo into a
+  message instead of a setting that silently does nothing.
+- **The logo stays inside the template directory.** A relative path that
+  escapes it is refused.
+
+Where templates live and how they are chosen:
+
+- `<archive dir>/templates/<name>.json`, beside the database, plus one built-in
+  `classic` compiled into the binary as the default.
+- The seller record names its template; the document editor can override it for
+  one document.
+- At issue time the template is hashed and recorded next to the artefact, so
+  "which layout produced this PDF" is answerable from the archive alone. The PDF
+  itself stays the artefact — the template is not needed to read it.
+
+Validation reuses the shape the domain already uses for findings: a code, a
+field path the window can focus, and a message. `lines.columns[2].width` is a
+place the UI can point at, which is what a user needs when a template they wrote
+comes back rejected.
+
+What this deliberately cannot do: arbitrary drawing, computed values, conditionals,
+or multi-document layouts. Someone who needs those needs a typesetter, and the
+reason we are leaving Typst behind is that we were shipping one to draw a table.
+
 ## Not decided
 
 The next step is a prototype, not a commit: render one real invoice through
-krilla, put it beside the Typst output, and check the layout, the bytes, and the
-binary size. If it holds up, the Typst dependency goes and `render` becomes a
-layout module plus a PDF writer.
+krilla with this layout model, put it beside the Typst output, and check the
+layout, the bytes, and the binary size. If it holds up, the Typst dependency goes
+and `render` becomes a layout module plus a PDF writer — with the template above
+as its first-class input rather than a retrofit.
