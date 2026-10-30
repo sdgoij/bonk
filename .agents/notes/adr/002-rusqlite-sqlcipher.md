@@ -20,8 +20,9 @@ Use SQLite through `rusqlite` (synchronous), compiled with
 - SQL semantics, transactions, FTS5, and `VACUUM INTO` backups are available
   without a server.
 - Building requires a working C toolchain and OpenSSL; on Windows that means a
-  full Perl (see the SQLCipher spike note). The `plain` feature exists only for
-  development on hosts that lack it.
+  full Perl (see the SQLCipher spike note), and on Linux a Perl that provides
+  `Time::Piece` (a separate package on distributions that split core modules).
+  The `plain` feature exists only for development on hosts that lack it.
 - One writer caps concurrency, which matches the scale target.
 
 ## Alternatives

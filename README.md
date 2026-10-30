@@ -58,11 +58,35 @@ builds are incremental. The release binary is about 32 MB: the layout engine,
 `krilla`, and one bundled font family (DejaVu Serif regular and bold) are inside
 it.
 
-**macOS / Linux:** the system Perl is sufficient.
+**macOS / Linux:** the Perl must provide the modules OpenSSL's build uses.
+Check it before the first build:
+
+```sh
+perl -MTime::Piece -e 1
+```
+
+If the OpenSSL build stops with `Can't locate Time/Piece.pm in @INC`, that is
+this missing module rather than a Cargo or Rust problem.
+
+macOS and most Linux distributions ship it with Perl. Distributions that split
+core modules into separate packages do not — on Fedora and RHEL, install it
+with:
+
+```sh
+sudo dnf install 'perl(Time::Piece)'
+```
+
+Then:
 
 ```sh
 just test
 ```
+
+If installing Perl modules is not an option, `OPENSSL_NO_VENDOR=1` builds
+against the system OpenSSL instead (install the development headers first). That
+is suitable for local development only: it makes the binary depend on the host's
+`libssl`, so release builds stay vendored. `just test-plain` avoids OpenSSL
+entirely and is also a development-only fallback.
 
 `.zed/settings.json` disables all language servers for Perl in this workspace;
 the repository contains no Perl files.
