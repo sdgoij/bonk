@@ -2310,22 +2310,23 @@ impl Workspace {
 
             ui.add_space(8.0);
             ui.label(text::editor::note_label(language));
+            // One width for the whole form: the note and the item rows end at the
+            // same edge, which is what makes the form read as a single column. The
+            // gutter the scroll bar will use is taken out up front, so the rows do
+            // not end where the bar begins.
+            let form_width = ui.available_width() - ui.spacing().scroll.bar_width;
             let note = ui.add(
                 egui::TextEdit::multiline(&mut editor.note)
                     .id(egui::Id::unique("note"))
                     .desired_rows(3)
-                    .desired_width(ui.available_width()),
+                    .desired_width(form_width),
             );
             if focus == Some("note") {
                 note.request_focus();
             }
 
             ui.add_space(10.0);
-            // The name is the line: give it at least half of the width, and the
-            // rest of the row what the other controls need. The scroll bar takes
-            // its width out of the row too, so it is subtracted up front.
-            let available = ui.available_width() - ui.spacing().scroll.bar_width;
-            let name_width = name_column_width(available);
+            let name_width = name_column_width(form_width);
             egui::ScrollArea::vertical()
                 .max_height(260.0)
                 .auto_shrink([false, true])
@@ -2364,14 +2365,30 @@ impl Workspace {
                                     focus,
                                 );
                                 let vat_field = format!("lines[{index}].vat_category");
-                                let combo = egui::ComboBox::from_id_salt(("vat", index))
-                                    .width(LINE_VAT_WIDTH)
-                                    .selected_text(category_label(line.category))
-                                    .show_ui(ui, |ui| {
-                                        for category in CATEGORIES {
-                                            ui.selectable_value(&mut line.category, category, category_label(category));
-                                        }
-                                    });
+                                // The combo's width is a minimum, so it is drawn in a
+                                // cell of exactly this width: a long category name
+                                // then wraps inside the cell instead of pushing the
+                                // row past the note field.
+                                let combo = ui
+                                    .allocate_ui_with_layout(
+                                        egui::vec2(LINE_VAT_WIDTH, field_height(ui)),
+                                        egui::Layout::left_to_right(egui::Align::Center),
+                                        |ui| {
+                                            egui::ComboBox::from_id_salt(("vat", index))
+                                                .width(LINE_VAT_WIDTH)
+                                                .selected_text(category_label(line.category))
+                                                .show_ui(ui, |ui| {
+                                                    for category in CATEGORIES {
+                                                        ui.selectable_value(
+                                                            &mut line.category,
+                                                            category,
+                                                            category_label(category),
+                                                        );
+                                                    }
+                                                })
+                                        },
+                                    )
+                                    .inner;
                                 if focus == Some(vat_field.as_str()) {
                                     combo.response.request_focus();
                                 }
@@ -2894,7 +2911,7 @@ fn artefact_extension(kind: &str) -> &'static str {
 const LINE_QUANTITY_WIDTH: f32 = 64.0;
 const LINE_PRICE_WIDTH: f32 = 96.0;
 const LINE_RATE_WIDTH: f32 = 56.0;
-const LINE_VAT_WIDTH: f32 = 132.0;
+const LINE_VAT_WIDTH: f32 = 140.0;
 const LINE_ACTION_WIDTH: f32 = 76.0;
 
 /// The width of the item-name column.
@@ -4398,7 +4415,7 @@ mod tests {
         let fixed =
             LINE_QUANTITY_WIDTH + LINE_PRICE_WIDTH + LINE_RATE_WIDTH + LINE_VAT_WIDTH + LINE_ACTION_WIDTH + 5.0 * 8.0;
         assert!(name_column_width(1000.0) >= 500.0, "more than half on a normal window");
-        assert_eq!(name_column_width(1400.0), 936.0);
+        assert_eq!(name_column_width(1400.0), 928.0);
         assert_eq!(name_column_width(300.0), 240.0, "a tiny row keeps the field usable");
         for available in [1000.0, 1400.0] {
             assert!(
@@ -4468,6 +4485,21 @@ mod tests {
         assert!(quantity >= 60.0, "the quantity field is {quantity:.0} wide");
         assert!(price >= 90.0, "the price field is {price:.0} wide");
         assert!(rate >= 50.0, "the rate field is {rate:.0} wide");
+
+        // The row and the note field share one width, so the form reads as a
+        // single column rather than two ragged ones.
+        let note = width("note").expect("the note field drew");
+        let row = name
+            + LINE_QUANTITY_WIDTH
+            + LINE_PRICE_WIDTH
+            + LINE_RATE_WIDTH
+            + LINE_VAT_WIDTH
+            + LINE_ACTION_WIDTH
+            + 5.0 * 8.0;
+        assert!(
+            (row - note).abs() <= 1.0,
+            "the item row ends at {row:.0} but the note field at {note:.0}"
+        );
     }
 
     #[test]
