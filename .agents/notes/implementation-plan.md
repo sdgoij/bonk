@@ -223,6 +223,8 @@ deterministic for the same input. 132 tests workspace-wide.
 
 **Typst is linked in (2026-10-29).** The renderer used to shell out to the `typst` CLI through a temporary directory, which made issuing an invoice depend on a tool installed on the machine, failed on CI runners without it, and made the artefact bytes a property of the host. `render::TypstRenderer` now compiles the same template in-process through `embedded-typst`: the world is the template plus one in-memory `data.json`, the fonts are Typst's bundled set rather than the system's, and the creation time comes from the issue date as before. The preview is a PNG rasterised from that same compiled document with `typst-render`, so it cannot disagree with the PDF. Artefacts record `typst-0.15`; the cost is a much heavier build and a larger binary.
 
+**Typst is replaced by `krilla` and our own layout (2026-10-30).** Linking Typst in cost 37 MB of binary for a typesetter an invoice barely uses; the spike in `spikes/pdf-rendering.md` measured the alternative. `render` now owns the page: `layout` measures the bundled DejaVu Serif with `rustybuzz`, wraps and paginates, and emits `Document { pages: [Page { ops }] }` in points with the y axis pointing down; `pdf` walks those operations into `krilla`, the writer Typst itself uses. The window preview draws the *same* model with egui and the same font files, which replaces the PNG rasteriser and drops `typst-render`, `resvg`, and `tiny-skia` from the graph. Templates became declarative JSON (`render::template`): page, type, rules, section order, table columns as `pt`/`fr`, label overrides, and a footer with a fixed `{{placeholder}}` table — data, not code, so a template cannot compute or read a file. Unknown keys are refused and a bad field comes back with its path. The release binary is 32 MB and the dependency graph lost 161 packages. Artefacts now record `bonk-layout-1`.
+
 External validation: `tools/validate-m1.sh` generates 20 varied invoices and
 runs Mustangproject 2.17.0 against every UBL file. **20/20 pass EN 16931 and
 Peppol BIS 3.0 with zero failed rules.** The corpus is generated through the CLI
@@ -533,7 +535,7 @@ for the fixed parts of the printed form, plus the document's own name — "Credi
 note" rather than "Invoice" for a credit note, which it never was. `InvoiceData`
 carries `title` and `labels`, and the template prints them, so the editor preview
 has to supply them too; the payload is assembled by `app::pdf_data`, which is
-separate from the renderer so the shape is testable without Typst. The editor
+separate from the renderer so the shape is testable without a renderer. The editor
 defaults the language from the seller's locale and can change it per document;
 a credit note copies the language of the invoice it corrects. UBL is untouched:
 EN 16931 has no label field, so the language is a rendering choice frozen into
@@ -575,7 +577,7 @@ The footer under the results is pinned to the bottom of the window and reads `42
 
 **Parties carry a phone number**, normalised to E.164 in `crux::phone`: separators and parentheses are dropped, `00` becomes `+`, a national leading `0` is replaced with the country's calling code, and Italy keeps its zero. A country outside the table needs international form; saying so beats guessing. The customer form, the editor, the CSV, and `store::update_customer` all go through the same conversion, so a party cannot be stored under two spellings of one number.
 
-**Stored invoices can be exported and previewed.** The document panel offers **Save PDF** and **Save UBL**, reading the filed bytes back through `store::archive::artefact_bytes`, which verifies the hash before handing them out — an export is a copy of what was archived, not a re-render. The composer has **Preview**, which compiles the same Typst template with PNG export and shows page one in the window; because it is the template issuing uses, the preview cannot drift from the PDF, and it costs one Typst run only when asked for.
+**Stored invoices can be exported and previewed.** The document panel offers **Save PDF** and **Save UBL**, reading the filed bytes back through `store::archive::artefact_bytes`, which verifies the hash before handing them out — an export is a copy of what was archived, not a re-render. The composer has **Preview**, which lays the document out with the same engine and template issuing uses and draws page one in the window; because the window and the PDF share one layout model, the preview cannot drift from the PDF, and it costs one shaping pass only when asked for. A document that runs to more than one page says so under the preview.
 
 Remaining in M5: the validation messages from `build_draft` and the domain errors
 from `crux` that they quote. Those are not widget strings: translating them means

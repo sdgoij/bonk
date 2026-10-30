@@ -12,7 +12,7 @@ Blocking findings cannot be suppressed. The UBL writer emits exemption reasons
 and delivery data for the standard, zero-rated, exempt, reverse-charge,
 intra-community, export, and outside-scope categories. The domain core, encrypted
 keystore, migrations, CLI, GUI workspace, deterministic UBL writer, and visual PDF
-via the embedded Typst compiler all work end to end. A 20-invoice corpus and a
+from our own layout engine over `krilla` all work end to end. A 20-invoice corpus and a
 7-category VAT matrix pass Mustangproject against EN 16931 and Peppol BIS 3.0
 with zero failures.
 
@@ -48,9 +48,10 @@ sh tools/cargo-strawberry.sh test --workspace
 ```
 
 Set `STRAWBERRY_PERL_BIN` if it is not installed at `C:\Strawberry`. A cold
-build takes about ten minutes — OpenSSL, and Typst with its fonts — and later
-builds are incremental. The release binary is about 70 MB for the same reason:
-the PDF compiler and the fonts the template uses are inside it.
+build takes about ten minutes — OpenSSL and the vendored SQLCipher — and later
+builds are incremental. The release binary is about 32 MB: the layout engine,
+`krilla`, and one bundled font family (DejaVu Serif regular and bold) are inside
+it.
 
 **macOS / Linux:** the system Perl is sufficient.
 
@@ -176,10 +177,10 @@ headings sort when clicked and resize when dragged. **New invoice** in the foote
 opens the composer over the list — the list stays underneath — and a saved draft
 appears in the results and folds open under its own row, which is how unfinished
 work is found. The footer is pinned to the bottom of the window and reads
-`42/1337`: what the filters match, of what the archive holds. The composer's
-**Preview** renders the invoice through the same Typst template that issuing
-uses, so what the preview shows is what gets filed; after issuing, the panel
-offers the PDF and the UBL again.
+**42/1337**: what the filters match, of what the archive holds. The composer's
+**Preview** lays the invoice out with the same engine that issuing uses — the
+window draws the same pages the PDF writer receives — so what the preview shows
+is what gets filed; after issuing, the panel offers the PDF and the UBL again.
 
 Clicking a customer opens it in place and every field is editable, including a
 phone number, which is normalised to E.164 against the party's country
@@ -328,11 +329,15 @@ locale. `verify` recomputes the audit chain, every artefact hash, and every
 stored payload — imported files included — and reports unreferenced blobs without
 failing on them.
 
-PDF rendering compiles the Typst template in-process: Typst is linked into the
-binary, together with the fonts the template uses, so nothing has to be installed
-and the same invoice produces the same bytes on every machine. If the template
-fails to compile, issuing still succeeds and prints a warning; the UBL artefact
-is unaffected.
+PDF rendering is ours: the `render` crate measures the bundled font with
+`rustybuzz`, wraps and paginates the invoice, and hands the page operations to
+`krilla`, the PDF writer Typst itself uses. Fonts and layout are compiled into
+the binary, so nothing has to be installed and the same invoice produces the
+same bytes on every machine. Templates are declarative JSON — page, type,
+sections, columns, labels, and a footer with `{{placeholders}}` — not code, so a
+template can make an invoice look wrong but never make it *be* wrong. If a
+document fails to render, issuing still succeeds and prints a warning; the UBL
+artefact is unaffected.
 
 The printed document's labels are chosen per document: English or Dutch, defaulting
 from the seller's locale. That is the language of the form ("Factuur aan", "BTW",
@@ -397,7 +402,7 @@ The bundle, its manifest, and the update procedure are documented in
 `bonk gui` (or no subcommand) opens the same workflow: unlock, create the seller,
 add customers, edit lines with live totals and findings, save drafts, and issue.
 Both front ends call the same renderers: UBL is byte-identical whichever one
-issues the document, and the Issued screen can save the Typst PDF.
+issues the document, and the Issued screen can save the PDF.
 
 The workspace also has a find panel: type a number, party, reference, or note and
 press Enter (Ctrl+F jumps to the field), optionally narrowed by side and status.
@@ -462,7 +467,7 @@ as `recovery-add` and `passphrase-reset`.
 | `conformance` | EN 16931 rules, codelists, profiles | M2 |
 | `conformance-official` | Vendored Schematron/XSLT, native binding | M2 |
 | `syntax` | UBL 2.1 / CII D16B writers and readers | M1/M3 |
-| `render` | Typst PDF (M1); PDF/A-3 and Factur-X (M4) | M1/M4 |
+| `render` | Layout, PDF over `krilla` (M1); PDF/A-3 and Factur-X (M4) | M1/M4 |
 | `import` | Sniffing, parsing, dedupe | M3 |
 | `bridge` | Connector ports and plugin host | M7 |
 | `sync` | HLC and CRDT merge | M8 |

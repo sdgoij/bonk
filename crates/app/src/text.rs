@@ -835,6 +835,13 @@ pub mod editor {
         format!("Could not render the preview: {error}")
     }
 
+    /// A note under a preview that runs to more than one page.
+    pub fn preview_more_pages(language: Language, pages: usize) -> String {
+        match language {
+            Language::English => format!("The document runs to {pages} pages; the preview shows the first."),
+        }
+    }
+
     /// Number of the issued document.
     pub fn number_line(language: Language, number: &str) -> String {
         match language {

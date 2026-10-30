@@ -1,24 +1,19 @@
 [package]
 name = "render"
-description = "PDF/A-3 layout and rendering, Factur-X embedding, templates"
+description = "Invoice layout and PDF rendering with bundled fonts and declarative templates"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish = false
 
 [dependencies]
-crux.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 time.workspace = true
 
-embedded-typst.workspace = true
-typst.workspace = true
-typst-layout.workspace = true
-typst-pdf.workspace = true
-typst-render.workspace = true
-tiny-skia.workspace = true
+krilla.workspace = true
+rustybuzz.workspace = true
 
 [lints]
 workspace = true

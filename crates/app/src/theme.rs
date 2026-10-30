@@ -129,9 +129,40 @@ pub fn from_name(name: &str) -> Option<ThemePreference> {
 
 /// Installs both themes' styles. The preference chooses which one is active.
 pub fn install(ctx: &Context) {
+    install_document_fonts(ctx);
     for theme in [Theme::Light, Theme::Dark] {
         ctx.set_style_of(theme, style(theme));
     }
+}
+
+/// The family the invoice preview draws with.
+///
+/// These are the same files the PDF embeds, so the preview and the issued
+/// document measure text the same way.
+pub const DOCUMENT_FAMILY: &str = "DejaVu Serif";
+
+/// The bold face of the preview family.
+pub const DOCUMENT_FAMILY_BOLD: &str = "DejaVu Serif Bold";
+
+fn install_document_fonts(ctx: &Context) {
+    let mut fonts = egui::FontDefinitions::default();
+    fonts.font_data.insert(
+        DOCUMENT_FAMILY.to_owned(),
+        std::sync::Arc::new(egui::FontData::from_static(render::layout::FONT_REGULAR)),
+    );
+    fonts.font_data.insert(
+        DOCUMENT_FAMILY_BOLD.to_owned(),
+        std::sync::Arc::new(egui::FontData::from_static(render::layout::FONT_BOLD)),
+    );
+    fonts.families.insert(
+        FontFamily::Name(DOCUMENT_FAMILY.into()),
+        vec![DOCUMENT_FAMILY.to_owned()],
+    );
+    fonts.families.insert(
+        FontFamily::Name(DOCUMENT_FAMILY_BOLD.into()),
+        vec![DOCUMENT_FAMILY_BOLD.to_owned()],
+    );
+    ctx.set_fonts(fonts);
 }
 
 /// Switches the active theme and asks for a repaint.

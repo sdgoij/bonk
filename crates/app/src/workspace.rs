@@ -361,11 +361,11 @@ struct PdfDocument {
 
 /// A rendered preview of the invoice being written.
 ///
-/// It is a snapshot, not a live view: rendering costs a Typst run, so it happens
-/// when the user asks and stays until the composer closes.
+/// It is a snapshot, not a live view: laying the document out costs a shaping
+/// pass, so it happens when the user asks and stays until the composer closes.
+/// The window draws the same operations the PDF writer does.
 struct Preview {
-    texture: egui::TextureHandle,
-    size: egui::Vec2,
+    document: render::Document,
 }
 
 struct Message {
@@ -2003,22 +2003,70 @@ impl Workspace {
                 .on_hover_text(text::editor::close_preview(language))
                 .clicked()
         });
-        let width = ui.available_width().min(760.0);
-        let scale = (width / preview.size.x).min(1.0);
-        ui.add(egui::Image::new(egui::load::SizedTexture::new(
-            preview.texture.id(),
-            preview.size * scale,
-        )));
+
+        if let Some(page) = preview.document.pages.first() {
+            let width = ui.available_width().min(760.0);
+            let scale = (width / page.width).min(1.0);
+            let size = egui::vec2(page.width * scale, page.height * scale);
+            let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+            let painter = ui.painter_at(rect);
+            painter.rect_filled(rect, 0.0, egui::Color32::WHITE);
+            for op in &page.ops {
+                match op {
+                    render::Op::Text {
+                        at,
+                        size: font_size,
+                        bold,
+                        colour,
+                        text,
+                    } => {
+                        let family = if *bold {
+                            theme::DOCUMENT_FAMILY_BOLD
+                        } else {
+                            theme::DOCUMENT_FAMILY
+                        };
+                        painter.text(
+                            rect.min + egui::vec2(at.x * scale, at.y * scale),
+                            egui::Align2::LEFT_TOP,
+                            text,
+                            egui::FontId::new(*font_size * scale, egui::FontFamily::Name(family.into())),
+                            egui::Color32::from_rgb(colour.red, colour.green, colour.blue),
+                        );
+                    }
+                    render::Op::Rule {
+                        from,
+                        to,
+                        width: stroke,
+                        colour,
+                    } => {
+                        painter.line_segment(
+                            [
+                                rect.min + egui::vec2(from.x * scale, from.y * scale),
+                                rect.min + egui::vec2(to.x * scale, to.y * scale),
+                            ],
+                            egui::Stroke::new(
+                                (stroke * scale).max(0.5),
+                                egui::Color32::from_rgb(colour.red, colour.green, colour.blue),
+                            ),
+                        );
+                    }
+                }
+            }
+            if preview.document.pages.len() > 1 {
+                ui.small(text::editor::preview_more_pages(language, preview.document.pages.len()));
+            }
+        }
+
         if close.inner {
             self.preview = None;
         }
     }
 
-    /// Renders what the composer currently holds and keeps it as a texture.
+    /// Lays out what the composer currently holds, for the preview.
     ///
-    /// This is the same template that issuing compiles, so the preview cannot
-    /// disagree with the PDF that gets filed.
-    fn render_preview(&mut self, ctx: &egui::Context) {
+    /// This is the same template and the same engine that issuing uses, so the
+    /// preview cannot disagree with the PDF that gets filed.
+    fn render_preview(&mut self) {
         let language = self.language;
         let Some(seller) = self.seller.clone() else {
             return;
@@ -2058,28 +2106,14 @@ impl Workspace {
             &totals,
             editor.document_language,
         );
-        let bytes = match render::renderer().render_png(&data, 110.0) {
-            Ok(bytes) => bytes,
+        match render::renderer().layout(&data) {
+            Ok(document) => self.preview = Some(Preview { document }),
             Err(error) => {
                 self.message = Some(Message::error(text::editor::preview_failed(
                     language,
                     &error.to_string(),
                 )));
-                return;
             }
-        };
-        match image::load_from_memory(&bytes) {
-            Ok(decoded) => {
-                let rgba = decoded.to_rgba8();
-                let size = [rgba.width() as usize, rgba.height() as usize];
-                let pixels = egui::ColorImage::from_rgba_unmultiplied(size, rgba.as_raw());
-                let texture = ctx.load_texture("invoice-preview", pixels, egui::TextureOptions::LINEAR);
-                self.preview = Some(Preview {
-                    texture,
-                    size: egui::vec2(size[0] as f32, size[1] as f32),
-                });
-            }
-            Err(error) => self.message = Some(Message::error(error.to_string())),
         }
     }
 
@@ -2307,7 +2341,7 @@ impl Workspace {
         }
 
         if preview {
-            self.render_preview(ui.ctx());
+            self.render_preview();
         }
 
         let mut finding_action = None;

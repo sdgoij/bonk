@@ -14,7 +14,7 @@ captures the decision, its context, and what it costs.
 | [006](006-official-validation.md) | Official validation artefacts behind an isolated native binding |
 | [007](007-peppol-provider.md) | Peppol through access-point provider APIs, not AS4 |
 | [008](008-plugin-runtime.md) | Sidecar plugins for network; WASM for pure transforms |
-| [009](009-pdf-stack.md) | Typst layout with PDF/A-3 post-processing |
+| [009](009-pdf-stack.md) | `krilla` for PDF with our own layout and declarative templates |
 | [010](010-egui.md) | egui accepted with a documented accessibility limitation |
 | [011](011-key-wrapping.md) | DEK/KEK key wrapping with Argon2id; SQLCipher raw key |
 | [012](012-audit-chain.md) | Hash-chained audit log with optional AdES anchor |

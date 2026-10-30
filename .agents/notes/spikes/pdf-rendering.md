@@ -103,10 +103,16 @@ template — data, not code — that describes the *document*, not the drawing.
 {
   "version": 1,
   "name": "House style",
-  "page": { "size": "A4", "margin_pt": { "top": 51, "right": 57, "bottom": 51, "left": 57 } },
-  "text": { "family": ["Liberation Serif", "DejaVu Serif"], "size_pt": 9.5, "title_size_pt": 18, "colour": "#111111" },
+  "page": {
+    "width_pt": 595.28,
+    "height_pt": 841.89,
+    "margin_top_pt": 51,
+    "margin_right_pt": 57,
+    "margin_bottom_pt": 51,
+    "margin_left_pt": 57
+  },
+  "text": { "family": ["DejaVu Serif"], "size_pt": 9.5, "title_size_pt": 18, "colour": "#111111" },
   "rules": { "colour": "#999999", "width_pt": 0.5 },
-  "logo": { "path": "logo.png", "height_pt": 24 },
   "sections": ["header", "parties", "lines", "totals", "note", "footer"],
   "lines": {
     "columns": [
@@ -118,7 +124,7 @@ template — data, not code — that describes the *document*, not the drawing.
     ]
   },
   "labels": { "due": "Vervaldatum", "bill_to": "Factuur aan" },
-  "footer": { "text": "KvK {{seller.kvk}} · BTW {{seller.vat}} · IBAN {{seller.iban}}", "size_pt": 7.5 }
+  "footer": { "text": "KvK {{seller.kvk}} · BTW {{seller.vat}} · page {{page.number}}", "size_pt": 7.5 }
 }
 ```
 
@@ -127,10 +133,10 @@ Rules that make it safe and small:
 - **No expressions.** `sections` reorders or omits known blocks; `labels`
   overrides built-in words; `lines.columns` chooses fields and widths. Nothing
   can compute.
-- **Placeholders are a fixed table.** `{{seller.kvk}}`, `{{customer.name}}`,
-  `{{invoice.number}}`, `{{totals.gross}}`, `{{page.number}}`, and a short list
-  more. An unknown name is a validation error with its field path, not an empty
-  string.
+- **Placeholders are a fixed table.** `{{seller.kvk}}`, `{{seller.vat}}`,
+  `{{customer.name}}`, `{{invoice.number}}`, `{{totals.gross}}`,
+  `{{page.number}}`, and a short list more. An unknown name is a validation error
+  with its field path, not an empty string.
 - **Widths are `pt` or `fr`.** The engine resolves them and owns page breaks,
   so an overflowing line list paginates whatever the template says.
 - **Unknown keys are errors.** Denying unknown fields turns a typo into a
@@ -157,10 +163,22 @@ What this deliberately cannot do: arbitrary drawing, computed values, conditiona
 or multi-document layouts. Someone who needs those needs a typesetter, and the
 reason we are leaving Typst behind is that we were shipping one to draw a table.
 
-## Not decided
+## Outcome
 
-The next step is a prototype, not a commit: render one real invoice through
-krilla with this layout model, put it beside the Typst output, and check the
-layout, the bytes, and the binary size. If it holds up, the Typst dependency goes
-and `render` becomes a layout module plus a PDF writer — with the template above
-as its first-class input rather than a retrofit.
+The prototype was built and is now the shipped renderer (2026-10-30). `render`
+owns the layout, `krilla` writes the PDF, and the window draws the same model.
+Measured on the Windows MSVC release build:
+
+| | release binary |
+|---|---|
+| Typst linked in | 62 MB |
+| `krilla` plus our layout | **32 MB** |
+
+The dependency graph lost 161 packages. The layout engine is about 900 lines and
+covers what an invoice needs; the template format above is implemented in
+`render::template`, with the `logo` key dropped (it needs image support, which is
+not in this build) and `page` spelled as explicit point sizes.
+
+What is still open is PDF/A-3 output: `krilla` documents embedded files and
+conformance settings, but attaching the CII file, XMP, and output intent remains
+the M4 spike (`pdfa3.md`).

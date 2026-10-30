@@ -99,7 +99,7 @@ the machine, not a machine an attacker is already logged into.
 | Encrypted or malformed PDF | Refused with a reason; page content is never parsed, so a visual-only PDF is simply not an invoice | OCR is out of scope |
 | Document with a misleading XMP packet | `fx:DocumentFileName` and `fx:DocumentType` must agree with the attachment | Both are attacker-controlled; the check catches inconsistency, not intent |
 | Parser crash on hostile bytes | Property tests and mutation tests assert the readers answer or refuse and never panic; parser paths are also bounded by design | Not yet running libFuzzer (see O4) |
-| Imported document triggers network or code | There is no network code in the binary and nothing executes imported content | Typst is a linked library, not an invoked binary: it renders our template only, and its world is the template and one in-memory JSON file |
+| Imported document triggers network or code | There is no network code in the binary and nothing executes imported content | `krilla` writes PDFs and templates are data, not code: a template cannot compute, read a file, or reach the network |
 | Phishing inside an invoice | Content is displayed as text; nothing auto-opens links or attachments | The user can still be socially engineered by what they read |
 
 ### 4.5 Outbound artefacts
@@ -118,7 +118,7 @@ the machine, not a machine an attacker is already logged into.
 | Plaintext build shipped by accident | The `plain` feature exists for hosts without OpenSSL; the GUI shows a permanent red banner, the CLI prints the label, and support bundles say `none (test build)` | Nothing prevents a determined packager from shipping it; the release checklist must |
 | Vulnerable dependency | `deny.toml` allows permissive licences only (AGPL/SSPL rejected on purpose) and CI runs `cargo deny check` for licences, advisories, and yanked crates | It runs in CI, not on the developer's machine, and advisory data needs the network; `cargo audit` alone is not wired |
 | Unmaintained dependency reported | `deny.toml` sets `unmaintained = "workspace"`: the check fails for a crate this workspace depends on directly, and not for one buried in a transitive stack. The Linux desktop stacks pull in `zvariant`, folded into zbus 6, which no release has migrated to | A transitive crate going unmaintained is a real risk (no more security fixes). Vulnerabilities and unsound advisories are not affected by the setting |
-| Untrusted code in a template | Typst templates are ours; the world exposes no filesystem or network | M4's template editor must keep that world restricted |
+| Untrusted code in a template | Templates are declarative JSON: unknown keys are refused, placeholders come from a fixed table, and there is no expression language to execute | M4's template editor must keep the format declarative; adding conditionals or expressions would reopen this |
 
 ## 5. Residual risks, stated plainly
 

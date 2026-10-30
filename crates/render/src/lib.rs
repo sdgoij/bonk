@@ -1,24 +1,32 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
-//! PDF rendering behind a port.
+//! Invoice documents: layout and PDF.
 //!
-//! M1 renders a visual invoice through the `typst` CLI (Typst 0.14). The layout
-//! logic is a template over a JSON data file, so the same template can be
-//! compiled by the embedded Typst library when PDF/A-3 work starts in M3, and
-//! the CLI dependency disappears from the shipped binary.
+//! A template describes the document — page, type, sections, table columns,
+//! labels, and a footer — as data. [`layout`] measures and paginates it into a
+//! [`Document`] of draw operations in points; [`pdf`](mod@pdf) writes that model
+//! with `krilla`, and the window draws the same model with egui for the
+//! preview. One layout, two backends, so what is previewed is what is issued.
 //!
-//! Artefacts are deterministic for the same input: the creation timestamp is
-//! derived from the issue date, not from the wall clock.
+//! Artefacts are deterministic for the same input: fonts are compiled into the
+//! binary, and the creation date comes from the issue date, never the clock.
 
 #![forbid(unsafe_code)]
+
+pub mod layout;
+pub mod pdf;
+pub mod template;
 
 use serde::Serialize;
 use thiserror::Error;
 
-/// The invoice template, compiled into the binary.
-pub const TEMPLATE: &str = include_str!("../templates/invoice.typ");
+pub use layout::{Colour, Document, Op, Page, Point};
+pub use template::Template;
 
-/// The data the template consumes. Strings are pre-formatted, so the template
-/// stays free of business logic.
+/// The renderer name and version, recorded on every artefact.
+pub const RENDERER_VERSION: &str = "bonk-layout-1";
+
+/// The data the document shows. Strings are pre-formatted, so no business
+/// logic — and no floating-point money — reaches the renderer.
 #[derive(Clone, PartialEq, Eq, Debug, Serialize)]
 pub struct InvoiceData {
     /// The word for the document itself: "Invoice", "Creditnota", and so on.
@@ -110,7 +118,7 @@ impl Language {
     }
 }
 
-/// The words the template prints for the fixed parts of the form.
+/// The words the document prints for the fixed parts of the form.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize)]
 pub struct Labels {
     /// Due date.
@@ -131,13 +139,15 @@ pub struct Labels {
     pub net: &'static str,
 }
 
-/// A party block in the template.
+/// A party block in the document.
 #[derive(Clone, PartialEq, Eq, Debug, Serialize)]
 pub struct PartyData {
     /// Legal name.
     pub name: String,
     /// Single-line address.
     pub address: String,
+    /// Dutch chamber of commerce number, for footers.
+    pub kvk: Option<String>,
     /// VAT identifier.
     pub vat: Option<String>,
 }
@@ -161,155 +171,87 @@ pub struct LineData {
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum RenderError {
-    /// The template did not compile, or Typst refused to export it.
-    #[error("typst rejected the document: {0}")]
-    Typst(String),
-    /// The template produced no pages, so there is nothing to export.
-    #[error("the template produced no pages")]
-    NoPages,
-    /// Encoding the raster preview failed.
-    #[error("could not encode the preview: {0}")]
-    Png(String),
-    /// Serialising the template data failed.
-    #[error("JSON error: {0}")]
-    Json(#[from] serde_json::Error),
-    /// A capability that is not implemented yet.
-    #[error("{feature} arrives in {milestone}")]
-    NotYet {
-        /// Capability name.
-        feature: &'static str,
-        /// Milestone that implements it.
-        milestone: &'static str,
+    /// A template field is not valid.
+    #[error("template field {field}: {message}")]
+    Template {
+        /// Where in the template the problem is.
+        field: String,
+        /// What is wrong.
+        message: String,
     },
+    /// The bundled font could not be read.
+    #[error("the bundled font could not be read")]
+    Font,
+    /// The PDF writer refused the document.
+    #[error("the PDF writer refused the document: {0}")]
+    Pdf(String),
 }
 
-/// A PDF backend.
+/// A document backend.
 pub trait PdfRenderer {
     /// Renderer name and version, recorded on the artefact.
     fn renderer_version(&self) -> &str;
 
-    /// Renders the document.
+    /// Lays the invoice out, for the PDF and for the window preview alike.
+    fn layout(&self, data: &InvoiceData) -> Result<Document, RenderError>;
+
+    /// Renders the document as PDF bytes.
     fn render(&self, data: &InvoiceData) -> Result<Vec<u8>, RenderError>;
-
-    /// Renders the first page as a PNG, for a preview inside the window.
-    fn render_png(&self, data: &InvoiceData, ppi: f32) -> Result<Vec<u8>, RenderError>;
 }
 
-/// The Typst version compiled into the binary, recorded on every artefact.
-pub const RENDERER_VERSION: &str = "typst-0.15";
-
-/// Renders with Typst as a library.
+/// Renders with the bundled layout engine and `krilla`.
 ///
-/// The compiler, the template, and the fonts it needs all live in the binary,
-/// so issuing an invoice needs nothing installed on the machine and produces the
-/// same bytes everywhere. Building the font database is the expensive part, so
-/// one renderer is built per process and shared.
-pub struct TypstRenderer {
-    fonts: std::sync::Arc<embedded_typst::Fonts>,
+/// The template, the fonts, and the text shaping all live in the binary, so
+/// issuing an invoice needs nothing installed on the machine and produces the
+/// same bytes everywhere.
+pub struct Renderer {
+    template: Template,
 }
 
-impl TypstRenderer {
-    /// Builds the renderer: Typst's bundled fonts, and nothing from the system.
-    ///
-    /// System fonts would make the same invoice render differently on two
-    /// machines, which is exactly what an archive must not do.
+impl Renderer {
+    /// Builds the renderer with the built-in template.
     pub fn new() -> Self {
         Self {
-            fonts: std::sync::Arc::new(embedded_typst::Fonts::builder().typst_fonts().build()),
+            template: Template::default(),
         }
     }
 
-    /// Compiles the template with the payload as the file `data.json`.
-    ///
-    /// `sys.inputs.data` names a file, exactly as the Typst CLI was handed it, so
-    /// the template stays usable by hand and by an editor with no renderer in the
-    /// loop.
-    fn compile(&self, data: &InvoiceData) -> Result<typst_layout::PagedDocument, RenderError> {
-        use typst::foundations::{Dict, Str, Value};
-        use typst::syntax::VirtualPath;
+    /// Builds the renderer with a specific template. The template is validated
+    /// when a document is laid out, so a bad one is an error, not a panic.
+    pub fn with_template(template: Template) -> Self {
+        Self { template }
+    }
 
-        let main = VirtualPath::new("invoice.typ").map_err(|error| RenderError::Typst(error.to_string()))?;
-        let payload = VirtualPath::new("data.json").map_err(|error| RenderError::Typst(error.to_string()))?;
-
-        let world = embedded_typst::EmbeddedWorld::new(main, TEMPLATE, self.fonts.clone())
-            .with_creation_timestamp(creation_timestamp(&data.issue_date));
-        world.add_file(payload, serde_json::to_vec(data)?);
-
-        let mut inputs = Dict::new();
-        inputs.insert(Str::from("data"), Value::Str(Str::from("data.json")));
-        let world = world.with_inputs(inputs);
-
-        typst::compile::<typst_layout::PagedDocument>(&world)
-            .output
-            .map_err(|errors| RenderError::Typst(describe(&errors)))
+    /// The template this renderer draws.
+    pub fn template(&self) -> &Template {
+        &self.template
     }
 }
 
-impl Default for TypstRenderer {
+impl Default for Renderer {
     fn default() -> Self {
         Self::new()
     }
 }
 
 /// The process-wide renderer.
-///
-/// Building the font database is the expensive part, and it does not depend on
-/// the document, so one instance serves every render in the process.
-pub fn renderer() -> &'static TypstRenderer {
-    static RENDERER: std::sync::OnceLock<TypstRenderer> = std::sync::OnceLock::new();
-    RENDERER.get_or_init(TypstRenderer::new)
+pub fn renderer() -> &'static Renderer {
+    static RENDERER: std::sync::OnceLock<Renderer> = std::sync::OnceLock::new();
+    RENDERER.get_or_init(Renderer::new)
 }
 
-impl PdfRenderer for TypstRenderer {
+impl PdfRenderer for Renderer {
     fn renderer_version(&self) -> &str {
         RENDERER_VERSION
     }
 
+    fn layout(&self, data: &InvoiceData) -> Result<Document, RenderError> {
+        layout::layout(&self.template, data)
+    }
+
     fn render(&self, data: &InvoiceData) -> Result<Vec<u8>, RenderError> {
-        let document = self.compile(data)?;
-        typst_pdf::pdf(&document, &typst_pdf::PdfOptions::default())
-            .map_err(|errors| RenderError::Typst(describe(&errors)))
+        pdf::write(&self.layout(data)?)
     }
-
-    fn render_png(&self, data: &InvoiceData, ppi: f32) -> Result<Vec<u8>, RenderError> {
-        let document = self.compile(data)?;
-        let page = document.pages().first().ok_or(RenderError::NoPages)?;
-        let options = typst_render::RenderOptions {
-            pixel_per_pt: typst::utils::Scalar::new(pixels_per_point(ppi)),
-            render_bleed: false,
-        };
-        typst_render::render(page, &options)
-            .encode_png()
-            .map_err(|error| RenderError::Png(error.to_string()))
-    }
-}
-
-/// Joins the diagnostics of a failed compilation into one sentence.
-fn describe(errors: &[typst::diag::SourceDiagnostic]) -> String {
-    let messages: Vec<String> = errors.iter().map(|error| error.message.to_string()).collect();
-    if messages.is_empty() {
-        "unknown error".to_owned()
-    } else {
-        messages.join("; ")
-    }
-}
-
-/// Pixels per Typst point for a preview at `ppi`.
-///
-/// Typst measures in points, 1/72 inch. Rasterising is the one place in this
-/// crate that needs floating point; it never touches an amount.
-#[allow(clippy::float_arithmetic)]
-fn pixels_per_point(ppi: f32) -> f64 {
-    f64::from(ppi) / 72.0
-}
-
-/// Midnight UTC on the issue date, as a UNIX timestamp. Zero if unparseable.
-fn creation_timestamp(issue_date: &str) -> i64 {
-    use time::format_description::well_known::Iso8601;
-    time::Date::parse(issue_date, &Iso8601::DATE)
-        .ok()
-        .and_then(|date| date.midnight().assume_utc().unix_timestamp().into())
-        .unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -327,11 +269,13 @@ mod tests {
             seller: PartyData {
                 name: "Seller BV".to_owned(),
                 address: "Main 1, Amsterdam, NL".to_owned(),
+                kvk: Some("12345678".to_owned()),
                 vat: Some("NL123456782B01".to_owned()),
             },
             customer: PartyData {
                 name: "Customer BV".to_owned(),
                 address: "Rotterdam, NL".to_owned(),
+                kvk: None,
                 vat: None,
             },
             lines: vec![LineData {
@@ -367,13 +311,9 @@ mod tests {
         assert_eq!(english.net, "Net");
     }
 
-    /// The eight bytes every PNG starts with, spelled out so no escape can be
-    /// mangled on the way into this file.
-    const PNG_MAGIC: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
-
     #[test]
     fn renders_a_pdf() {
-        let renderer = TypstRenderer::new();
+        let renderer = Renderer::new();
         let pdf = renderer.render(&sample()).expect("render");
         assert!(pdf.starts_with(b"%PDF-"), "not a PDF");
         assert!(pdf.len() > 1_000, "suspiciously small PDF: {}", pdf.len());
@@ -382,7 +322,7 @@ mod tests {
 
     #[test]
     fn output_is_deterministic() {
-        let renderer = TypstRenderer::new();
+        let renderer = Renderer::new();
         let first = renderer.render(&sample()).expect("first render");
         let second = renderer.render(&sample()).expect("second render");
         assert_eq!(first, second, "PDF bytes must be stable for the same input");
@@ -390,7 +330,7 @@ mod tests {
 
     #[test]
     fn the_same_invoice_printing_dutch_is_a_different_document() {
-        let renderer = TypstRenderer::new();
+        let renderer = Renderer::new();
         let english = renderer.render(&sample()).expect("english");
         let mut dutch = sample();
         dutch.labels = Language::Dutch.labels();
@@ -400,16 +340,21 @@ mod tests {
     }
 
     #[test]
-    fn creation_timestamp_is_derived_from_the_issue_date() {
-        // 2026-10-27T00:00:00Z
-        assert_eq!(creation_timestamp("2026-10-27"), 1_793_059_200);
-        assert_eq!(creation_timestamp("not a date"), 0);
+    fn the_layout_is_the_same_model_the_pdf_is_written_from() {
+        let renderer = Renderer::new();
+        let document = renderer.layout(&sample()).expect("layout");
+        assert_eq!(document.pages.len(), 1);
+        assert!(
+            document.pages[0]
+                .ops
+                .iter()
+                .any(|op| matches!(op, Op::Text { text, .. } if text == "Consulting"))
+        );
     }
 
     #[test]
-    fn previews_a_png() {
-        let png = TypstRenderer::new().render_png(&sample(), 96.0).expect("preview");
-        assert!(png.starts_with(&PNG_MAGIC), "not a PNG");
-        assert!(png.len() > 1_000, "suspiciously small PNG: {}", png.len());
+    fn a_template_field_error_names_the_field() {
+        let error = template::Template::parse(r#"{"version": 2}"#).unwrap_err();
+        assert!(error.to_string().contains("version"), "{error}");
     }
 }

@@ -447,6 +447,7 @@ fn party_data(party: &Party) -> render::PartyData {
     render::PartyData {
         name: party.legal_name.clone(),
         address: parts.join(", "),
+        kvk: party.kvk_number.clone(),
         vat: party.vat_id.clone(),
     }
 }
