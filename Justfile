@@ -67,9 +67,23 @@ test-crate crate:
 # Every gate from AGENTS.md, in the order CI runs them.
 gate: fmt clippy deny test test-plain
 
-# Enable the pre-commit hook once per clone.
+# Enable the pre-commit hook for this clone.
+#
+# `core.safecrlf=false` stops the "CRLF will be replaced by LF" warning an
+# editor on Windows triggers. `.gitattributes` normalises the file on the way
+# into the index anyway, so the warning describes a rewrite that is the policy,
+# not a problem.
 hooks:
     git config core.hooksPath .githooks
+    git config core.safecrlf false
+
+# Rewrite the tracked files in the working tree as LF, for after an editor that
+# insists on CRLF has saved them. Refuses to run with unstaged changes, because
+# it restores the working tree from the index (staged work is preserved).
+lf:
+    git diff --quiet
+    git ls-files -z | xargs -0 touch
+    git checkout -- .
 
 # UBL serialisation, validation, and PDF rendering (needs Java 17+ and network).
 validate-m1:

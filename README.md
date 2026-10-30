@@ -67,6 +67,15 @@ just test
 `.zed/settings.json` disables all language servers for Perl in this workspace;
 the repository contains no Perl files.
 
+### Line endings
+
+Tracked text is LF in the index and in the checkout, on every platform;
+`.gitattributes` pins it and overrides `core.autocrlf`. An editor that writes
+CRLF cannot reach a commit — Git normalises on the way in — and `just lf`
+rewrites the working tree if you want it back to LF. `just hooks` also sets
+`core.safecrlf=false`, which stops Git warning about the conversion it is going
+to perform anyway.
+
 ### Development fallback: unencrypted
 
 Hosts without a usable OpenSSL/Perl toolchain can still run the whole stack:
