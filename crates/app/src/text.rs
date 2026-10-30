@@ -988,6 +988,11 @@ pub mod editor {
         "Document language"
     }
 
+    /// Label beside the currency picker.
+    pub fn currency_label(_: Language) -> &'static str {
+        "Currency"
+    }
+
     /// Free-text note field.
     pub fn note_label(_: Language) -> &'static str {
         "Note"

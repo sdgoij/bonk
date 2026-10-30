@@ -198,9 +198,14 @@ the new document folded open. An opened received document shows its supplier —
 matched, or **not matched** with a picker over the party table — and offers
 **Approve** and then **Mark paid**, recording the same audit events as the CLI.
 The composer's **Preview** lays the invoice out with the same engine that issuing
-uses — the window draws the same pages the PDF writer receives — so what the
-preview shows is what gets filed; after issuing, the panel offers the PDF and the
-UBL again.
+uses — the window draws the same pages the PDF writer receives — and fits the
+page to the width of the window, centred, so a wide window shows a larger sheet.
+What the preview shows is what gets filed; after issuing, the panel offers the
+PDF and the UBL again.
+
+Every document chooses its own currency from a picker beside the customer; the
+seller's currency is only the default, and the line amounts are parsed in the
+chosen one.
 
 Clicking a customer opens it in place and every field is editable, including a
 phone number, which is normalised to E.164 against the party's country

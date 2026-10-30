@@ -538,6 +538,8 @@ struct Editor {
     note: String,
     buyer_reference: String,
     order_reference: String,
+    /// The currency every amount on this document is in.
+    currency: Currency,
     /// The language the printed document speaks, chosen per document.
     document_language: render::Language,
     lines: Vec<LineForm>,
@@ -564,6 +566,7 @@ impl Clone for Editor {
             note: self.note.clone(),
             buyer_reference: self.buyer_reference.clone(),
             order_reference: self.order_reference.clone(),
+            currency: self.currency,
             document_language: self.document_language,
             lines: self.lines.clone(),
             date_popup: self.date_popup,
@@ -574,7 +577,7 @@ impl Clone for Editor {
 }
 
 impl Editor {
-    fn new(customer: Option<CustomerId>, document_language: render::Language) -> Self {
+    fn new(customer: Option<CustomerId>, document_language: render::Language, currency: Currency) -> Self {
         Self {
             id: DocumentId::new(),
             doc_type: DocType::Invoice,
@@ -586,6 +589,7 @@ impl Editor {
             note: String::new(),
             buyer_reference: String::new(),
             order_reference: String::new(),
+            currency,
             document_language,
             lines: vec![LineForm::default()],
             date_popup: None,
@@ -597,7 +601,7 @@ impl Editor {
     /// An editor filled from a stored draft, so unfinished work reopens where it
     /// was left.
     fn from_draft(draft: &InvoiceDraft, document_language: render::Language) -> Self {
-        let mut editor = Self::new(Some(draft.customer_id), document_language);
+        let mut editor = Self::new(Some(draft.customer_id), document_language, draft.currency);
         editor.saved = true;
         editor.id = draft.id;
         editor.doc_type = draft.doc_type;
@@ -608,6 +612,7 @@ impl Editor {
         editor.buyer_reference = draft.buyer_reference.clone().unwrap_or_default();
         editor.order_reference = draft.order_reference.clone().unwrap_or_default();
         editor.note = draft.note.clone().unwrap_or_default();
+        editor.currency = draft.currency;
         editor.lines = draft
             .lines
             .iter()
@@ -1210,6 +1215,14 @@ impl Workspace {
         self.seller.as_ref().map_or_else(render::Language::default, |seller| {
             render::Language::from_locale(&seller.default_locale)
         })
+    }
+
+    /// The seller's currency is the sensible default, and only a default: the
+    /// editor can choose another one per document.
+    fn default_currency(&self) -> Currency {
+        self.seller
+            .as_ref()
+            .map_or(Currency::EUR, |seller| seller.default_currency)
     }
 
     /// Draws the customer list and its import/export controls.
@@ -2016,10 +2029,17 @@ impl Workspace {
         });
 
         if let Some(page) = preview.document.pages.first() {
-            let width = ui.available_width().min(760.0);
-            let scale = (width / page.width).min(1.0);
+            // The page fills the width it is given; the height follows the page
+            // ratio, so a wide window shows a bigger sheet rather than a small
+            // one stranded at the left edge.
+            let width = ui.available_width();
+            let scale = fit_scale(page.width, width);
             let size = egui::vec2(page.width * scale, page.height * scale);
-            let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+            let (rect, _) = ui
+                .with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
+                    ui.allocate_exact_size(size, egui::Sense::hover())
+                })
+                .inner;
             let painter = ui.painter_at(rect);
             painter.rect_filled(rect, 0.0, egui::Color32::WHITE);
             for op in &page.ops {
@@ -2132,7 +2152,11 @@ impl Workspace {
     fn start_invoice(&mut self) {
         self.reset_document();
         let customer = self.customers.first().map(|customer| customer.id);
-        self.editor = Some(Editor::new(customer, self.default_document_language()));
+        self.editor = Some(Editor::new(
+            customer,
+            self.default_document_language(),
+            self.default_currency(),
+        ));
         self.search.opened = None;
         self.search.open_error = None;
     }
@@ -2204,6 +2228,16 @@ impl Workspace {
                             );
                         }
                     });
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    egui::ComboBox::from_id_salt("editor.currency")
+                        .selected_text(editor.currency.as_str())
+                        .show_ui(ui, |ui| {
+                            for currency in [Currency::EUR, Currency::USD, Currency::GBP] {
+                                ui.selectable_value(&mut editor.currency, currency, currency.as_str());
+                            }
+                        });
+                    ui.label(text::editor::currency_label(language));
+                });
             });
 
             egui::Grid::new("header-form").num_columns(4).show(ui, |ui| {
@@ -2287,47 +2321,53 @@ impl Workspace {
             }
 
             ui.add_space(10.0);
-            let name_width = (ui.available_width() - 380.0).max(220.0);
-            egui::ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
-                egui::Grid::new("lines-form")
-                    .num_columns(6)
-                    .striped(true)
-                    .show(ui, |ui| {
-                        for heading in text::editor::line_columns(language) {
-                            ui.label(heading);
-                        }
-                        ui.label("");
-                        ui.end_row();
-
-                        for (index, line) in editor.lines.iter_mut().enumerate() {
-                            text_field(ui, &mut line.name, &format!("lines[{index}].name"), name_width, focus);
-                            text_field(ui, &mut line.quantity, &format!("lines[{index}].quantity"), 64.0, focus);
-                            text_field(
-                                ui,
-                                &mut line.unit_price,
-                                &format!("lines[{index}].unit_price"),
-                                96.0,
-                                focus,
-                            );
-                            text_field(ui, &mut line.rate, &format!("lines[{index}].rate"), 56.0, focus);
-                            let vat_field = format!("lines[{index}].vat_category");
-                            let combo = egui::ComboBox::from_id_salt(("vat", index))
-                                .selected_text(category_label(line.category))
-                                .show_ui(ui, |ui| {
-                                    for category in CATEGORIES {
-                                        ui.selectable_value(&mut line.category, category, category_label(category));
-                                    }
-                                });
-                            if focus == Some(vat_field.as_str()) {
-                                combo.response.request_focus();
+            // The name is the line: give it at least half of the width, and the
+            // rest of the row what the other controls need.
+            let available = ui.available_width();
+            let name_width = name_column_width(available);
+            egui::ScrollArea::vertical()
+                .max_height(260.0)
+                .auto_shrink([false, true])
+                .show(ui, |ui| {
+                    egui::Grid::new("lines-form")
+                        .num_columns(6)
+                        .striped(true)
+                        .show(ui, |ui| {
+                            for heading in text::editor::line_columns(language) {
+                                ui.label(heading);
                             }
-                            if ui.button(text::editor::remove_line_action(language)).clicked() {
-                                remove_line = Some(index);
-                            }
+                            ui.label("");
                             ui.end_row();
-                        }
-                    });
-            });
+
+                            for (index, line) in editor.lines.iter_mut().enumerate() {
+                                text_field(ui, &mut line.name, &format!("lines[{index}].name"), name_width, focus);
+                                text_field(ui, &mut line.quantity, &format!("lines[{index}].quantity"), 64.0, focus);
+                                text_field(
+                                    ui,
+                                    &mut line.unit_price,
+                                    &format!("lines[{index}].unit_price"),
+                                    96.0,
+                                    focus,
+                                );
+                                text_field(ui, &mut line.rate, &format!("lines[{index}].rate"), 56.0, focus);
+                                let vat_field = format!("lines[{index}].vat_category");
+                                let combo = egui::ComboBox::from_id_salt(("vat", index))
+                                    .selected_text(category_label(line.category))
+                                    .show_ui(ui, |ui| {
+                                        for category in CATEGORIES {
+                                            ui.selectable_value(&mut line.category, category, category_label(category));
+                                        }
+                                    });
+                                if focus == Some(vat_field.as_str()) {
+                                    combo.response.request_focus();
+                                }
+                                if ui.button(text::editor::remove_line_action(language)).clicked() {
+                                    remove_line = Some(index);
+                                }
+                                ui.end_row();
+                            }
+                        });
+                });
             if let Some(index) = remove_line
                 && editor.lines.len() > 1
             {
@@ -2832,6 +2872,22 @@ fn artefact_extension(kind: &str) -> &'static str {
     }
 }
 
+/// The width of the item-name column.
+///
+/// The name is the line, so it takes at least half the row; the reservation on
+/// the right is what the quantity, price, rate, VAT, and remove controls need.
+fn name_column_width(available: f32) -> f32 {
+    (available * 0.5).max(available - 410.0).max(240.0)
+}
+
+/// The scale that fits a page into `width`.
+///
+/// No ceiling: a wide window shows the invoice bigger, which is the point of a
+/// preview. The floor keeps a degenerate page from vanishing.
+fn fit_scale(page_width: f32, width: f32) -> f32 {
+    (width / page_width).max(0.1)
+}
+
 /// Where the window keeps its backups.
 fn backup_directory(session: &Session) -> PathBuf {
     session
@@ -2991,7 +3047,7 @@ fn build_draft(editor: &Editor, seller: &SellerRecord) -> Result<InvoiceDraft, S
         )
     };
 
-    let mut draft = InvoiceDraft::new(seller.id, customer_id, seller.default_currency, issue_date);
+    let mut draft = InvoiceDraft::new(seller.id, customer_id, editor.currency, issue_date);
     // The composer may have reopened a stored draft; keeping its id is what
     // makes Save an update rather than a second copy.
     draft.id = editor.id;
@@ -3012,7 +3068,7 @@ fn build_draft(editor: &Editor, seller: &SellerRecord) -> Result<InvoiceDraft, S
             return Err(format!("Line {position}: item name is required."));
         }
         let quantity = Quantity::parse(line.quantity.trim()).map_err(|error| format!("Line {position}: {error}"))?;
-        let unit_price = Money::parse_fixed(line.unit_price.trim(), seller.default_currency)
+        let unit_price = Money::parse_fixed(line.unit_price.trim(), editor.currency)
             .map_err(|error| format!("Line {position}: {error}"))?;
         let rate = VatRate::parse_percent(line.rate.trim()).map_err(|error| format!("Line {position}: {error}"))?;
 
@@ -3584,7 +3640,7 @@ mod tests {
     }
 
     fn editor() -> Editor {
-        let mut editor = Editor::new(Some(CustomerId::new()), render::Language::default());
+        let mut editor = Editor::new(Some(CustomerId::new()), render::Language::default(), Currency::EUR);
         editor.lines[0].name = "Consulting".to_owned();
         editor.lines[0].quantity = "2".to_owned();
         editor.lines[0].unit_price = "50.00".to_owned();
@@ -4290,6 +4346,32 @@ mod tests {
     fn an_artefact_kind_names_its_extension() {
         assert_eq!(artefact_extension("ubl"), "xml");
         assert_eq!(artefact_extension("pdf"), "pdf");
+    }
+
+    #[test]
+    fn the_name_column_takes_at_least_half_the_row() {
+        assert!(name_column_width(1000.0) >= 500.0);
+        assert_eq!(name_column_width(1400.0), 990.0);
+        assert_eq!(name_column_width(300.0), 240.0, "a tiny row keeps the field usable");
+    }
+
+    #[test]
+    fn the_preview_grows_with_the_window() {
+        assert!(
+            fit_scale(595.28, 1000.0) > 1.0,
+            "a wide window shows a bigger page, not a capped one"
+        );
+        assert!(fit_scale(595.28, 400.0) < 1.0);
+    }
+
+    #[test]
+    fn the_chosen_currency_reaches_the_draft() {
+        let seller = seller();
+        let mut editor = editor();
+        editor.currency = Currency::USD;
+        let draft = build_draft(&editor, &seller).unwrap();
+        assert_eq!(draft.currency, Currency::USD);
+        assert_eq!(draft.lines[0].unit_price.currency(), Currency::USD);
     }
 
     /// A seller and customer complete enough for the Peppol profile the issue
