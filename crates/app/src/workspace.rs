@@ -2322,8 +2322,9 @@ impl Workspace {
 
             ui.add_space(10.0);
             // The name is the line: give it at least half of the width, and the
-            // rest of the row what the other controls need.
-            let available = ui.available_width();
+            // rest of the row what the other controls need. The scroll bar takes
+            // its width out of the row too, so it is subtracted up front.
+            let available = ui.available_width() - ui.spacing().scroll.bar_width;
             let name_width = name_column_width(available);
             egui::ScrollArea::vertical()
                 .max_height(260.0)
@@ -2341,17 +2342,30 @@ impl Workspace {
 
                             for (index, line) in editor.lines.iter_mut().enumerate() {
                                 text_field(ui, &mut line.name, &format!("lines[{index}].name"), name_width, focus);
-                                text_field(ui, &mut line.quantity, &format!("lines[{index}].quantity"), 64.0, focus);
+                                text_field(
+                                    ui,
+                                    &mut line.quantity,
+                                    &format!("lines[{index}].quantity"),
+                                    LINE_QUANTITY_WIDTH,
+                                    focus,
+                                );
                                 text_field(
                                     ui,
                                     &mut line.unit_price,
                                     &format!("lines[{index}].unit_price"),
-                                    96.0,
+                                    LINE_PRICE_WIDTH,
                                     focus,
                                 );
-                                text_field(ui, &mut line.rate, &format!("lines[{index}].rate"), 56.0, focus);
+                                text_field(
+                                    ui,
+                                    &mut line.rate,
+                                    &format!("lines[{index}].rate"),
+                                    LINE_RATE_WIDTH,
+                                    focus,
+                                );
                                 let vat_field = format!("lines[{index}].vat_category");
                                 let combo = egui::ComboBox::from_id_salt(("vat", index))
+                                    .width(LINE_VAT_WIDTH)
                                     .selected_text(category_label(line.category))
                                     .show_ui(ui, |ui| {
                                         for category in CATEGORIES {
@@ -2361,7 +2375,11 @@ impl Workspace {
                                 if focus == Some(vat_field.as_str()) {
                                     combo.response.request_focus();
                                 }
-                                if ui.button(text::editor::remove_line_action(language)).clicked() {
+                                let remove = ui.add_sized(
+                                    egui::vec2(LINE_ACTION_WIDTH, field_height(ui)),
+                                    egui::Button::new(text::editor::remove_line_action(language)),
+                                );
+                                if remove.clicked() {
                                     remove_line = Some(index);
                                 }
                                 ui.end_row();
@@ -2872,12 +2890,23 @@ fn artefact_extension(kind: &str) -> &'static str {
     }
 }
 
+/// The width of the controls beside the item name, so the row can be budgeted.
+const LINE_QUANTITY_WIDTH: f32 = 64.0;
+const LINE_PRICE_WIDTH: f32 = 96.0;
+const LINE_RATE_WIDTH: f32 = 56.0;
+const LINE_VAT_WIDTH: f32 = 132.0;
+const LINE_ACTION_WIDTH: f32 = 76.0;
+
 /// The width of the item-name column.
 ///
-/// The name is the line, so it takes at least half the row; the reservation on
-/// the right is what the quantity, price, rate, VAT, and remove controls need.
+/// The name is the line, so it takes whatever the quantity, price, rate, VAT,
+/// and remove controls do not need. On any window wide enough for those controls
+/// that is more than half the row; a narrow window keeps the field usable rather
+/// than collapsing it.
 fn name_column_width(available: f32) -> f32 {
-    (available * 0.5).max(available - 410.0).max(240.0)
+    let fixed =
+        LINE_QUANTITY_WIDTH + LINE_PRICE_WIDTH + LINE_RATE_WIDTH + LINE_VAT_WIDTH + LINE_ACTION_WIDTH + 5.0 * 8.0;
+    (available - fixed).max(240.0)
 }
 
 /// The scale that fits a page into `width`.
@@ -3258,7 +3287,15 @@ fn month_grid(month: time::Date) -> Vec<time::Date> {
 }
 
 fn text_field(ui: &mut egui::Ui, value: &mut String, field: &str, width: f32, focus: Option<&str>) -> egui::Response {
-    let response = ui.add(
+    // The size is allocated before the widget.
+    //
+    // An egui `Grid` gives each cell the column width of the previous frame, and a
+    // `TextEdit` clamps its `desired_width` to the space it is given. A plain
+    // `desired_width` therefore can never widen a grid column: it stays as narrow
+    // as the widest thing that is not itself clamped. Allocating the width up
+    // front is what makes the column take it.
+    let response = ui.add_sized(
+        egui::vec2(width, field_height(ui)),
         egui::TextEdit::singleline(value)
             .id(egui::Id::unique(field))
             .desired_width(width),
@@ -3267,6 +3304,14 @@ fn text_field(ui: &mut egui::Ui, value: &mut String, field: &str, width: f32, fo
         response.request_focus();
     }
     response
+}
+
+/// The height of one form control, so a field and the button beside it agree.
+fn field_height(ui: &egui::Ui) -> f32 {
+    ui.spacing()
+        .interact_size
+        .y
+        .max(ui.text_style_height(&egui::TextStyle::Body) + 6.0)
 }
 
 fn direction_combo(ui: &mut egui::Ui, language: Language, value: &mut Option<Direction>) {
@@ -4350,9 +4395,79 @@ mod tests {
 
     #[test]
     fn the_name_column_takes_at_least_half_the_row() {
-        assert!(name_column_width(1000.0) >= 500.0);
-        assert_eq!(name_column_width(1400.0), 990.0);
+        let fixed =
+            LINE_QUANTITY_WIDTH + LINE_PRICE_WIDTH + LINE_RATE_WIDTH + LINE_VAT_WIDTH + LINE_ACTION_WIDTH + 5.0 * 8.0;
+        assert!(name_column_width(1000.0) >= 500.0, "more than half on a normal window");
+        assert_eq!(name_column_width(1400.0), 936.0);
         assert_eq!(name_column_width(300.0), 240.0, "a tiny row keeps the field usable");
+        for available in [1000.0, 1400.0] {
+            assert!(
+                name_column_width(available) + fixed <= available,
+                "the row must fit in {available}"
+            );
+        }
+    }
+
+    /// The line fields must be measured on a window of a real size.
+    ///
+    /// An egui `Grid` hands each cell the column width of the previous frame, and
+    /// a `TextEdit` clamps its `desired_width` to the space it is given, so a
+    /// `desired_width` inside a grid column can never widen that column. Drawn on
+    /// an unbounded virtual screen every field looks generous, which is why the
+    /// widths are measured here at 1280 by 800 instead.
+    #[test]
+    fn the_line_name_field_takes_half_a_real_window() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let mut session = Session::create(
+            dir.path().join("bonk.db"),
+            dir.path().join("keystore.bin"),
+            "passphrase",
+        )
+        .unwrap();
+        insert_seller(session.database().connection(), &seller(), NOW).unwrap();
+        let customer = CustomerRecord {
+            id: CustomerId::new(),
+            party: Party::new("Acme BV", Address::new("Rotterdam", CountryCode::NL)),
+        };
+        insert_customer(session.database().connection(), &customer, NOW).unwrap();
+        let mut workspace = Workspace::new(&session).unwrap();
+        workspace.start_invoice();
+
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 800.0));
+        let context = egui::Context::default();
+        let mut appearance = egui::ThemePreference::System;
+        // Several frames: the first grid pass only measures, and the following
+        // frames settle the column widths.
+        for _ in 0..4 {
+            let input = egui::RawInput {
+                screen_rect: Some(screen),
+                ..egui::RawInput::default()
+            };
+            let output = context.run_ui(input, |ui| {
+                let _ = workspace.ui(ui, &mut session, &mut appearance);
+            });
+            output.drop_without_applying_deltas();
+        }
+
+        let width = |id: &str| {
+            context
+                .read_response(egui::Id::unique(id))
+                .map(|response| response.rect.width())
+        };
+        let name = width("lines[0].name").expect("the name field drew");
+        let quantity = width("lines[0].quantity").expect("the quantity field drew");
+        let price = width("lines[0].unit_price").expect("the price field drew");
+        let rate = width("lines[0].rate").expect("the rate field drew");
+        // The rail is 56 wide and the content margins add 36; the window that is
+        // left is what the row has to work with.
+        let content = screen.width() - 56.0 - 36.0;
+        assert!(
+            name >= content * 0.45,
+            "the name field is {name:.0} wide in a {content:.0} wide view"
+        );
+        assert!(quantity >= 60.0, "the quantity field is {quantity:.0} wide");
+        assert!(price >= 90.0, "the price field is {price:.0} wide");
+        assert!(rate >= 50.0, "the rate field is {rate:.0} wide");
     }
 
     #[test]
