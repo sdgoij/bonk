@@ -15,6 +15,7 @@
 pub mod layout;
 pub mod pdf;
 pub mod template;
+mod text;
 
 use serde::Serialize;
 use thiserror::Error;

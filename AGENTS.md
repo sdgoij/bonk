@@ -25,7 +25,16 @@ when a required gate cannot be run.
 
 Every recipe lives in the `Justfile`; `just` is the one place to look for the
 commands, and the recipes pick the Strawberry Perl wrapper on Windows by
-themselves. `just gate` runs the four offline gates in the order CI does.
+themselves. `just gate` runs the five gates in the order CI does. The licence
+and advisory gate needs `cargo-deny`, which Cargo does not ship:
+
+```sh
+cargo install cargo-deny --locked
+```
+
+The first run fetches the advisory database; later runs use the cache. If the
+tool is missing, `just deny` fails and the pre-commit hook skips that one check
+with a warning, so a fresh clone can still commit.
 
 Enable the pre-commit gate once per clone (`just hooks` does the same); it is a
 convenience, not a replacement for the gates below:
@@ -43,6 +52,7 @@ The gates, spelled out. On Windows these need the Strawberry Perl wrapper, which
 ```sh
 just fmt
 just clippy
+just deny
 just test
 just test-plain
 ```

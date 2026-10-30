@@ -4,6 +4,10 @@
 //! and turns each operation into a drawing call. No layout decisions happen
 //! here, so the PDF and the window preview cannot disagree about where a line
 //! sits.
+//!
+//! Text is shaped here rather than in `krilla`: the glyphs that were measured
+//! during layout are the glyphs that get placed, and `krilla`'s `simple-text`
+//! helper (and the unmaintained shaper behind it) stays out of the graph.
 
 #![allow(clippy::float_arithmetic)]
 
@@ -14,15 +18,19 @@ use krilla::metadata::{DateTime, Metadata};
 use krilla::num::NormalizedF32;
 use krilla::page::PageSettings;
 use krilla::paint::{Fill, FillRule, Stroke};
-use krilla::text::{Font, TextDirection};
+use krilla::text::{Font, GlyphId, KrillaGlyph};
 
 use crate::RenderError;
-use crate::layout::{Colour, Document as Layout, FONT_BOLD, FONT_REGULAR, Op, ascent};
+use crate::layout::{Colour, Document as Layout, FONT_BOLD, FONT_REGULAR, Op};
+use crate::text::{self, Metrics, Shaped};
 
 /// Writes a laid-out document as PDF bytes.
 pub(crate) fn write(document: &Layout) -> Result<Vec<u8>, RenderError> {
-    let regular = Font::new(FONT_REGULAR.into(), 0).ok_or(RenderError::Font)?;
-    let bold = Font::new(FONT_BOLD.into(), 0).ok_or(RenderError::Font)?;
+    let regular = harfrust::Font::new(FONT_REGULAR, 0).ok_or(RenderError::Font)?;
+    let bold = harfrust::Font::new(FONT_BOLD, 0).ok_or(RenderError::Font)?;
+    let regular_pdf = Font::new(FONT_REGULAR.into(), 0).ok_or(RenderError::Font)?;
+    let bold_pdf = Font::new(FONT_BOLD.into(), 0).ok_or(RenderError::Font)?;
+    let metrics = Metrics::of(&regular);
 
     let mut pdf = Document::new();
     let mut metadata = Metadata::new()
@@ -49,18 +57,27 @@ pub(crate) fn write(document: &Layout) -> Result<Vec<u8>, RenderError> {
                     size,
                     bold: is_bold,
                     colour,
-                    text,
+                    text: line,
                 } => {
+                    let (shape_font, pdf_font) = if *is_bold {
+                        (&bold, &bold_pdf)
+                    } else {
+                        (&regular, &regular_pdf)
+                    };
+                    let shaped = text::shape(shape_font, line);
+                    if shaped.is_empty() {
+                        continue;
+                    }
+                    let glyphs = pdf_glyphs(&shaped, line, metrics);
                     surface.set_stroke(None);
                     surface.set_fill(Some(fill(*colour)));
-                    let font = if *is_bold { bold.clone() } else { regular.clone() };
-                    surface.draw_text(
-                        Point::from_xy(at.x, at.y + ascent(*size)),
-                        font,
+                    surface.draw_glyphs(
+                        Point::from_xy(at.x, at.y + metrics.ascent(*size)),
+                        &glyphs,
+                        pdf_font.clone(),
+                        line,
                         *size,
-                        text,
                         false,
-                        TextDirection::Auto,
                     );
                 }
                 Op::Rule {
@@ -90,6 +107,39 @@ pub(crate) fn write(document: &Layout) -> Result<Vec<u8>, RenderError> {
     }
 
     pdf.finish().map_err(|error| RenderError::Pdf(error.to_string()))
+}
+
+/// Converts shaped glyphs into the writer's form.
+///
+/// The text range of a glyph is the span of its cluster: for left-to-right text
+/// that is the glyph's own cluster up to the next one, which is what lets the
+/// PDF carry a `ToUnicode` map and stay copyable.
+fn pdf_glyphs(shaped: &[Shaped], text: &str, metrics: Metrics) -> Vec<KrillaGlyph> {
+    let units_per_em = metrics.units_per_em;
+    shaped
+        .iter()
+        .enumerate()
+        .map(|(index, glyph)| {
+            let start = glyph.cluster.min(text.len());
+            let mut end_index = index + 1;
+            while shaped.get(end_index).is_some_and(|next| next.cluster == glyph.cluster) {
+                end_index += 1;
+            }
+            let end = shaped
+                .get(end_index)
+                .map_or(text.len(), |next| next.cluster.min(text.len()))
+                .max(start);
+            KrillaGlyph::new(
+                GlyphId::new(glyph.glyph),
+                glyph.advance as f32 / units_per_em,
+                glyph.x_offset as f32 / units_per_em,
+                glyph.y_offset as f32 / units_per_em,
+                glyph.y_advance as f32 / units_per_em,
+                start..end,
+                None,
+            )
+        })
+        .collect()
 }
 
 fn paint(colour: Colour) -> krilla::paint::Paint {

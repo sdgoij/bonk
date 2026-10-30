@@ -59,10 +59,12 @@ quick-xml = "0.42"
 lopdf = "0.46"
 
 # Layout and PDF. `krilla` is the writer Typst itself uses; the invoice layout
-# above it is ours. `rustybuzz` measures the bundled font, and `krilla`'s
-# `simple-text` feature shapes the same text for the page.
-krilla = { version = "0.8", default-features = false, features = ["simple-text"] }
-rustybuzz = "0.20"
+# above it is ours. `harfrust` is the maintained HarfBuzz port (out of the
+# HarfBuzz project) and shapes the bundled font for both measurement and output;
+# `krilla`'s `simple-text` feature is off because it pulls in the unmaintained
+# `rustybuzz`.
+krilla = { version = "0.8", default-features = false }
+harfrust = "0.15"
 
 [profile.test]
 # MSVC's linker refuses a program database larger than 4 GB (LNK1140), and the

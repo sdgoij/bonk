@@ -13,7 +13,7 @@ thiserror.workspace = true
 time.workspace = true
 
 krilla.workspace = true
-rustybuzz.workspace = true
+harfrust.workspace = true
 
 [lints]
 workspace = true

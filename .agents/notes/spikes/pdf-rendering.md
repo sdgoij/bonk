@@ -88,7 +88,7 @@ the same work for any non-Typst option, and it is bounded — an invoice is a
 header, a party block, a table, totals, and a note.
 
 What it costs us in capability is real but narrow: no complex-script shaping
-beyond what `rustybuzz` does, no bidirectional layout, no math, no user-editable
+beyond what `harfrust` does, no bidirectional layout, no math, no user-editable
 templates unless we design them. Our market prints Dutch and English invoices.
 
 ## Template customisation

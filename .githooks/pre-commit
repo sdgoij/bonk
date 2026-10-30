@@ -35,6 +35,16 @@ run_cargo fmt --all --check
 echo "pre-commit: clippy --workspace --all-targets -- -D warnings"
 run_cargo clippy --workspace --all-targets -- -D warnings
 
+# The licence and advisory gate needs a tool Cargo does not ship. Skipping it
+# with a warning keeps a fresh clone committable; CI still runs it either way.
+if command -v cargo-deny >/dev/null 2>&1; then
+    echo "pre-commit: deny check"
+    run_cargo deny check
+else
+    echo "pre-commit: cargo-deny is not installed; skipping the licence and advisory check" >&2
+    echo "pre-commit: install it with 'cargo install cargo-deny --locked'" >&2
+fi
+
 if [ "${BONK_PRECOMMIT_TESTS:-0}" = "1" ]; then
     echo "pre-commit: test --workspace"
     run_cargo test --workspace

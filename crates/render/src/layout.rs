@@ -12,6 +12,7 @@
 #![allow(clippy::float_arithmetic)]
 
 use crate::template::{Align, Column, Field, LabelOverrides, Section, Template, Width};
+use crate::text::Metrics;
 use crate::{InvoiceData, Labels, LineData, RenderError};
 
 /// The body font, compiled into the binary.
@@ -140,26 +141,13 @@ pub fn colour(value: &str) -> Option<Colour> {
     })
 }
 
-/// The distance from a text line's top to its baseline at `size`.
-///
-/// The layout model anchors a line at its top edge, because that is what a
-/// window can draw; PDF anchors text on the baseline, so the writer converts.
-pub fn ascent(size: f32) -> f32 {
-    static RATIO: std::sync::OnceLock<f32> = std::sync::OnceLock::new();
-    let ratio = *RATIO.get_or_init(|| {
-        rustybuzz::Face::from_slice(FONT_REGULAR, 0)
-            .map_or(0.8, |face| face.ascender() as f32 / face.units_per_em() as f32)
-    });
-    ratio * size
-}
-
 /// Lays `data` out with `template`.
 pub fn layout(template: &Template, data: &InvoiceData) -> Result<Document, RenderError> {
     template.validate()?;
 
-    let regular = rustybuzz::Face::from_slice(FONT_REGULAR, 0).ok_or(RenderError::Font)?;
-    let bold = rustybuzz::Face::from_slice(FONT_BOLD, 0).ok_or(RenderError::Font)?;
-    let metrics = Metrics::new(&regular);
+    let regular = harfrust::Font::new(FONT_REGULAR, 0).ok_or(RenderError::Font)?;
+    let bold = harfrust::Font::new(FONT_BOLD, 0).ok_or(RenderError::Font)?;
+    let metrics = Metrics::of(&regular);
 
     let ink = colour(&template.text.colour).unwrap_or_default();
     let rule_ink = colour(&template.rules.colour).unwrap_or_default();
@@ -177,48 +165,18 @@ pub fn layout(template: &Template, data: &InvoiceData) -> Result<Document, Rende
     compositor.run()
 }
 
-/// Font metrics, per em, as the bundled family has them.
-#[derive(Clone, Copy, Debug)]
-struct Metrics {
-    units_per_em: f32,
-    ascender: f32,
-    descender: f32,
-}
-
-impl Metrics {
-    fn new(face: &rustybuzz::Face<'_>) -> Self {
-        Self {
-            units_per_em: face.units_per_em() as f32,
-            ascender: face.ascender() as f32,
-            descender: face.descender() as f32,
-        }
-    }
-
-    /// Distance between two baselines at `size`.
-    fn line_height(self, size: f32) -> f32 {
-        (self.ascender - self.descender) / self.units_per_em * size
-    }
-}
-
 /// Shapes text to find out how wide it is, and breaks it into lines.
 struct Measurer {
-    regular: rustybuzz::Face<'static>,
-    bold: rustybuzz::Face<'static>,
+    regular: harfrust::Font,
+    bold: harfrust::Font,
     metrics: Metrics,
 }
 
 impl Measurer {
     /// The advance width of `text` at `size`.
     fn width(&self, text: &str, size: f32, bold: bool) -> f32 {
-        if text.is_empty() {
-            return 0.0;
-        }
-        let face = if bold { &self.bold } else { &self.regular };
-        let mut buffer = rustybuzz::UnicodeBuffer::new();
-        buffer.push_str(text);
-        let glyphs = rustybuzz::shape(face, &[], buffer);
-        let units: i32 = glyphs.glyph_positions().iter().map(|position| position.x_advance).sum();
-        units as f32 / self.metrics.units_per_em * size
+        let font = if bold { &self.bold } else { &self.regular };
+        crate::text::width(font, self.metrics, text, size)
     }
 
     /// Greedy word wrap to `width`. A word wider than the column is broken
@@ -1137,10 +1095,11 @@ mod tests {
 
     #[test]
     fn wrapping_breaks_a_word_that_cannot_fit() {
+        let regular = harfrust::Font::new(FONT_REGULAR, 0).expect("font");
         let measurer = Measurer {
-            regular: rustybuzz::Face::from_slice(FONT_REGULAR, 0).expect("font"),
-            bold: rustybuzz::Face::from_slice(FONT_BOLD, 0).expect("font"),
-            metrics: Metrics::new(&rustybuzz::Face::from_slice(FONT_REGULAR, 0).expect("font")),
+            bold: harfrust::Font::new(FONT_BOLD, 0).expect("font"),
+            metrics: Metrics::of(&regular),
+            regular,
         };
         let lines = measurer.wrap("abcdefghij", 9.5, false, 10.0);
         assert!(lines.len() > 1, "a ten-letter word does not fit at 10pt");

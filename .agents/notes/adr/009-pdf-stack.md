@@ -21,10 +21,14 @@ application, and embedding it means embedding all of it.
 Write the PDF with `krilla` (MIT OR Apache-2.0, MSRV 1.92, PDF/A-3 support
 including embedded files) and own the layout above it:
 
-- `render::layout` measures the bundled DejaVu Serif with `rustybuzz`, wraps text,
-  resolves `pt`/`fr` column widths, and paginates into `Document { pages }` of
-  text and rule operations in points, y down.
-- `render::pdf` walks that model into `krilla`. No layout decisions happen there,
+- `render::layout` measures the bundled DejaVu Serif with `harfrust` (the
+  maintained HarfBuzz port), wraps text, resolves `pt`/`fr` column widths, and
+  paginates into `Document { pages }` of text and rule operations in points, y
+  down.
+- `render::pdf` shapes the same lines with `harfrust` and places the glyphs
+  through `krilla`, with its `simple-text` helper off so the unmaintained
+  `rustybuzz` it would pull in stays out of the graph. No layout decisions happen
+  there,
   so the PDF and the window preview cannot disagree.
 - The window draws the same model with egui, using the same font files, which
   removes the PNG rasteriser and its dependencies.
@@ -43,7 +47,7 @@ intent, and normalise the document id, with veraPDF as the gate.
 - We own measure, wrap, table layout, and page breaks (~900 lines). An invoice is
   a header, a party block, a table, totals, and a note, so the work is bounded.
 - We give up Typst's typesetting: no bidirectional layout, no complex-script
-  shaping beyond `rustybuzz`, no maths, and no user-programmable templates.
+  shaping beyond `harfrust`, no maths, and no user-programmable templates.
 - A template can make an invoice look wrong but cannot make it *be* wrong, cannot
   compute, and cannot read a file. That is a smaller security surface than a
   sandboxed typesetting language.

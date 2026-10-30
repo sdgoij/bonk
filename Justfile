@@ -46,6 +46,12 @@ fmt-fix:
 clippy:
     {{cargo}} clippy --workspace --all-targets -- -D warnings
 
+# Licences, advisories, and banned crates. Needs `cargo-deny` installed:
+#   cargo install cargo-deny --locked
+# The advisory database is fetched on the first run and cached after that.
+deny:
+    {{cargo}} deny check
+
 # The offline test suite, encrypted build.
 test:
     {{cargo}} test --workspace
@@ -59,7 +65,7 @@ test-crate crate:
     {{cargo}} test -p {{crate}}
 
 # Every gate from AGENTS.md, in the order CI runs them.
-gate: fmt clippy test test-plain
+gate: fmt clippy deny test test-plain
 
 # Enable the pre-commit hook once per clone.
 hooks:

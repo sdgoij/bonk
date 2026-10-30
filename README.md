@@ -31,8 +31,13 @@ wrapper for the platform:
 
 ```sh
 just build      # shippable binary, release profile -> target/release/bonk
-just gate       # fmt, clippy, and both test suites
+just gate       # fmt, clippy, deny, and both test suites
 ```
+
+The `deny` gate needs [`cargo-deny`](https://github.com/EmbarkStudios/cargo-deny),
+which Cargo does not ship: `cargo install cargo-deny --locked`. It fetches the
+advisory database on its first run and caches it; a clone without the tool can
+still commit, because the pre-commit hook skips that one check with a warning.
 
 The default build enables SQLCipher through
 `rusqlite/bundled-sqlcipher-vendored-openssl`, which compiles OpenSSL from
@@ -329,11 +334,11 @@ locale. `verify` recomputes the audit chain, every artefact hash, and every
 stored payload — imported files included — and reports unreferenced blobs without
 failing on them.
 
-PDF rendering is ours: the `render` crate measures the bundled font with
-`rustybuzz`, wraps and paginates the invoice, and hands the page operations to
-`krilla`, the PDF writer Typst itself uses. Fonts and layout are compiled into
-the binary, so nothing has to be installed and the same invoice produces the
-same bytes on every machine. Templates are declarative JSON — page, type,
+PDF rendering is ours: the `render` crate shapes the bundled font with
+`harfrust`, wraps and paginates the invoice, and hands the glyphs and page
+operations to `krilla`, the PDF writer Typst itself uses. Fonts and layout are
+compiled into the binary, so nothing has to be installed and the same invoice
+produces the same bytes on every machine. Templates are declarative JSON — page, type,
 sections, columns, labels, and a footer with `{{placeholders}}` — not code, so a
 template can make an invoice look wrong but never make it *be* wrong. If a
 document fails to render, issuing still succeeds and prints a warning; the UBL
