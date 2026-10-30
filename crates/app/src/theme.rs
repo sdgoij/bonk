@@ -35,6 +35,8 @@ pub struct Palette {
     pub surface_alt: Color32,
     /// Hairlines and card edges.
     pub border: Color32,
+    /// The stronger edge of a window or menu.
+    pub border_strong: Color32,
     /// Primary text.
     pub text: Color32,
     /// Secondary text and icons at rest.
@@ -59,25 +61,31 @@ pub struct Palette {
     pub selection: Color32,
 }
 
-/// The light palette: cool grey paper with a blue accent.
+/// The light palette: warm paper with a terracotta accent.
+///
+/// The neutrals are the page and card tones of the house style, and the accent
+/// is its terracotta. `hover` and `selection` are the accent and its soft tint
+/// composited over the panel, so they stay in the same warm family instead of
+/// introducing a second hue.
 pub const LIGHT: Palette = Palette {
-    bg: Color32::from_rgb(0xE7, 0xEA, 0xEF),
-    panel: Color32::from_rgb(0xF6, 0xF7, 0xF9),
-    rail: Color32::from_rgb(0xDE, 0xE2, 0xE8),
-    surface: Color32::from_rgb(0xFF, 0xFF, 0xFF),
-    surface_alt: Color32::from_rgb(0xEC, 0xF0, 0xF5),
-    border: Color32::from_rgb(0xC2, 0xC8, 0xD1),
-    text: Color32::from_rgb(0x15, 0x1A, 0x22),
-    muted: Color32::from_rgb(0x46, 0x50, 0x5E),
-    accent: Color32::from_rgb(0x1F, 0x5F, 0xD8),
-    accent_text: Color32::WHITE,
-    accent_weak: Color32::from_rgb(0xD9, 0xE5, 0xFA),
-    success: Color32::from_rgb(0x16, 0x6B, 0x45),
-    warning: Color32::from_rgb(0x7A, 0x52, 0x00),
-    error: Color32::from_rgb(0xA1, 0x1B, 0x12),
-    stripe: Color32::from_rgb(0xEF, 0xF2, 0xF6),
-    hover: Color32::from_rgb(0xDE, 0xE5, 0xF0),
-    selection: Color32::from_rgb(0xCF, 0xE0, 0xFA),
+    bg: Color32::from_rgb(0xE9, 0xE4, 0xDC),
+    panel: Color32::from_rgb(0xF4, 0xEF, 0xE8),
+    rail: Color32::from_rgb(0xE9, 0xE4, 0xDC),
+    surface: Color32::from_rgb(0xEE, 0xE8, 0xDF),
+    surface_alt: Color32::from_rgb(0xEC, 0xE5, 0xDB),
+    border: Color32::from_rgb(0x76, 0x6D, 0x5F),
+    border_strong: Color32::from_rgb(0x63, 0x5A, 0x4C),
+    text: Color32::from_rgb(0x38, 0x31, 0x28),
+    muted: Color32::from_rgb(0x63, 0x5A, 0x4C),
+    accent: Color32::from_rgb(0xA1, 0x3F, 0x0D),
+    accent_text: Color32::from_rgb(0xA1, 0x3F, 0x0D),
+    accent_weak: Color32::from_rgb(0xE9, 0xD8, 0xCC),
+    success: Color32::from_rgb(0x0F, 0x6B, 0x2F),
+    warning: Color32::from_rgb(0x92, 0x61, 0x0A),
+    error: Color32::from_rgb(0x9C, 0x2F, 0x22),
+    stripe: Color32::from_rgb(0xEE, 0xE8, 0xDF),
+    hover: Color32::from_rgb(0, 255, 0),
+    selection: Color32::from_rgb(0xE9, 0xD8, 0xCC),
 };
 
 /// The dark palette: charcoal surfaces with a brighter blue accent.
@@ -88,6 +96,7 @@ pub const DARK: Palette = Palette {
     surface: Color32::from_rgb(0x23, 0x27, 0x2F),
     surface_alt: Color32::from_rgb(0x27, 0x2C, 0x35),
     border: Color32::from_rgb(0x35, 0x3B, 0x46),
+    border_strong: Color32::from_rgb(0x4A, 0x52, 0x60),
     text: Color32::from_rgb(0xE7, 0xEA, 0xF0),
     muted: Color32::from_rgb(0x9A, 0xA3, 0xB2),
     accent: Color32::from_rgb(0x5B, 0x97, 0xFF),
@@ -190,7 +199,7 @@ fn style(theme: Theme) -> Style {
     visuals.hyperlink_color = tokens.accent;
     visuals.selection.bg_fill = tokens.selection;
     visuals.selection.stroke = Stroke::new(1.0, tokens.accent);
-    visuals.window_stroke = Stroke::new(1.0, tokens.border);
+    visuals.window_stroke = Stroke::new(1.0, tokens.border_strong);
     visuals.window_corner_radius = CornerRadius::same(10);
     visuals.menu_corner_radius = radius;
     visuals.weak_text_color = Some(tokens.muted);
