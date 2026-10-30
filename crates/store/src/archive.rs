@@ -52,8 +52,9 @@ pub struct DocumentView {
     pub lines: Vec<StoredLine>,
     /// Current status: the latest event, or the state the document was recorded in.
     pub status: DocumentStatus,
-    /// The party this inbound document's supplier was matched to, when a human
-    /// or the import did. `None` for outbound documents and unmatched imports.
+    /// The party this inbound document's supplier resolves to: a human override
+    /// when one was recorded, otherwise the match the import made. `None` for
+    /// outbound documents and for imports whose issuer is not on file.
     pub supplier_match: Option<CustomerId>,
     /// SHA-256 of the semantic record.
     pub semantic_hash: String,
@@ -195,15 +196,28 @@ pub fn load(conn: &Connection, id: DocumentId) -> Result<Option<DocumentView>, S
     }))
 }
 
-/// The supplier match recorded for a document, when there is one.
+/// The supplier an inbound document resolves to.
+///
+/// Two layers record a match: the import writes the party it found into
+/// `document.counterparty_id`, and a human decision adds a `supplier_match` row.
+/// The human decision wins; without one the import's answer still counts, which
+/// is what the register already assumes. An outbound document has a
+/// counterparty too — the buyer — so the direction decides whether it is a
+/// supplier at all.
 fn supplier_match(conn: &Connection, id: DocumentId) -> Result<Option<CustomerId>, StoreError> {
     let customer = conn
         .query_row(
-            "SELECT customer_id FROM supplier_match WHERE document_id = ?1",
+            "SELECT CASE WHEN d.direction = 'inbound'
+                         THEN COALESCE(m.customer_id, d.counterparty_id)
+                    END
+             FROM document d
+             LEFT JOIN supplier_match m ON m.document_id = d.id
+             WHERE d.id = ?1",
             params![id.to_string()],
-            |row| row.get::<_, String>(0),
+            |row| row.get::<_, Option<String>>(0),
         )
-        .optional()?;
+        .optional()?
+        .flatten();
     customer
         .map(|value| CustomerId::parse_str(&value).map_err(|error| data(error.to_string())))
         .transpose()

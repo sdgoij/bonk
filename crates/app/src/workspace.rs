@@ -4373,7 +4373,7 @@ mod tests {
     }
 
     #[test]
-    fn a_received_document_can_be_matched_and_settled() {
+    fn a_received_document_shows_its_match_and_can_be_settled() {
         let dir = tempfile::TempDir::new().unwrap();
         let mut session = Session::create(
             dir.path().join("bonk.db"),
@@ -4384,6 +4384,13 @@ mod tests {
         let (seller, customer) = peppol_parties();
         insert_seller(session.database().connection(), &seller, NOW).unwrap();
         insert_customer(session.database().connection(), &customer, NOW).unwrap();
+        // The file we import was issued by our own seller, and the issuer is on
+        // file as a party, so the import's own match has something to find.
+        let issuer = CustomerRecord {
+            id: CustomerId::new(),
+            party: seller.party.clone(),
+        };
+        insert_customer(session.database().connection(), &issuer, NOW).unwrap();
 
         // Issue a document with the real writer, so the import has a file an
         // archive would actually receive.
@@ -4420,7 +4427,11 @@ mod tests {
         let view = workspace.search.opened.clone().expect("the import opens the document");
         assert_eq!(view.direction, Direction::Inbound);
         assert_eq!(view.status, DocumentStatus::Received);
-        assert_eq!(view.supplier_match, None, "the issuer is not in the party table");
+        assert_eq!(
+            view.supplier_match,
+            Some(issuer.id),
+            "the match the import made is visible, not only a manual one"
+        );
         assert_eq!(workspace.search.direction, Some(Direction::Inbound));
 
         // The received panel draws with the picker and the settle button.
@@ -4434,7 +4445,8 @@ mod tests {
         workspace.match_opened(&session, customer.id);
         assert_eq!(
             workspace.search.opened.as_ref().map(|view| view.supplier_match),
-            Some(Some(customer.id))
+            Some(Some(customer.id)),
+            "a human decision overrides the import's match"
         );
 
         workspace.advance_opened(&session, DocumentStatus::Approved);
