@@ -1272,21 +1272,81 @@ pub fn search(
     owner_id: SellerId,
     request: &SearchRequest<'_>,
 ) -> Result<Vec<SearchHit>, StoreError> {
-    let mut hits = Vec::new();
+    Ok(search_page(conn, owner_id, request, 0, SEARCH_LIMIT as usize)?.hits)
+}
 
+/// One page of results, and whether another page follows.
+///
+/// `more` is computed by asking for one row beyond the page rather than by
+/// counting, so a page costs what its size costs.
+#[derive(Clone, Debug, Default)]
+pub struct SearchPage {
+    /// The rows on this page.
+    pub hits: Vec<SearchHit>,
+    /// True when another page follows these rows.
+    pub more: bool,
+}
+
+/// One page of a search, for a window that draws a screenful at a time.
+///
+/// Drafts come first and are few, so they are read whole and paged together with
+/// the documents after them; the order a client sees is the order the offset
+/// counts in, which is what keeps a page from repeating or skipping a row.
+pub fn search_page(
+    conn: &Connection,
+    owner_id: SellerId,
+    request: &SearchRequest<'_>,
+    offset: usize,
+    limit: usize,
+) -> Result<SearchPage, StoreError> {
     // Unfinished invoices come first: a draft is the thing most likely to be on
     // the user's mind, and it has no number to sort by. Drafts are always
     // outbound, so an inbound filter excludes them.
-    if request.status.is_none_or(|status| status == DocumentStatus::Draft)
+    let drafts = if request.status.is_none_or(|status| status == DocumentStatus::Draft)
         && request.direction != Some(Direction::Inbound)
     {
-        hits = draft_hits(conn, owner_id, request)?;
-    }
+        draft_hits(conn, owner_id, request)?
+    } else {
+        Vec::new()
+    };
+    let draft_count = drafts.len();
+
     if request.status == Some(DocumentStatus::Draft) {
-        return Ok(hits);
+        let hits: Vec<SearchHit> = drafts.into_iter().skip(offset).take(limit).collect();
+        return Ok(SearchPage {
+            more: offset + hits.len() < draft_count,
+            hits,
+        });
     }
 
+    let from_drafts = draft_count.saturating_sub(offset).min(limit);
+    let mut hits: Vec<SearchHit> = drafts.into_iter().skip(offset).take(from_drafts).collect();
+
+    let remaining = limit - hits.len();
+    if remaining == 0 {
+        return Ok(SearchPage {
+            more: offset + limit < draft_count,
+            hits,
+        });
+    }
+
+    let document_offset = offset.saturating_sub(draft_count);
+    let (documents, more) = document_hits(conn, owner_id, request, document_offset, remaining)?;
+    hits.extend(documents);
+    Ok(SearchPage { hits, more })
+}
+
+/// Documents for one page of a request, and whether another row follows.
+fn document_hits(
+    conn: &Connection,
+    owner_id: SellerId,
+    request: &SearchRequest<'_>,
+    offset: usize,
+    limit: usize,
+) -> Result<(Vec<SearchHit>, bool), StoreError> {
     let filters = document_filters(owner_id, request)?;
+    // One row beyond the page is what makes `more` a fact rather than a guess.
+    let fetch = limit.saturating_add(1);
 
     // The index holds one row per document, so it is the party name's single
     // definition for both a search and a plain listing. Status is the latest
@@ -1298,10 +1358,11 @@ pub fn search(
          FROM invoice_fts
          JOIN document d ON d.id = invoice_fts.document_id
          WHERE d.owner_id = ?1{}
-         ORDER BY {} LIMIT {SEARCH_LIMIT}",
+         ORDER BY {} LIMIT {fetch} OFFSET {offset}",
         filters.clauses, filters.order
     );
 
+    let mut hits = Vec::new();
     let mut statement = conn.prepare(&sql)?;
     let mut rows = statement.query(rusqlite::params_from_iter(filters.parameters))?;
     while let Some(row) = rows.next()? {
@@ -1329,7 +1390,10 @@ pub fn search(
                 .ok_or_else(|| StoreError::Data(format!("stored status {status:?} is unknown")))?,
         });
     }
-    Ok(hits)
+
+    let more = hits.len() > limit;
+    hits.truncate(limit);
+    Ok((hits, more))
 }
 
 /// How many documents a request matches, and how many the archive holds.

@@ -462,3 +462,34 @@ fn a_quote_is_not_a_query_operator() {
     assert_eq!(hits.len(), 1);
     assert_eq!(hits[0].id, first);
 }
+
+/// The window draws a screenful at a time, so a page has to continue where the
+/// last one stopped: no row twice, no row skipped, and a `more` flag that is a
+/// fact rather than a guess.
+#[test]
+fn a_page_continues_where_the_last_one_stopped() {
+    let (_dir, mut database, seller, customer, _cafe) = fixture();
+    for day in ["2026-10-01", "2026-10-02", "2026-10-03", "2026-10-04", "2026-10-05"] {
+        issue(&mut database, seller, customer, "PO", "page", day);
+    }
+
+    let request = SearchRequest::default();
+    let mut seen = Vec::new();
+    let mut offset = 0;
+    loop {
+        let page = store::search_page(database.connection(), seller, &request, offset, 2).unwrap();
+        assert!(page.hits.len() <= 2, "a page is never larger than its limit");
+        offset += page.hits.len();
+        seen.extend(page.hits.iter().map(|hit| hit.id.to_string()));
+        if !page.more {
+            break;
+        }
+        assert!(offset < 50, "walking the pages must terminate");
+    }
+
+    assert_eq!(seen.len(), 5, "every document appears once");
+    let mut unique = seen.clone();
+    unique.sort();
+    unique.dedup();
+    assert_eq!(unique.len(), 5, "and no document appears twice");
+}
