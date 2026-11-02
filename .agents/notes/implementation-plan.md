@@ -605,10 +605,11 @@ The footer under the results is pinned to the bottom of the window and reads `42
 
 **Stored invoices can be exported and previewed.** The document panel offers **Save PDF** and **Save UBL**, reading the filed bytes back through `store::archive::artefact_bytes`, which verifies the hash before handing them out — an export is a copy of what was archived, not a re-render. The composer has **Preview**, which lays the document out with the same engine and template issuing uses and draws page one in the window; because the window and the PDF share one layout model, the preview cannot drift from the PDF, and it costs one shaping pass only when asked for. A document that runs to more than one page says so under the preview.
 
-Remaining in M5: the validation messages from `build_draft` and the domain errors
-from `crux` that they quote. Those are not widget strings: translating them means
-giving `DomainError` stable codes the interface can render, the same trick as the
-strength `Reason`, and that is a change to the domain rather than to the UI.
+**Form problems are values now (2026-11-02).** `build_draft` built an English sentence at each check, so the window could only ever show English and the wording lived in the validation rather than with the rest of the interface text. It returns a `DraftError` — a line position plus a `LineProblem` — and `text::problem` writes the sentence; the totals error, the suppressed-warning count, and the live message under the composer all use that table. `DomainError` gained a stable `code()`, so an interface picks its wording by identifier instead of printing the `Display` written for logs, and a test keeps the codes distinct.
+
+Remaining in M5: the Dutch table itself. Every string already takes the language and
+ignores it, so the work is one pass over `app::text` and the interface-language
+switch in Settings; the error path is ready for it.
 
 ---
 
