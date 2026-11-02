@@ -356,6 +356,22 @@ Exit criteria:
 - Codelist update procedure documented and rehearsed once (simulated release).
 - Zero network access during the entire milestone's test suite (asserted in CI).
 
+**The corpus is 63 invoices and 3 credit notes (2026-11-02).** `tools/validate-m1.sh`
+generates it through the CLI issue path, which shares `app::render_issue` with the
+window, and runs Mustang 2.17.0 over every file: **66/66 pass EN 16931 and Peppol
+BIS 3.0.** It covers the standard rate at 21 % and the Dutch reduced rate at 9 %,
+zero-rated, exempt, reverse-charge, intra-community, and export supplies; five
+buyers in NL, BE, DE and NO so the intra-community and export rules have a buyer
+their rules can be about; and three multi-line invoices whose VAT breakdown has
+more than one group. Exempt, reverse-charge, intra-community, and export lines
+carry an exemption reason, which is what BR-E-10, BR-AE-10, BR-IC-10 and the
+export rule ask for — the oracle refused the first run without them, which is the
+kind of gap the corpus exists to find.
+
+Still open from this criterion: the same corpus with *expected findings* — documents
+that deliberately break one rule each — so our engine's findings can be compared
+with the oracle's rule by rule, not only its verdict.
+
 ---
 
 ### M3 — Import and payable register (3 weeks)
