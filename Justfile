@@ -33,6 +33,14 @@ run:
 demo:
     {{cargo}} run -p cli -- demo-seed --force
 
+# A 20 000-document archive, for the M5 search criterion.
+demo-20k:
+    {{cargo}} run -p cli -- demo-seed --force --invoices 20000
+
+# M5 exit criterion: typed queries under 30 ms p95 at 20 000 documents.
+bench-search:
+    {{cargo}} run -p cli --release -- bench-search --repeat 50
+
 # Check formatting and whitespace. This is the whole gate for docs-only changes.
 fmt:
     {{cargo}} fmt --all --check

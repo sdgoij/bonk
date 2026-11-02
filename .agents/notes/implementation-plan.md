@@ -642,7 +642,18 @@ frame storage, so it survives a lock. A test walks the source and refuses an arm
 that names both languages and returns one sentence, or a call that ignores the
 language, which is what makes "translated" checkable rather than claimed.
 
-Remaining in M5: nothing.
+Remaining in M5: nothing in the interface. The search criterion is measured and
+missed — see below.
+
+**The 20 000-document measurement finds M5's criterion unmet (2026-11-02).**
+`bonk bench-search` opens the archive once and times `store::search` over that many
+samples, so the Argon2id unlock is outside the loop. On a 20 000-document demo
+archive in a release build: a word query returning the 1 000-row cap takes
+**p95 63 ms** (median 62.8 ms), and the browse view over 20 000 documents takes
+**p95 770 ms**. The criterion is 30 ms p95, so the query path needs work: the
+first suspect is per-row work after the query — each hit's party, status, and
+gross are assembled row by row, and the browse view materialises far more of
+them. `just demo-20k` seeds the archive and `just bench-search` reproduces it.
 
 ---
 

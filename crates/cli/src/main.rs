@@ -329,6 +329,19 @@ enum Command {
         #[arg(long)]
         status: Option<String>,
     },
+    /// Time the search query against the archive (M5 exit criterion).
+    ///
+    /// The archive is unlocked once, outside the timed loop: the criterion is
+    /// about the query, not about the Argon2id run that opens the key.
+    #[command(name = "bench-search")]
+    BenchSearch {
+        /// Words to look for; an empty query lists everything.
+        #[arg(default_value = "")]
+        query: String,
+        /// Samples to take; the p95 is taken over these.
+        #[arg(long, default_value_t = 50)]
+        repeat: usize,
+    },
     /// Export documents as CSV or JSON.
     Export {
         /// Words to narrow the export; omit to export everything.
@@ -1056,6 +1069,50 @@ fn run(cli: Cli) -> Result<(), CliError> {
             if hits.is_empty() {
                 println!("no documents match {query:?}");
             }
+            Ok(())
+        }
+        Some(Command::BenchSearch { query, repeat }) => {
+            if repeat == 0 {
+                return Err(CliError::Input("--repeat must be at least 1".to_owned()));
+            }
+            let session = access.session(&database, &keystore)?;
+            let connection = session.database().connection();
+            let owner = owner_of(session.database(), None)?;
+
+            // An empty query is the browse view, which is what the panel shows
+            // before anything is typed.
+            let words = query.trim();
+            let query = (!words.is_empty()).then_some(words);
+            let mut samples = Vec::with_capacity(repeat);
+            let mut rows = 0;
+            for _ in 0..repeat {
+                let started = std::time::Instant::now();
+                let hits = store::search(
+                    connection,
+                    owner,
+                    &SearchRequest {
+                        query,
+                        direction: None,
+                        from: None,
+                        to: None,
+                        status: None,
+                    },
+                )?;
+                samples.push(started.elapsed().as_micros() as u64);
+                rows = hits.len();
+            }
+
+            samples.sort_unstable();
+            // Nearest-rank percentile: ceil(0.95 n) - 1, without floating point.
+            let rank = (samples.len() * 95).div_ceil(100).clamp(1, samples.len()) - 1;
+            println!(
+                "query {query:?}: {rows} hit(s), {count} samples, median {median} \u{00b5}s, \
+                 p95 {p95} \u{00b5}s, max {max} \u{00b5}s",
+                count = samples.len(),
+                median = samples[samples.len() / 2],
+                p95 = samples[rank],
+                max = samples[samples.len() - 1],
+            );
             Ok(())
         }
         Some(Command::Export {
