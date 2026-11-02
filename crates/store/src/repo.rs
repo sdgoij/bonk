@@ -1260,13 +1260,33 @@ pub struct SearchHit {
 const LATEST_STATUS: &str = "(SELECT e.kind FROM document_event e WHERE e.document_id = d.id \
      ORDER BY e.seq DESC LIMIT 1)";
 
+/// The party name a find-list row shows.
+///
+/// Derived from the party on file rather than read from the search index, so a
+/// rename is visible at once and a page costs two primary-key lookups per row
+/// instead of a wider row per match. The precedence is the one the index records
+/// when a document arrives: a decided supplier match wins, then the party on
+/// file, then the snapshot taken at import, so an unmatched received document
+/// still shows its sender's name.
+const PARTY_NAME: &str = "
+    COALESCE(
+        (SELECT c.display_name FROM supplier_match m JOIN customer c ON c.id = m.customer_id
+          WHERE m.document_id = d.id),
+        (SELECT c.display_name FROM customer c WHERE c.id = d.counterparty_id),
+        CASE d.direction WHEN 'inbound'
+            THEN json_extract(d.issuer_snapshot_json, '$.legal_name')
+            ELSE json_extract(d.recipient_snapshot_json, '$.legal_name')
+        END,
+        ''
+    )";
+
 /// Finds documents by what people remember about them.
 ///
 /// The words are matched against the number, the party, the references, and the
-/// note; dates, direction, and status are filters over the document itself.
-/// Results are ordered by relevance with the number weighted highest, so typing
-/// an invoice number puts that invoice first. Without words the filters alone
-/// decide, and the list is newest first.
+/// note; dates, direction, and status narrow the result. Results are ordered by
+/// relevance with the number weighted highest, so typing an invoice number puts
+/// that invoice first. Without words the filters alone decide, and the list is
+/// newest first.
 pub fn search(
     conn: &Connection,
     owner_id: SellerId,
@@ -1337,6 +1357,13 @@ pub fn search_page(
 }
 
 /// Documents for one page of a request, and whether another row follows.
+///
+/// A request without words is ordered by date, so `document_owner_order` is
+/// walked and the read stops at the page. A request with words is ordered by
+/// relevance, which no index can walk, so the find index answers the page on its
+/// own — it carries the owner, direction, date, and status the filters use — and
+/// only the page's documents are read. Joining `document` for every match is what
+/// made a word query cost 48 ms: one fat row read per match, for a page of fifty.
 fn document_hits(
     conn: &Connection,
     owner_id: SellerId,
@@ -1344,56 +1371,136 @@ fn document_hits(
     offset: usize,
     limit: usize,
 ) -> Result<(Vec<SearchHit>, bool), StoreError> {
-    let filters = document_filters(owner_id, request)?;
     // One row beyond the page is what makes `more` a fact rather than a guess.
     let fetch = limit.saturating_add(1);
 
-    // The index holds one row per document, so it is the party name's single
-    // definition for both a search and a plain listing. Status is the latest
-    // event, or the state the document was recorded in when it has none.
+    let Some(expression) = request.query.map(match_expression).transpose()? else {
+        let (clauses, parameters) = browse_filters(owner_id, request);
+        let sql = format!(
+            "SELECT d.id, d.direction, d.number, d.issue_date_local, d.currency, d.totals_json,
+                    {PARTY_NAME} AS party_name,
+                    COALESCE({LATEST_STATUS}, d.state) AS status
+             FROM document d
+             WHERE d.owner_id = ?1{clauses}
+             ORDER BY d.issue_date_local DESC, d.number DESC LIMIT {fetch} OFFSET {offset}"
+        );
+        return read_hits(conn, &sql, parameters, limit);
+    };
+
+    let (clauses, parameters) = index_filters(owner_id, request, expression);
+    // Relevance is the only sort key, because any second key costs FTS5 its
+    // ordered read: SQLite then scans the whole index and sorts every document
+    // instead of walking matches, which is 16 ms against 0.8.
+    let sql = format!(
+        "SELECT document_id FROM invoice_fts
+         WHERE invoice_fts MATCH ?1{clauses}
+         ORDER BY {RELEVANCE} LIMIT {fetch} OFFSET {offset}"
+    );
+    let mut ids: Vec<String> = {
+        let mut statement = conn.prepare(&sql)?;
+        let mut rows = statement.query(rusqlite::params_from_iter(parameters))?;
+        let mut ids = Vec::new();
+        while let Some(row) = rows.next()? {
+            ids.push(row.get(0)?);
+        }
+        ids
+    };
+
+    let more = ids.len() > limit;
+    ids.truncate(limit);
+    let hits = hits_by_id(conn, &ids)?;
+    Ok((hits, more))
+}
+
+/// Relevance: the number is what someone types when they know the invoice; the
+/// party, references, and note rank below it. The columns before `number` are
+/// the ones the index carries for scoping and filtering, so they weigh nothing.
+/// Weights are a constant list because FTS5 takes one per column.
+const RELEVANCE: &str = "bm25(invoice_fts, 0.0, 0.0, 0.0, 0.0, 0.0, 5.0, 1.0, 1.0, 1.0)";
+
+/// Reads the documents with the given identifiers, in the order given.
+///
+/// A page is a few dozen rows, so the identifiers are passed in and the results
+/// are put back into the index's order here rather than by a second sort.
+fn hits_by_id(conn: &Connection, ids: &[String]) -> Result<Vec<SearchHit>, StoreError> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let placeholders = (1..=ids.len())
+        .map(|index| format!("?{index}"))
+        .collect::<Vec<_>>()
+        .join(", ");
     let sql = format!(
         "SELECT d.id, d.direction, d.number, d.issue_date_local, d.currency, d.totals_json,
-                invoice_fts.party_name,
+                {PARTY_NAME} AS party_name,
                 COALESCE({LATEST_STATUS}, d.state) AS status
-         FROM invoice_fts
-         JOIN document d ON d.id = invoice_fts.document_id
-         WHERE d.owner_id = ?1{}
-         ORDER BY {} LIMIT {fetch} OFFSET {offset}",
-        filters.clauses, filters.order
+         FROM document d
+         WHERE d.id IN ({placeholders})"
     );
 
-    let mut hits = Vec::new();
     let mut statement = conn.prepare(&sql)?;
-    let mut rows = statement.query(rusqlite::params_from_iter(filters.parameters))?;
+    let mut rows = statement.query(rusqlite::params_from_iter(ids.iter()))?;
+    let mut found = std::collections::HashMap::with_capacity(ids.len());
     while let Some(row) = rows.next()? {
-        let id: String = row.get(0)?;
-        let direction: String = row.get(1)?;
-        let currency =
-            Currency::parse(&row.get::<_, String>(4)?).map_err(|error| StoreError::Data(error.to_string()))?;
-        let totals: serde_json::Value = serde_json::from_str(&row.get::<_, String>(5)?)?;
-        let gross = totals
-            .get("gross")
-            .and_then(serde_json::Value::as_str)
-            .ok_or_else(|| StoreError::Data("stored totals have no gross".to_owned()))?;
-        let status: String = row.get(7)?;
+        let hit = read_hit(row)?;
+        found.insert(hit.id, hit);
+    }
 
-        hits.push(SearchHit {
-            id: DocumentId::parse_str(&id).map_err(|error| StoreError::Data(error.to_string()))?,
-            direction: Direction::parse(&direction)
-                .ok_or_else(|| StoreError::Data(format!("stored direction {direction:?} is unknown")))?,
-            number: row.get(2)?,
-            party: row.get(6)?,
-            issue_date: parse_date(&row.get::<_, String>(3)?)?,
-            currency,
-            gross: Money::parse_fixed(gross, currency).map_err(|error| StoreError::Data(error.to_string()))?,
-            status: DocumentStatus::parse(&status)
-                .ok_or_else(|| StoreError::Data(format!("stored status {status:?} is unknown")))?,
-        });
+    let mut ordered = Vec::with_capacity(found.len());
+    for id in ids {
+        let wanted = DocumentId::parse_str(id).map_err(|error| StoreError::Data(error.to_string()))?;
+        if let Some(hit) = found.remove(&wanted) {
+            ordered.push(hit);
+        }
+    }
+    Ok(ordered)
+}
+
+/// Assembles the hits a row query returned, keeping one row beyond the page to
+/// report whether another page follows.
+fn read_hits(
+    conn: &Connection,
+    sql: &str,
+    parameters: Vec<String>,
+    limit: usize,
+) -> Result<(Vec<SearchHit>, bool), StoreError> {
+    let mut statement = conn.prepare(sql)?;
+    let mut rows = statement.query(rusqlite::params_from_iter(parameters))?;
+    let mut hits = Vec::new();
+    while let Some(row) = rows.next()? {
+        hits.push(read_hit(row)?);
     }
 
     let more = hits.len() > limit;
     hits.truncate(limit);
     Ok((hits, more))
+}
+
+/// One row of the list query, in the column order every such query selects.
+fn read_hit(row: &rusqlite::Row<'_>) -> Result<SearchHit, StoreError> {
+    let id: String = row.get(0)?;
+    let direction: String = row.get(1)?;
+    let currency = Currency::parse(&row.get::<_, String>(4)?).map_err(|error| StoreError::Data(error.to_string()))?;
+    let totals: serde_json::Value = serde_json::from_str(&row.get::<_, String>(5)?)?;
+    let gross = totals
+        .get("gross")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| StoreError::Data("stored totals have no gross".to_owned()))?;
+    let status: String = row.get(7)?;
+
+    Ok(SearchHit {
+        id: DocumentId::parse_str(&id).map_err(|error| StoreError::Data(error.to_string()))?,
+        direction: Direction::parse(&direction)
+            .ok_or_else(|| StoreError::Data(format!("stored direction {direction:?} is unknown")))?,
+        number: row.get(2)?,
+        party: row.get(6)?,
+        issue_date: parse_date(&row.get::<_, String>(3)?)?,
+        currency,
+        gross: Money::parse_fixed(gross, currency).map_err(|error| StoreError::Data(error.to_string()))?,
+        status: DocumentStatus::parse(&status)
+            .ok_or_else(|| StoreError::Data(format!("stored status {status:?} is unknown")))?,
+    })
 }
 
 /// How many documents a request matches, and how many the archive holds.
@@ -1428,76 +1535,89 @@ pub fn search_counts(
         matched += u64::try_from(draft_hits(conn, owner_id, request)?.len()).unwrap_or(0);
     }
     if request.status != Some(DocumentStatus::Draft) {
-        let filters = document_filters(owner_id, request)?;
-        let sql = format!(
-            "SELECT COUNT(*)
-             FROM invoice_fts
-             JOIN document d ON d.id = invoice_fts.document_id
-             WHERE d.owner_id = ?1{}",
-            filters.clauses
-        );
-        let mut statement = conn.prepare(&sql)?;
-        let documents: i64 = statement.query_row(rusqlite::params_from_iter(filters.parameters), |row| row.get(0))?;
+        // Counted the same way it is listed: through the index when there are
+        // words, so the footer's number costs a scan of matches rather than a
+        // read of every matching document.
+        let documents: i64 = match request.query.map(match_expression).transpose()? {
+            Some(expression) => {
+                let (clauses, parameters) = index_filters(owner_id, request, expression);
+                let sql = format!("SELECT COUNT(*) FROM invoice_fts WHERE invoice_fts MATCH ?1{clauses}");
+                conn.query_row(&sql, rusqlite::params_from_iter(parameters), |row| row.get(0))?
+            }
+            None => {
+                let (clauses, parameters) = browse_filters(owner_id, request);
+                let sql = format!("SELECT COUNT(*) FROM document d WHERE d.owner_id = ?1{clauses}");
+                conn.query_row(&sql, rusqlite::params_from_iter(parameters), |row| row.get(0))?
+            }
+        };
         matched += u64::try_from(documents).unwrap_or(0);
     }
     Ok(SearchCounts { matched, total })
 }
 
-/// The clauses, parameters, and order a request adds to the document query.
+/// The clauses and parameters that narrow a browse read of `document`.
 ///
 /// Shared by the list and the count so the number in the footer cannot describe
 /// a different query than the rows above it.
-struct DocumentFilters {
-    /// Appended after `WHERE d.owner_id = ?1`, each starting with ` AND`.
-    clauses: String,
-    /// Bound in order; the first is the owner.
-    parameters: Vec<String>,
-    /// The `ORDER BY` body.
-    order: String,
-}
-
-fn document_filters(owner_id: SellerId, request: &SearchRequest<'_>) -> Result<DocumentFilters, StoreError> {
-    let expression = match request.query {
-        Some(query) => Some(match_expression(query)?),
-        None => None,
-    };
-
+fn browse_filters(owner_id: SellerId, request: &SearchRequest<'_>) -> (String, Vec<String>) {
     let mut clauses = String::new();
     let mut parameters = vec![owner_id.to_string()];
-    let mut order = "d.issue_date_local DESC, d.number DESC".to_owned();
 
-    if let Some(expression) = expression {
-        parameters.push(expression);
-        let index = parameters.len();
-        clauses.push_str(&format!(" AND invoice_fts MATCH ?{index}"));
-        order = format!("bm25(invoice_fts, 0.0, 5.0, 1.0, 1.0, 1.0), {order}");
-    }
     if let Some(direction) = request.direction {
         parameters.push(direction.code().to_owned());
-        let index = parameters.len();
-        clauses.push_str(&format!(" AND d.direction = ?{index}"));
+        clauses.push_str(&format!(" AND d.direction = ?{}", parameters.len()));
     }
     if let Some(from) = request.from {
         parameters.push(from.to_iso_string());
-        let index = parameters.len();
-        clauses.push_str(&format!(" AND d.issue_date_local >= ?{index}"));
+        clauses.push_str(&format!(" AND d.issue_date_local >= ?{}", parameters.len()));
     }
     if let Some(to) = request.to {
         parameters.push(to.to_iso_string());
-        let index = parameters.len();
-        clauses.push_str(&format!(" AND d.issue_date_local <= ?{index}"));
+        clauses.push_str(&format!(" AND d.issue_date_local <= ?{}", parameters.len()));
+    }
+    // Status is the latest event, or the state the document was recorded in.
+    if let Some(status) = request.status {
+        parameters.push(status.code().to_owned());
+        clauses.push_str(&format!(
+            " AND COALESCE({LATEST_STATUS}, d.state) = ?{}",
+            parameters.len()
+        ));
+    }
+
+    (clauses, parameters)
+}
+
+/// The clauses and parameters that narrow the find index.
+///
+/// The seller is part of the match expression rather than a column comparison:
+/// the index carries `owner_id`, and intersecting its doclist keeps the scan
+/// inside the index, while comparing the stored column after matching reads a
+/// row for every match — 16 ms of the 18 a 19 000-match search took.
+fn index_filters(owner_id: SellerId, request: &SearchRequest<'_>, words: String) -> (String, Vec<String>) {
+    let mut clauses = String::new();
+    // The identifier is stored without its hyphens, so it is one token and can
+    // be named by the query.
+    let scope = owner_id.to_string().replace('-', "");
+    let mut parameters = vec![format!("owner_id:{scope} AND ({words})")];
+
+    if let Some(direction) = request.direction {
+        parameters.push(direction.code().to_owned());
+        clauses.push_str(&format!(" AND direction = ?{}", parameters.len()));
+    }
+    if let Some(from) = request.from {
+        parameters.push(from.to_iso_string());
+        clauses.push_str(&format!(" AND issue_date_local >= ?{}", parameters.len()));
+    }
+    if let Some(to) = request.to {
+        parameters.push(to.to_iso_string());
+        clauses.push_str(&format!(" AND issue_date_local <= ?{}", parameters.len()));
     }
     if let Some(status) = request.status {
         parameters.push(status.code().to_owned());
-        let index = parameters.len();
-        clauses.push_str(&format!(" AND COALESCE({LATEST_STATUS}, d.state) = ?{index}"));
+        clauses.push_str(&format!(" AND status = ?{}", parameters.len()));
     }
 
-    Ok(DocumentFilters {
-        clauses,
-        parameters,
-        order,
-    })
+    (clauses, parameters)
 }
 
 /// Finds drafts whose customer, references, or note mention the typed words.

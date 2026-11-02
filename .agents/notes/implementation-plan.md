@@ -642,8 +642,8 @@ frame storage, so it survives a lock. A test walks the source and refuses an arm
 that names both languages and returns one sentence, or a call that ignores the
 language, which is what makes "translated" checkable rather than claimed.
 
-Remaining in M5: nothing in the interface. The search criterion is measured and
-missed — see below.
+M5 is complete: nothing is left in the interface, and the search criterion is met
+at 20 000 documents — the measurement and the four things it took are below.
 
 **The 20 000-document measurement finds M5's criterion unmet (2026-11-02).**
 `bonk bench-search` opens the archive once and times `store::search` over that many
@@ -672,6 +672,43 @@ plan's starting point: with no match expression the query still reads
 an index the join never walks. The fix is to read `document` directly when there
 is nothing to match — filters, order, and page all on the indexed table — and to
 leave `invoice_fts` to the queries that actually have words.
+
+**M5's search criterion is met (2026-11-03).** `bonk bench-search` times a
+50-row page over the 20 000-document demo archive: browse is **p95 1.50 ms**
+(median 1.34) and a word query is **p95 3.0–10.0 ms** depending on how much of the
+archive matches, against a criterion of 30 ms. Both shapes changed at once, and
+the four causes are worth keeping:
+
+*0004 created nothing.* `CREATE INDEX IF NOT EXISTS document_owner_date` matched
+the name 0002 had already given to `document (owner_id, issue_date_local)`, so
+the ordered index never existed. It is a distinct name now
+(`document_owner_order`, migration 0005) — and my own first attempt at 0004 was
+this same mistake, which is why the measurement did not move.
+
+*The browse read had no reason to walk it.* It still started at `invoice_fts`
+and joined `document` by primary key. With no words there is nothing to match,
+so it now reads `document` alone, and the order, the filters, and the page all
+come from the one index.
+
+*The word read paid for a document row per match.* The text match itself was
+0.2 ms; the join was 48 ms, because each match read a row of JSON the page never
+shows. `invoice_fts` now carries the owner, direction, date, and status, so the
+ranked page is answered inside the index and only its fifty documents are read.
+A stored column is not free either: comparing `owner_id` after matching
+materialised a row per match (16 ms of 18), so the seller is part of the match
+expression — stored hyphen-free, one token, intersected in the index.
+
+*Only relevance may be the sort key.* Any second `ORDER BY` term — even
+`document_id` — turns the query into a full scan of the index: 19.7 ms against
+0.8. The tie-break by date is gone; FTS5's rank order is deterministic for a
+given archive, which is what paging needs, and `a_page_continues_where_the_last_one_stopped`
+now walks a word query as well as a browse to prove it.
+
+`search_counts` uses the same index, so the footer no longer reads every match
+either. The party a row shows is derived from the party on file rather than read
+from the index, so a rename shows immediately; a trigger writes the same name
+back into the index, or the words that find the document would still be the old
+ones.
 
 ---
 

@@ -140,9 +140,14 @@ fn a_damaged_backup_is_detected() {
     let directory = dir.path().join("backups");
     let report = backup::backup(&database, &keystore, &directory, "2026-10-28T12:00:00Z", RETENTION).unwrap();
 
+    // Page one's b-tree header says how many cells the schema table holds.
+    // Damaging that is structural, so an unencrypted copy fails the integrity
+    // check as well as an encrypted one fails its authentication: a flipped byte
+    // in free space is invisible to SQLite, which does not checksum pages.
     let mut bytes = std::fs::read(&report.path).unwrap();
-    let middle = bytes.len() / 2;
-    bytes[middle] ^= 0xff;
+    let cells = 100 + 3;
+    bytes[cells] = 0x7f;
+    bytes[cells + 1] = 0x7f;
     std::fs::write(&report.path, &bytes).unwrap();
 
     assert!(

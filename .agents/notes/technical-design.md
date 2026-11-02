@@ -972,6 +972,10 @@ would be claiming evidence it no longer holds.
 ```sql
 CREATE VIRTUAL TABLE invoice_fts USING fts5(
     document_id UNINDEXED,
+    owner_id,                 -- the seller, hyphen-free so it is one token
+    direction UNINDEXED,
+    issue_date_local UNINDEXED,
+    status UNINDEXED,
     number,
     party_name,
     reference,
@@ -984,19 +988,32 @@ A standalone FTS5 table kept in sync by triggers (search must not depend on
 today's customer record, hence the `party_name` column copied at insert time).
 The party name prefers the party on file and falls back to the snapshot, so an
 unmatched inbound document is findable by the spelling its sender used; a
-supplier decision rewrites that one column. `remove_diacritics 2` lets `cafe`
-find `Café`.
+supplier decision rewrites that one column, and so does a rename of the party.
+`remove_diacritics 2` lets `cafe` find `Café`.
 
-Structured filters (date range, direction, state, currency, VAT category) are
-indexed columns with composite indexes over `document` and its events, not FTS
-columns. Status is the latest `document_event`, so a filter compares
-`COALESCE(latest event, 'received')`.
+Only the four text columns are indexed for matching. The rest are carried so a
+word search can be answered inside the index: with no words the list is an index
+walk over `document_owner_order`, and with words it is a ranked read of the FTS
+table followed by one fetch of the page. Joining `document` for every match read
+a kilobyte of JSON per row — 48 ms for a page of fifty. `owner_id` is indexed
+rather than merely stored because scoping is part of every query: intersecting
+the seller's doclist costs nothing measurable, while comparing a stored column
+after matching materialises a row per match.
+
+Structured filters (date range, direction, status, currency, VAT category) are
+rows in the index too, compared as stored values, and composites over `document`
+and its events serve the browse read. Status is the latest `document_event`, so
+the browse filter compares `COALESCE(latest event, state)` while the index takes
+the value the event triggers wrote.
 
 Query building is ours, not the user's: each typed word is quoted and
-prefix-matched and combined with AND, so a partly typed word finds its
-completions and an unbalanced quote finds nothing instead of raising an FTS5
-syntax error. Ranking is `bm25` with the number weighted highest, so typing an
-invoice number puts that invoice first.
+prefix-matched and combined with AND inside a parenthesised clause, prefixed with
+the seller, so a partly typed word finds its completions, an unbalanced quote
+finds nothing instead of raising an FTS5 syntax error, and one books never sees
+another's documents. Ranking is `bm25` with the number weighted highest, so
+typing an invoice number puts that invoice first, and it is the only sort key:
+a second `ORDER BY` term costs FTS5 its ordered read and turns the query into a
+scan of every document in the index.
 
 Expected performance: typed queries under 30 ms p95 on a 20 000-invoice database
 (the M5 exit criterion).

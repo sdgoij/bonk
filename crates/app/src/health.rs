@@ -138,7 +138,7 @@ mod tests {
         let (dir, session) = session();
         let health = Health::snapshot(session.database(), session.database_path()).unwrap();
 
-        assert_eq!(health.schema_version, 3);
+        assert_eq!(health.schema_version, 6);
         assert_eq!(health.encryption, store::encryption_label());
         assert!(health.database_bytes > 0);
         assert!(health.chain.is_none(), "nothing has happened yet");

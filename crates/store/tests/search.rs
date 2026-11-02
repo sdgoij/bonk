@@ -3,8 +3,8 @@
 //! facts it is derived from.
 
 use crux::{
-    Address, CountryCode, Currency, CustomerId, DraftLine, InvoiceDraft, LineId, LocalDate, Money, Party, Quantity,
-    SellerId, TaxTreatment, UnitCode, VatRate,
+    Address, CountryCode, Currency, CustomerId, DocumentId, DraftLine, InvoiceDraft, LineId, LocalDate, Money, Party,
+    Quantity, SellerId, TaxTreatment, UnitCode, VatRate,
 };
 use store::{
     CustomerRecord, Database, Direction, IssueRequest, KdfParams, KeyStore, SearchRequest, SellerRecord,
@@ -466,6 +466,10 @@ fn a_quote_is_not_a_query_operator() {
 /// The window draws a screenful at a time, so a page has to continue where the
 /// last one stopped: no row twice, no row skipped, and a `more` flag that is a
 /// fact rather than a guess.
+///
+/// Both shapes are walked: the browse read walks an index, and a word read is
+/// ordered by relevance, where every document here scores the same. A tie must
+/// still break the same way on both calls, or a page would repeat a row.
 #[test]
 fn a_page_continues_where_the_last_one_stopped() {
     let (_dir, mut database, seller, customer, _cafe) = fixture();
@@ -473,23 +477,174 @@ fn a_page_continues_where_the_last_one_stopped() {
         issue(&mut database, seller, customer, "PO", "page", day);
     }
 
-    let request = SearchRequest::default();
-    let mut seen = Vec::new();
-    let mut offset = 0;
-    loop {
-        let page = store::search_page(database.connection(), seller, &request, offset, 2).unwrap();
-        assert!(page.hits.len() <= 2, "a page is never larger than its limit");
-        offset += page.hits.len();
-        seen.extend(page.hits.iter().map(|hit| hit.id.to_string()));
-        if !page.more {
-            break;
+    for request in [
+        SearchRequest::default(),
+        SearchRequest {
+            query: Some("page"),
+            ..SearchRequest::default()
+        },
+    ] {
+        let mut seen = Vec::new();
+        let mut offset = 0;
+        loop {
+            let page = store::search_page(database.connection(), seller, &request, offset, 2).unwrap();
+            assert!(page.hits.len() <= 2, "a page is never larger than its limit");
+            offset += page.hits.len();
+            seen.extend(page.hits.iter().map(|hit| hit.id.to_string()));
+            if !page.more {
+                break;
+            }
+            assert!(offset < 50, "walking the pages must terminate");
         }
-        assert!(offset < 50, "walking the pages must terminate");
-    }
 
-    assert_eq!(seen.len(), 5, "every document appears once");
-    let mut unique = seen.clone();
-    unique.sort();
-    unique.dedup();
-    assert_eq!(unique.len(), 5, "and no document appears twice");
+        assert_eq!(seen.len(), 5, "every document appears once: {request:?}");
+        let mut unique = seen.clone();
+        unique.sort();
+        unique.dedup();
+        assert_eq!(unique.len(), 5, "and no document appears twice: {request:?}");
+    }
+}
+
+/// The list shows the party on file, and the words follow it. A rename therefore
+/// has to reach the index, or the list names a company the search cannot find.
+#[test]
+fn a_renamed_party_is_listed_and_found_under_its_new_name() {
+    let (_dir, mut database, seller, customer, _cafe) = fixture();
+    let id = issue(
+        &mut database,
+        seller,
+        customer,
+        "PO-1",
+        "Quarterly advice",
+        "2026-10-27",
+    );
+
+    let renamed = Party::new("Nieuwe Naam BV", Address::new("Amsterdam", CountryCode::NL));
+    store::update_customer(
+        database.connection(),
+        &CustomerRecord {
+            id: customer,
+            party: renamed,
+        },
+        NOW,
+    )
+    .unwrap();
+
+    let all = find(&database, seller, SearchRequest::default());
+    assert_eq!(all[0].party, "Nieuwe Naam BV", "the list reads the party on file");
+
+    let hits = find(
+        &database,
+        seller,
+        SearchRequest {
+            query: Some("nieuwe"),
+            ..SearchRequest::default()
+        },
+    );
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].id, id, "the words follow the rename");
+
+    let old = find(
+        &database,
+        seller,
+        SearchRequest {
+            query: Some("customer"),
+            ..SearchRequest::default()
+        },
+    );
+    assert!(old.is_empty(), "the old name no longer matches");
+}
+
+/// One index serves every books an archive holds, so a search has to stay inside
+/// the seller that asked — scoping by a stored column would read every match.
+#[test]
+fn words_never_cross_into_another_books() {
+    let (_dir, mut database, seller, customer, _cafe) = fixture();
+    let ours = issue(
+        &mut database,
+        seller,
+        customer,
+        "PO-1",
+        "Quarterly advice",
+        "2026-10-27",
+    );
+
+    let other = SellerId::new();
+    insert_seller(
+        database.connection(),
+        &SellerRecord {
+            id: other,
+            party: party("Other BV"),
+            default_currency: Currency::EUR,
+            default_locale: "en-GB".to_owned(),
+        },
+        NOW,
+    )
+    .unwrap();
+    let theirs = issue(&mut database, other, customer, "PO-2", "Quarterly advice", "2026-10-28");
+
+    let request = SearchRequest {
+        query: Some("quarterly"),
+        ..SearchRequest::default()
+    };
+    let mine = find(&database, seller, request.clone());
+    assert_eq!(mine.len(), 1);
+    assert_eq!(mine[0].id, ours);
+
+    let yours = find(&database, other, request);
+    assert_eq!(yours.len(), 1);
+    assert_eq!(yours[0].id, theirs);
+    assert_eq!(
+        store::search_counts(database.connection(), seller, &SearchRequest::default())
+            .unwrap()
+            .total,
+        1,
+        "the footer counts one books"
+    );
+}
+
+#[test]
+fn a_status_change_is_visible_through_words_too() {
+    let (_dir, mut database, seller, customer, _cafe) = fixture();
+    let id = issue(
+        &mut database,
+        seller,
+        customer,
+        "PO-1",
+        "Quarterly advice",
+        "2026-10-27",
+    );
+
+    database
+        .connection()
+        .execute(
+            "INSERT INTO document_event (id, document_id, kind, at, actor, detail)
+             VALUES (?1, ?2, 'paid', ?3, 'test', NULL)",
+            rusqlite::params![DocumentId::new().to_string(), id.to_string(), NOW],
+        )
+        .unwrap();
+
+    let request = SearchRequest {
+        query: Some("quarterly"),
+        status: Some(store::DocumentStatus::Paid),
+        ..SearchRequest::default()
+    };
+    let hits = find(&database, seller, request.clone());
+    assert_eq!(hits.len(), 1, "the index knows the document is paid");
+    assert_eq!(hits[0].id, id);
+    assert_eq!(hits[0].status, store::DocumentStatus::Paid);
+
+    let counts = store::search_counts(database.connection(), seller, &request).unwrap();
+    assert_eq!(counts.matched, 1, "the footer counts the same rows");
+
+    let issued = find(
+        &database,
+        seller,
+        SearchRequest {
+            query: Some("quarterly"),
+            status: Some(store::DocumentStatus::Issued),
+            ..SearchRequest::default()
+        },
+    );
+    assert!(issued.is_empty(), "and no longer calls it issued");
 }

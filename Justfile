@@ -13,6 +13,11 @@ set windows-shell := ["sh", "-cu"]
 
 cargo := if os_family() == "windows" { "sh tools/cargo-strawberry.sh" } else { "cargo" }
 
+# The benchmark archive, kept out of the platform data directory so measuring
+# never touches the archive the window opens.
+bench-db := "target/bench/bonk.db"
+bench-passphrase := "bonk-demo"
+
 # List the recipes.
 default:
     @just --list
@@ -35,11 +40,13 @@ demo:
 
 # A 20 000-document archive, for the M5 search criterion.
 demo-20k:
-    {{cargo}} run -p cli -- demo-seed --force --invoices 20000
+    {{cargo}} run -p cli -- --db {{bench-db}} demo-seed --force --invoices 20000
 
 # M5 exit criterion: typed queries under 30 ms p95 at 20 000 documents.
+#
+# The passphrase is the demo seed's, so the timer starts after the unlock.
 bench-search:
-    {{cargo}} run -p cli --release -- bench-search --repeat 50
+    BONK_PASSPHRASE={{bench-passphrase}} {{cargo}} run -p cli --release -- --db {{bench-db}} bench-search --repeat 50
 
 # Check formatting and whitespace. This is the whole gate for docs-only changes.
 fmt:
