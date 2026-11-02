@@ -46,6 +46,12 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("../migrations/0003_suppression.sql"),
         down: Some(include_str!("../migrations/0003_suppression_down.sql")),
     },
+    Migration {
+        version: 4,
+        name: "0004_search_order",
+        sql: include_str!("../migrations/0004_search_order.sql"),
+        down: Some(include_str!("../migrations/0004_search_order_down.sql")),
+    },
 ];
 
 /// SHA-256 of the migration source, hex encoded.
@@ -185,12 +191,16 @@ mod tests {
     fn rollback_is_preflighted_and_refuses_irreversible_migrations() {
         let mut conn = Connection::open_in_memory().unwrap();
         apply(&mut conn).unwrap();
-        assert_eq!(current_version(&conn), 3);
+        assert_eq!(current_version(&conn), 4);
 
         assert!(rollback_to(&mut conn, 1).is_err());
-        assert_eq!(current_version(&conn), 3, "a refused rollback must not partially apply");
+        assert_eq!(current_version(&conn), 4, "a refused rollback must not partially apply");
 
-        assert_eq!(rollback_to(&mut conn, 2).unwrap(), 1);
+        assert_eq!(
+            rollback_to(&mut conn, 2).unwrap(),
+            2,
+            "0004 and 0003 both declare a down"
+        );
         assert_eq!(current_version(&conn), 2);
     }
 

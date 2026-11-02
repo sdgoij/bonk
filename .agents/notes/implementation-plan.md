@@ -664,6 +664,15 @@ assembly; it is the query plan — the ordered read over `invoice_fts` joined to
 back the first fifty. The next step is `EXPLAIN QUERY PLAN` on both shapes and a
 composite index on the columns the order uses, not more paging.
 
+**The index alone did not move it either (2026-11-02).** Migration 0004 adds
+`document(owner_id, issue_date_local DESC, number DESC)` with a down migration;
+the browse page is still 770 ms and the word query still 60 ms. The reason is the
+plan's starting point: with no match expression the query still reads
+`invoice_fts` and joins `document` by primary key, so the order cannot come from
+an index the join never walks. The fix is to read `document` directly when there
+is nothing to match — filters, order, and page all on the indexed table — and to
+leave `invoice_fts` to the queries that actually have words.
+
 ---
 
 ### M6 — Security, keys, audit, backup (3 weeks, part of v1.0)
