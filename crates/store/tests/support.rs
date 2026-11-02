@@ -186,7 +186,7 @@ fn a_bundle_has_counts_and_no_business_facts() {
     assert!(text.contains("issued 1"), "{text}");
     assert!(text.contains("imported 1"), "{text}");
     assert!(text.contains("encryption:"), "{text}");
-    assert!(json.contains("\"schema_version\": 6"), "{json}");
+    assert!(json.contains("\"schema_version\": 7"), "{json}");
     assert!(json.contains("\"format\": \"bonk-support\""), "{json}");
 }
 

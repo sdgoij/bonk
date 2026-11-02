@@ -401,7 +401,7 @@ fn a_support_bundle_can_be_written_and_previewed() {
         said.contains(&format!("version:    {}", env!("CARGO_PKG_VERSION"))),
         "the bundle must name the version it came from: {said}"
     );
-    assert!(said.contains("schema:     6"), "{said}");
+    assert!(said.contains("schema:     7"), "{said}");
     assert!(said.contains("No names, amounts"), "{said}");
     assert!(bundle.join("summary.txt").exists());
     assert!(bundle.join("summary.json").exists());
@@ -432,7 +432,7 @@ fn init_then_verify() {
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("integrity check passed"), "stdout: {stdout}");
-    assert!(stdout.contains("schema:   6"), "stdout: {stdout}");
+    assert!(stdout.contains("schema:   7"), "stdout: {stdout}");
     if cfg!(feature = "cipher") {
         assert!(stdout.contains("encryption: sqlcipher"), "stdout: {stdout}");
     } else {
@@ -462,7 +462,7 @@ fn migrate_down_is_guarded_and_respects_irreversible_migrations() {
     let mut args = vec!["migrate-down", "--to", "2", "--yes"];
     args.extend(common);
     let output = bonk_ok(&args);
-    assert!(output.contains("rolled back: 4 migration(s)"), "{output}");
+    assert!(output.contains("rolled back: 5 migration(s)"), "{output}");
     assert!(output.contains("schema:   2"), "{output}");
 
     // 0002 creates the document tables; it has no safe inverse.
@@ -474,7 +474,7 @@ fn migrate_down_is_guarded_and_respects_irreversible_migrations() {
 
     let mut args = vec!["verify"];
     args.extend(common);
-    assert!(bonk_ok(&args).contains("schema:   6"), "opening migrates forward again");
+    assert!(bonk_ok(&args).contains("schema:   7"), "opening migrates forward again");
 }
 
 #[test]
@@ -593,6 +593,15 @@ fn full_slice_through_the_cli() {
     let draft = field(&draft_output, "draft:");
     assert!(draft_output.contains("gross: 121.00"), "{draft_output}");
 
+    // A template beside the archive is the layout the filed PDF is drawn with,
+    // and its digest is what the artefact records.
+    std::fs::create_dir_all(dir.path().join("templates")).expect("templates dir");
+    std::fs::write(
+        dir.path().join("templates").join("default.json"),
+        r#"{"name": "Eigen"}"#,
+    )
+    .expect("template");
+
     let mut args = vec!["issue", &draft, "--out", out];
     args.extend(common);
     let issued_output = bonk_ok(&args);
@@ -610,6 +619,10 @@ fn full_slice_through_the_cli() {
     let pdf = std::fs::read(&pdf_path).expect("pdf file");
     assert!(pdf.starts_with(b"%PDF-"), "not a PDF");
     assert!(issued_output.contains("pdf:"), "{issued_output}");
+    assert!(
+        issued_output.contains("layout: Eigen ("),
+        "the issue says which layout drew the PDF: {issued_output}"
+    );
 
     // Evidence for the invoice we just issued, taken while the number still
     // points at one document; the check needs no keystore at all.
@@ -624,6 +637,20 @@ fn full_slice_through_the_cli() {
     let said = bonk_ok(&args);
     assert!(said.contains("bundle verified"), "{said}");
     assert!(said.contains("files:"), "{said}");
+
+    // The bundle names the layout that drew the PDF, so the evidence for a filed
+    // document does not depend on the template file still being on disk.
+    let manifest = std::fs::read_to_string(evidence_dir.join("manifest.json")).expect("manifest");
+    let pdf_entry = manifest
+        .split("\"kind\": \"pdf\"")
+        .nth(1)
+        .expect("the pdf is in the manifest");
+    let digest = pdf_entry
+        .split("\"template_digest\": \"")
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .expect("the pdf names its template");
+    assert_eq!(digest.len(), 64, "a full SHA-256 in hex: {digest}");
 
     let mut args = vec!["credit-note", "2026-0001", "--date", "2026-12-15"];
     args.extend(common);

@@ -2929,6 +2929,9 @@ impl Workspace {
             Ok(issued) => {
                 let mut attach_error = None;
                 let template = self.template.as_ref().map(|template| &template.template);
+                // The digest is recorded on the artefact; the template file is not
+                // part of the archive and may be edited before anyone looks again.
+                let template_digest = self.template.as_ref().map(|template| template.sha256.clone());
                 match crate::invoice_pdf(
                     &issued.number,
                     &draft,
@@ -2945,6 +2948,7 @@ impl Workspace {
                             "pdf",
                             &bytes,
                             render::RENDERER_VERSION,
+                            template_digest.as_deref(),
                             &now,
                         ) {
                             Ok(hash) => hash,
@@ -3797,9 +3801,21 @@ fn document_panel(
         ui.add_space(6.0);
         ui.strong(text::find::artefacts_label(language));
         for artefact in &view.artefacts {
+            // Enough of the digest to tell two layouts apart; the record keeps the
+            // whole one, and the evidence bundle carries it.
+            let template = artefact
+                .template_digest
+                .as_deref()
+                .map(|digest| digest.get(..12).unwrap_or(digest));
             theme::value(
                 ui,
-                text::find::artefact_line(language, &artefact.kind, artefact.size_bytes, &artefact.bytes_hash),
+                text::find::artefact_line(
+                    language,
+                    &artefact.kind,
+                    artefact.size_bytes,
+                    &artefact.bytes_hash,
+                    template,
+                ),
             );
         }
 

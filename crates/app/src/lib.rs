@@ -1171,7 +1171,7 @@ mod tests {
         {
             let session = Session::create(&database, &keystore, "passphrase").unwrap();
             assert_eq!(session.summary().unwrap().sellers, 0);
-            assert_eq!(session.summary().unwrap().schema_version, 6);
+            assert_eq!(session.summary().unwrap().schema_version, 7);
             assert!(session.database_path().exists());
         }
 
@@ -1558,7 +1558,7 @@ mod tests {
 
         // The keystore is not consulted: the device store is enough.
         let reopened = Session::unlock_with_device(&database, &keystore, &store).unwrap();
-        assert_eq!(reopened.summary().unwrap().schema_version, 6);
+        assert_eq!(reopened.summary().unwrap().schema_version, 7);
 
         let trusted: i64 = reopened
             .database()
@@ -1622,11 +1622,16 @@ mod tests {
 
         let templates = dir.path().join("templates");
         std::fs::create_dir_all(&templates).unwrap();
-        std::fs::write(templates.join("default.json"), r#"{"name": "Eigen"}"#).unwrap();
+        let bytes = r#"{"name": "Eigen"}"#;
+        std::fs::write(templates.join("default.json"), bytes).unwrap();
 
         let loaded = crate::load_template(&database).unwrap().expect("a template was read");
         assert_eq!(loaded.template.name, "Eigen");
-        assert_eq!(loaded.sha256.len(), 64, "a full SHA-256 in hex");
+        assert_eq!(
+            loaded.sha256,
+            crate::sha256_hex(bytes.as_bytes()),
+            "the digest is of the bytes on disk, so editing the file changes it"
+        );
         assert_eq!(loaded.short_sha256().len(), 12);
     }
 

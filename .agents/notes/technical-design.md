@@ -855,8 +855,15 @@ CREATE TABLE artefact (
     size_bytes         INTEGER NOT NULL,
     blob_id            TEXT NOT NULL REFERENCES blob(id),
     rendered_at        TEXT NOT NULL,
-    renderer_version   TEXT NOT NULL
+    renderer_version   TEXT NOT NULL,
+    template_digest    TEXT                -- SHA-256 of the template file, when one laid it out
 );
+
+-- `renderer_version` names the engine (`bonk-layout-1`); `template_digest` names
+-- the layout it applied. A filed PDF is a copy of what was issued, so its layout
+-- cannot be re-derived later: the template file lives beside the archive, not in
+-- it, and may be edited or deleted. Null where no template was involved — a
+-- serialised UBL, or the built-in layout the renderer identifies itself.
 
 -- Incoming documents need no second model: an imported invoice is a `document`
 -- row with `direction = 'inbound'`. Duplicate detection is the partial unique

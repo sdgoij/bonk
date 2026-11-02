@@ -2160,6 +2160,11 @@ where
 ///
 /// Artefacts are additive and immutable; attaching one never changes the
 /// document itself. Returns the SHA-256 of the bytes.
+///
+/// `template_digest` is the SHA-256 of the template file the artefact was drawn
+/// with, when one was: it is what lets a reader tell which layout produced these
+/// bytes after the template has been edited or removed. `None` means nothing was
+/// laid out by a template — a serialised UBL, or the built-in layout.
 #[allow(clippy::too_many_arguments)]
 pub fn attach_artefact(
     conn: &Connection,
@@ -2167,6 +2172,7 @@ pub fn attach_artefact(
     kind: &str,
     bytes: &[u8],
     renderer_version: &str,
+    template_digest: Option<&str>,
     now: &str,
 ) -> Result<String, StoreError> {
     let hash = audit::sha256_hex(bytes);
@@ -2180,8 +2186,8 @@ pub fn attach_artefact(
     transaction.execute(
         "INSERT INTO artefact
              (id, document_id, kind, syntax_profile, bytes_hash,
-              size_bytes, blob_id, rendered_at, renderer_version)
-         VALUES (?1, ?2, ?3, NULL, ?4, ?5, ?6, ?7, ?8)",
+              size_bytes, blob_id, rendered_at, renderer_version, template_digest)
+         VALUES (?1, ?2, ?3, NULL, ?4, ?5, ?6, ?7, ?8, ?9)",
         params![
             DocumentId::new().to_string(),
             document_id.to_string(),
@@ -2191,6 +2197,7 @@ pub fn attach_artefact(
             blob_id,
             now,
             renderer_version,
+            template_digest,
         ],
     )?;
     transaction.commit()?;

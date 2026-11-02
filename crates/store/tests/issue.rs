@@ -6,7 +6,7 @@ use crux::{
     Party, PrecedingInvoice, Quantity, SellerId, TaxTreatment, UnitCode, VatRate,
 };
 use store::{
-    CustomerRecord, Database, IssueRequest, KdfParams, KeyStore, SellerRecord, Suppression, attach_artefact,
+    CustomerRecord, Database, IssueRequest, KdfParams, KeyStore, SellerRecord, Suppression, archive, attach_artefact,
     credit_note_for, find_issued_reference, insert_customer, insert_draft, insert_seller, issue_draft,
     list_suppressions, load_customer, load_draft, load_seller, save_suppression, verify_artefacts,
 };
@@ -212,18 +212,75 @@ fn attached_artefacts_are_hashed_and_verified() {
     )
     .unwrap();
 
+    // The digest of the template file, not of the template object: it is what a
+    // reader can compare against the file on disk.
+    let template = "3f".repeat(32);
     let hash = attach_artefact(
         database.connection(),
         issued.id,
         "pdf",
         b"%PDF-1.7\n%test",
         "test-renderer-1",
+        Some(&template),
         NOW,
     )
     .unwrap();
 
     assert_eq!(hash.len(), 64);
     assert_eq!(verify_artefacts(database.connection()).unwrap(), 2);
+}
+
+/// A filed artefact says which layout drew it, or says nothing when no template
+/// was involved. The template file itself is not evidence the archive holds, so
+/// the digest is the only thing that outlives an edit to it.
+#[test]
+fn a_filed_artefact_remembers_its_template() {
+    let (_dir, mut database, seller_id, customer_id) = seeded();
+    let draft = draft_for(seller_id, customer_id);
+    insert_draft(database.connection(), &draft, NOW).unwrap();
+
+    let issued = issue_draft(
+        database.connection_mut(),
+        IssueRequest {
+            draft_id: draft.id,
+            actor: "test",
+            device: "device-1",
+            renderer_version: "test-renderer-1",
+            now: NOW,
+        },
+        |_| Ok(b"<Invoice/>".to_vec()),
+    )
+    .unwrap();
+
+    let template = "3f".repeat(32);
+    attach_artefact(
+        database.connection(),
+        issued.id,
+        "pdf",
+        b"%PDF-1.7\n%test",
+        "test-renderer-1",
+        Some(&template),
+        NOW,
+    )
+    .unwrap();
+
+    let view = archive::load(database.connection(), issued.id).unwrap().unwrap();
+    let pdf = view
+        .artefacts
+        .iter()
+        .find(|artefact| artefact.kind == "pdf")
+        .expect("the pdf was attached");
+    assert_eq!(pdf.template_digest.as_deref(), Some(template.as_str()));
+
+    let ubl = view
+        .artefacts
+        .iter()
+        .find(|artefact| artefact.kind == "ubl")
+        .expect("issuing files the UBL");
+    assert_eq!(
+        ubl.template_digest, None,
+        "a serialised UBL was not drawn by a template"
+    );
 }
 
 #[test]

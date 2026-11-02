@@ -98,7 +98,16 @@ fn insert_blob(database: &Database, sha256: &str, payload: &[u8]) -> String {
 #[test]
 fn a_clean_archive_verifies() {
     let (_dir, database, document_id) = seeded();
-    attach_artefact(database.connection(), document_id, "ubl", b"<Invoice/>", "test", NOW).unwrap();
+    attach_artefact(
+        database.connection(),
+        document_id,
+        "ubl",
+        b"<Invoice/>",
+        "test",
+        None,
+        NOW,
+    )
+    .unwrap();
 
     let report = audit(database.connection()).unwrap();
     assert_eq!(

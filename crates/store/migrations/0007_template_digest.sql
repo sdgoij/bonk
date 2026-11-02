@@ -1,0 +1,13 @@
+-- Which layout drew a filed PDF.
+--
+-- `renderer_version` says which engine wrote the bytes; it does not say which
+-- template the engine applied. A PDF in the archive is a copy of what was filed,
+-- so nothing can re-derive its layout afterwards — the template file may have
+-- been edited or removed since. Recording the digest of the template makes the
+-- artefact self-describing: two PDFs can be compared without opening them, and a
+-- PDF can be matched to the template file it names while that file still exists.
+--
+-- Null where no template was involved: UBL is serialised rather than laid out,
+-- and a PDF rendered before an archive had a template used the built-in layout,
+-- which `renderer_version` already identifies.
+ALTER TABLE artefact ADD COLUMN template_digest TEXT;

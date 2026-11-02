@@ -119,6 +119,11 @@ pub struct ArtefactInfo {
     pub rendered_at: String,
     /// What rendered it.
     pub renderer_version: String,
+    /// SHA-256 of the template file that laid it out, when one did.
+    ///
+    /// `None` for an artefact no template produced: a serialised UBL, or a PDF
+    /// drawn by the built-in layout, which `renderer_version` identifies.
+    pub template_digest: Option<String>,
 }
 
 /// Loads a stored document for display.
@@ -332,7 +337,8 @@ pub fn artefact_kinds(conn: &Connection, id: DocumentId) -> Result<Vec<String>, 
 
 fn artefacts(conn: &Connection, id: DocumentId) -> Result<Vec<ArtefactInfo>, StoreError> {
     let mut statement = conn.prepare(
-        "SELECT kind, syntax_profile, bytes_hash, size_bytes, rendered_at, renderer_version
+        "SELECT kind, syntax_profile, bytes_hash, size_bytes, rendered_at, renderer_version,
+                template_digest
          FROM artefact
          WHERE document_id = ?1
          ORDER BY rendered_at, kind",
@@ -345,6 +351,7 @@ fn artefacts(conn: &Connection, id: DocumentId) -> Result<Vec<ArtefactInfo>, Sto
             size_bytes: row.get(3)?,
             rendered_at: row.get(4)?,
             renderer_version: row.get(5)?,
+            template_digest: row.get(6)?,
         })
     })?;
     let mut artefacts = Vec::new();

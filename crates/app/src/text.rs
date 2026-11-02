@@ -542,13 +542,23 @@ pub mod find {
         sentence!(language, "Artefacts", "Bestanden")
     }
 
-    /// One artefact: kind, size, hash.
-    pub fn artefact_line(language: Language, kind: &str, size: i64, hash: &str) -> String {
-        sentence!(
-            language,
-            format!("{kind} · {size} bytes · {hash}"),
-            format!("{kind} · {size} bytes · {hash}")
-        )
+    /// One artefact: kind, size, hash, and the layout that drew it when one did.
+    ///
+    /// The digest is passed already shortened: the window shows enough of it to
+    /// tell two layouts apart, and the full one lives in the record.
+    pub fn artefact_line(language: Language, kind: &str, size: i64, hash: &str, template: Option<&str>) -> String {
+        match template {
+            Some(template) => sentence!(
+                language,
+                format!("{kind} · {size} bytes · {hash} · template {template}"),
+                format!("{kind} · {size} bytes · {hash} · sjabloon {template}")
+            ),
+            None => sentence!(
+                language,
+                format!("{kind} · {size} bytes · {hash}"),
+                format!("{kind} · {size} bytes · {hash}")
+            ),
+        }
     }
 
     /// Writes the filed PDF, after the platform's save panel asks where.

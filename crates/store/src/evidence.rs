@@ -123,7 +123,7 @@ pub fn export(
     // Every artefact, and the received bytes for an inbound document.
     let mut artefacts = Vec::new();
     let mut statement = conn.prepare(
-        "SELECT a.kind, a.bytes_hash, b.payload
+        "SELECT a.kind, a.bytes_hash, a.template_digest, b.payload
          FROM artefact a JOIN blob b ON b.id = a.blob_id
          WHERE a.document_id = ?1
          ORDER BY a.kind",
@@ -132,7 +132,8 @@ pub fn export(
     while let Some(row) = rows.next()? {
         let kind: String = row.get(0)?;
         let bytes_hash: String = row.get(1)?;
-        let payload: Vec<u8> = row.get(2)?;
+        let template_digest: Option<String> = row.get(2)?;
+        let payload: Vec<u8> = row.get(3)?;
         let path = format!(
             "artefacts/{}-{}.{}",
             safe_name(&number),
@@ -145,6 +146,7 @@ pub fn export(
             file: file.path.clone(),
             sha256: bytes_hash,
             size: file.size,
+            template_digest,
         });
         files.push(file);
     }
@@ -430,6 +432,12 @@ struct ManifestArtefact {
     file: String,
     sha256: String,
     size: u64,
+    /// SHA-256 of the template that laid the artefact out, when one did. Written
+    /// only when it is known, so a bundle made before this was recorded still
+    /// reads, and one made by the built-in layout says nothing rather than
+    /// claiming a template it never used.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    template_digest: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]

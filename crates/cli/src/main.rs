@@ -1267,9 +1267,15 @@ fn run(cli: Cli) -> Result<(), CliError> {
                         "pdf",
                         &pdf,
                         render::RENDERER_VERSION,
+                        template.as_ref().map(|template| template.sha256.as_str()),
                         &now,
                     ) {
-                        Ok(hash) => println!("pdf:    {} ({hash})", pdf_path.display()),
+                        Ok(hash) => {
+                            println!("pdf:    {} ({hash})", pdf_path.display());
+                            if let Some(template) = &template {
+                                println!("layout: {} ({})", template.template.name, template.sha256);
+                            }
+                        }
                         Err(error) => eprintln!(
                             "warning: PDF written to {} but not attached: {error}",
                             pdf_path.display()
