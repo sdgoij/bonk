@@ -66,6 +66,25 @@ impl Default for Template {
 }
 
 impl Template {
+    /// Reads a template from a JSON file.
+    ///
+    /// A file on disk is untrusted in a way the built-in one is not, so an
+    /// unreadable file and a file that does not parse are both errors: a typo in a
+    /// hand-written template must never be drawn silently as the standard one.
+    pub fn load(path: &std::path::Path) -> Result<Self, RenderError> {
+        let json = std::fs::read_to_string(path).map_err(|error| RenderError::TemplateFile {
+            path: path.display().to_string(),
+            message: error.to_string(),
+        })?;
+        Self::parse(&json).map_err(|error| match error {
+            RenderError::Template { field, message } => RenderError::TemplateFile {
+                path: path.display().to_string(),
+                message: format!("{field}: {message}"),
+            },
+            other => other,
+        })
+    }
+
     /// Parses a template, mapping syntax errors to a source location.
     pub fn parse(json: &str) -> Result<Self, RenderError> {
         let template: Self = serde_json::from_str(json).map_err(|error| RenderError::Template {

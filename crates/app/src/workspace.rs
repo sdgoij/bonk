@@ -88,6 +88,10 @@ pub struct Workspace {
     match_target: Option<CustomerId>,
     /// The preview of the composer's invoice, once one has been asked for.
     preview: Option<Preview>,
+    /// The layout from `<archive>/templates/default.json`, when the user supplied
+    /// one. Everything that lays a document out goes through this, so the preview
+    /// and the filed PDF cannot be drawn by different templates.
+    template: Option<crate::ArchiveTemplate>,
     /// Whether this device keeps the archive key, as read when the workspace
     /// opened and kept in step with the credentials panel. Asking the operating
     /// system every frame would be a syscall per repaint.
@@ -717,6 +721,12 @@ impl Workspace {
     /// Loads the seller and customer list for a freshly unlocked session.
     pub fn new(session: &Session) -> Result<Self, StoreError> {
         let connection = session.database().connection();
+        // A template that will not parse is reported, not swallowed: the built-in
+        // one is drawn instead, and the message says why the file was ignored.
+        let (template, template_error) = match crate::load_template(session.database_path()) {
+            Ok(template) => (template, None),
+            Err(error) => (None, Some(error)),
+        };
         let mut workspace = Self {
             seller: first_seller(connection)?,
             customers: list_customers(connection)?,
@@ -737,6 +747,7 @@ impl Workspace {
             pdf: None,
             match_target: None,
             preview: None,
+            template,
             device_remembered: Session::device_ready(session.keystore_path(), &store::device::Keychain),
             conformance_findings: Vec::new(),
             suppressions: Vec::new(),
@@ -751,6 +762,9 @@ impl Workspace {
         };
         if let Some(seller) = workspace.seller.as_ref().map(|seller| seller.id) {
             workspace.search.reload_saved(session.database(), seller);
+        }
+        if let Some(error) = template_error {
+            workspace.message = Some(Message::error(error));
         }
         Ok(workspace)
     }
@@ -1534,6 +1548,18 @@ impl Workspace {
                     ui.weak(text::settings::encryption(language));
                     theme::value(ui, store::encryption_label());
                 });
+                ui.horizontal(|ui| {
+                    ui.weak(text::settings::layout(language));
+                    theme::value(
+                        ui,
+                        match &self.template {
+                            Some(template) => {
+                                format!("{} ({})", template.template.name, template.short_sha256())
+                            }
+                            None => text::settings::builtin_layout(language).to_owned(),
+                        },
+                    );
+                });
             });
             ui.add_space(8.0);
 
@@ -2160,7 +2186,7 @@ impl Workspace {
             &totals,
             editor.document_language,
         );
-        match render::renderer().layout(&data) {
+        match crate::renderer_for(self.template.as_ref().map(|template| &template.template)).layout(&data) {
             Ok(document) => self.preview = Some(Preview { document }),
             Err(error) => {
                 self.message = Some(Message::error(text::editor::preview_failed(
@@ -2851,7 +2877,16 @@ impl Workspace {
         match result {
             Ok(issued) => {
                 let mut attach_error = None;
-                match crate::invoice_pdf(&issued.number, &draft, &seller, &customer, &issued.totals, language) {
+                let template = self.template.as_ref().map(|template| &template.template);
+                match crate::invoice_pdf(
+                    &issued.number,
+                    &draft,
+                    &seller,
+                    &customer,
+                    &issued.totals,
+                    language,
+                    template,
+                ) {
                     Ok(bytes) => {
                         let hash = match attach_artefact(
                             session.database().connection(),

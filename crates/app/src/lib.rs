@@ -32,6 +32,57 @@ use zeroize::{Zeroize, Zeroizing};
 
 pub use workspace::{Workspace, WorkspaceAction};
 
+/// A layout read from the archive, with the digest that identifies it.
+#[derive(Clone, Debug)]
+pub struct ArchiveTemplate {
+    /// The layout it describes.
+    pub template: render::Template,
+    /// Hex SHA-256 of the file, so a document can say which layout drew it.
+    pub sha256: String,
+}
+
+impl ArchiveTemplate {
+    /// The digest shortened for a label; the full one belongs in a record.
+    pub fn short_sha256(&self) -> &str {
+        self.sha256.get(..12).unwrap_or(self.sha256.as_str())
+    }
+}
+
+/// Reads `<archive>/templates/default.json`, if the user put one there.
+///
+/// A malformed template is an error rather than a silent fallback: an invoice
+/// drawn with a layout nobody chose is worse than a message saying the file is
+/// broken. The digest is of the bytes on disk, so editing the file changes it.
+pub fn load_template(database_path: &Path) -> Result<Option<ArchiveTemplate>, String> {
+    let path = database_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join("templates")
+        .join("default.json");
+    if !path.exists() {
+        return Ok(None);
+    }
+
+    let template = render::Template::load(&path).map_err(|error| error.to_string())?;
+    let bytes = std::fs::read(&path).map_err(|error| format!("{}: {error}", path.display()))?;
+    Ok(Some(ArchiveTemplate {
+        template,
+        sha256: sha256_hex(&bytes),
+    }))
+}
+
+/// The renderer a template calls for: the archive's layout, or the built-in one.
+pub fn renderer_for(template: Option<&render::Template>) -> render::Renderer {
+    template.map_or_else(render::Renderer::new, |template| {
+        render::Renderer::with_template(template.clone())
+    })
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(bytes).iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
 /// The language the printed document speaks.
 ///
 /// Re-exported so a front end that renders through `invoice_pdf` does not need a
@@ -387,10 +438,11 @@ pub fn invoice_pdf(
     customer: &CustomerRecord,
     totals: &InvoiceTotals,
     language: render::Language,
+    template: Option<&render::Template>,
 ) -> Result<Vec<u8>, StoreError> {
     let data = pdf_data(number, draft, seller, customer, totals, language);
 
-    render::renderer()
+    renderer_for(template)
         .render(&data)
         .map_err(|error| StoreError::Render(error.to_string()))
 }
@@ -1556,5 +1608,38 @@ mod tests {
         assert_eq!(database.parent(), keystore.parent());
         assert_eq!(database.file_name().unwrap(), "bonk.db");
         assert_eq!(keystore.file_name().unwrap(), "keystore.bin");
+    }
+
+    /// A template beside the archive is the one a document is drawn with.
+    #[test]
+    fn an_archive_template_is_loaded_and_digested() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let database = dir.path().join("bonk.db");
+        assert!(
+            crate::load_template(&database).unwrap().is_none(),
+            "no templates directory means the built-in layout"
+        );
+
+        let templates = dir.path().join("templates");
+        std::fs::create_dir_all(&templates).unwrap();
+        std::fs::write(templates.join("default.json"), r#"{"name": "Eigen"}"#).unwrap();
+
+        let loaded = crate::load_template(&database).unwrap().expect("a template was read");
+        assert_eq!(loaded.template.name, "Eigen");
+        assert_eq!(loaded.sha256.len(), 64, "a full SHA-256 in hex");
+        assert_eq!(loaded.short_sha256().len(), 12);
+    }
+
+    /// A broken template is an error, not a silent fall back to the built-in one.
+    #[test]
+    fn a_broken_template_says_so() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let database = dir.path().join("bonk.db");
+        let templates = dir.path().join("templates");
+        std::fs::create_dir_all(&templates).unwrap();
+        std::fs::write(templates.join("default.json"), "{ this is not json").unwrap();
+
+        let error = crate::load_template(&database).unwrap_err();
+        assert!(error.contains("default.json"), "{error}");
     }
 }

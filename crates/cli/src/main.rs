@@ -1175,7 +1175,25 @@ fn run(cli: Cli) -> Result<(), CliError> {
             println!("sha256: {}", issued.ubl_sha256);
             println!("audit:  {}", issued.audit_head);
 
-            match app::invoice_pdf(&issued.number, &loaded, &seller, &customer, &issued.totals, language) {
+            // The same layout the window would use: a template in the archive is
+            // part of the archive, not a property of the front end.
+            let template = match app::load_template(session.database_path()) {
+                Ok(template) => template,
+                Err(error) => {
+                    eprintln!("template ignored: {error}");
+                    None
+                }
+            };
+
+            match app::invoice_pdf(
+                &issued.number,
+                &loaded,
+                &seller,
+                &customer,
+                &issued.totals,
+                language,
+                template.as_ref().map(|template| &template.template),
+            ) {
                 Ok(pdf) => {
                     let pdf_path = out.join(format!("{}.pdf", issued.number));
                     std::fs::write(&pdf_path, &pdf)?;

@@ -180,6 +180,14 @@ pub enum RenderError {
         /// What is wrong.
         message: String,
     },
+    /// A template file could not be read or parsed.
+    #[error("template {path}: {message}")]
+    TemplateFile {
+        /// The file that was read.
+        path: String,
+        /// What went wrong.
+        message: String,
+    },
     /// The bundled font could not be read.
     #[error("the bundled font could not be read")]
     Font,

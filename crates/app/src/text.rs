@@ -886,6 +886,16 @@ pub mod settings {
     pub fn language(language: Language) -> &'static str {
         sentence!(language, "Language", "Taal")
     }
+
+    /// The layout used to draw documents.
+    pub fn layout(language: Language) -> &'static str {
+        sentence!(language, "Template", "Sjabloon")
+    }
+
+    /// No template in the archive, so the built-in one draws.
+    pub fn builtin_layout(language: Language) -> &'static str {
+        sentence!(language, "built in", "ingebouwd")
+    }
 }
 
 /// The seller and customer forms, the invoice editor, and what follows issuing.
