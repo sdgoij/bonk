@@ -10,9 +10,9 @@
 use std::path::{Path, PathBuf};
 
 use crux::{
-    Address, CountryCode, Currency, CustomerId, DocType, DocumentId, DraftLine, Finding, InvoiceDraft, LineId,
-    LocalDate, Money, Party, PhoneNumber, PrecedingInvoice, Quantity, SavedSearchId, SellerId, Severity, TaxTreatment,
-    UnitCode, VatCategory, VatRate, calculate_totals, has_blocking, validate_draft,
+    Address, CountryCode, Currency, CustomerId, DocType, DocumentId, DomainError, DraftLine, Finding, InvoiceDraft,
+    LineId, LocalDate, Money, Party, PhoneNumber, PrecedingInvoice, Quantity, SavedSearchId, SellerId, Severity,
+    TaxTreatment, UnitCode, VatCategory, VatRate, calculate_totals, has_blocking, validate_draft,
 };
 use store::{
     CustomerRecord, Direction, DocumentRecord, DocumentStatus, IssueRequest, SavedSearch, SearchCounts, SearchHit,
@@ -1859,7 +1859,7 @@ impl Workspace {
         let draft = match build_draft(&editor, &seller) {
             Ok(draft) => draft,
             Err(error) => {
-                self.message = Some(Message::error(error));
+                self.message = Some(Message::error(error.text(language)));
                 return;
             }
         };
@@ -2115,14 +2115,14 @@ impl Workspace {
         let draft = match build_draft(&editor, &seller) {
             Ok(draft) => draft,
             Err(error) => {
-                self.message = Some(Message::error(error));
+                self.message = Some(Message::error(error.text(language)));
                 return;
             }
         };
         let totals = match calculate_totals(&draft.lines) {
             Ok(totals) => totals,
             Err(error) => {
-                self.message = Some(Message::error(error.to_string()));
+                self.message = Some(Message::error(text::problem::domain(language, &error)));
                 return;
             }
         };
@@ -2563,7 +2563,7 @@ impl Workspace {
                             ));
                         }
                         Err(error) => {
-                            ui.colored_label(tokens.error, error.to_string());
+                            ui.colored_label(tokens.error, text::problem::domain(language, &error));
                         }
                     }
 
@@ -2583,7 +2583,7 @@ impl Workspace {
                                 finding_action = Some(action);
                             }
                             if suppressed > 0 {
-                                ui.label(format!("{suppressed} warning(s) suppressed with a recorded reason"));
+                                ui.label(text::editor::suppressed_warnings(language, suppressed));
                             }
                         }
                         None => {
@@ -2592,7 +2592,7 @@ impl Workspace {
                     }
                 }
                 Err(error) => {
-                    ui.colored_label(tokens.error, error);
+                    ui.colored_label(tokens.error, error.text(language));
                 }
             }
         }
@@ -2742,7 +2742,7 @@ impl Workspace {
         let draft = match build_draft(&editor, &seller) {
             Ok(draft) => draft,
             Err(error) => {
-                self.message = Some(Message::error(error));
+                self.message = Some(Message::error(error.text(self.language)));
                 return false;
             }
         };
@@ -2783,7 +2783,7 @@ impl Workspace {
         let draft = match build_draft(&editor, &seller) {
             Ok(draft) => draft,
             Err(error) => {
-                self.message = Some(Message::error(error));
+                self.message = Some(Message::error(error.text(self.language)));
                 return;
             }
         };
@@ -3198,25 +3198,82 @@ fn sort_customers(customers: &mut [&CustomerRecord], column: usize, descending: 
     });
 }
 
-fn build_draft(editor: &Editor, seller: &SellerRecord) -> Result<InvoiceDraft, String> {
-    let customer_id = editor.customer.ok_or_else(|| "Select a customer.".to_owned())?;
+/// What is wrong with the composer, as a value rather than a sentence.
+///
+/// The window renders it through [`DraftError::text`], so the message follows the
+/// interface language while the domain keeps its own English wording for logs.
+#[derive(Debug, Clone, PartialEq)]
+enum DraftError {
+    /// No customer was chosen.
+    NoCustomer,
+    /// The invoice date does not parse.
+    BadIssueDate,
+    /// The due date does not parse.
+    BadDueDate,
+    /// The delivery date does not parse.
+    BadDeliveryDate,
+    /// The form holds more lines than a document can carry.
+    TooManyLines,
+    /// One line is wrong.
+    Line { position: u32, problem: LineProblem },
+}
+
+/// What is wrong with one line of the form.
+#[derive(Debug, Clone, PartialEq)]
+enum LineProblem {
+    /// The line has no description.
+    MissingName,
+    /// The quantity does not parse.
+    Quantity(DomainError),
+    /// The unit price does not parse.
+    UnitPrice(DomainError),
+    /// The VAT rate does not parse.
+    Rate(DomainError),
+}
+
+impl DraftError {
+    /// The sentence the window shows.
+    fn text(&self, language: Language) -> String {
+        match self {
+            Self::NoCustomer => text::problem::select_customer(language).to_owned(),
+            Self::BadIssueDate => text::problem::bad_issue_date(language).to_owned(),
+            Self::BadDueDate => text::problem::bad_due_date(language).to_owned(),
+            Self::BadDeliveryDate => text::problem::bad_delivery_date(language).to_owned(),
+            Self::TooManyLines => text::problem::too_many_lines(language).to_owned(),
+            Self::Line { position, problem } => text::problem::on_line(language, *position, &problem.text(language)),
+        }
+    }
+}
+
+impl LineProblem {
+    fn text(&self, language: Language) -> String {
+        match self {
+            Self::MissingName => text::problem::missing_item_name(language).to_owned(),
+            // The three number fields read the same: the domain error names the
+            // value, and the line prefix names the row.
+            Self::Quantity(error) | Self::UnitPrice(error) | Self::Rate(error) => {
+                text::problem::domain(language, error)
+            }
+        }
+    }
+}
+
+fn build_draft(editor: &Editor, seller: &SellerRecord) -> Result<InvoiceDraft, DraftError> {
+    let customer_id = editor.customer.ok_or(DraftError::NoCustomer)?;
     let issue_date = if editor.issue_date.trim().is_empty() {
         LocalDate::today_utc()
     } else {
-        LocalDate::parse_iso(editor.issue_date.trim()).map_err(|_| "Issue date must be YYYY-MM-DD.".to_owned())?
+        LocalDate::parse_iso(editor.issue_date.trim()).map_err(|_| DraftError::BadIssueDate)?
     };
     let due_date = if editor.due_date.trim().is_empty() {
         None
     } else {
-        Some(LocalDate::parse_iso(editor.due_date.trim()).map_err(|_| "Due date must be YYYY-MM-DD.".to_owned())?)
+        Some(LocalDate::parse_iso(editor.due_date.trim()).map_err(|_| DraftError::BadDueDate)?)
     };
     let delivery_date = if editor.delivery_date.trim().is_empty() {
         None
     } else {
-        Some(
-            LocalDate::parse_iso(editor.delivery_date.trim())
-                .map_err(|_| "Delivery date must be YYYY-MM-DD.".to_owned())?,
-        )
+        Some(LocalDate::parse_iso(editor.delivery_date.trim()).map_err(|_| DraftError::BadDeliveryDate)?)
     };
 
     let mut draft = InvoiceDraft::new(seller.id, customer_id, editor.currency, issue_date);
@@ -3234,15 +3291,27 @@ fn build_draft(editor: &Editor, seller: &SellerRecord) -> Result<InvoiceDraft, S
     draft.order_reference = nonempty(&editor.order_reference);
 
     for (index, line) in editor.lines.iter().enumerate() {
-        let position = u32::try_from(index + 1).map_err(|_| "Too many lines.".to_owned())?;
+        let position = u32::try_from(index + 1).map_err(|_| DraftError::TooManyLines)?;
         let name = line.name.trim();
         if name.is_empty() {
-            return Err(format!("Line {position}: item name is required."));
+            return Err(DraftError::Line {
+                position,
+                problem: LineProblem::MissingName,
+            });
         }
-        let quantity = Quantity::parse(line.quantity.trim()).map_err(|error| format!("Line {position}: {error}"))?;
-        let unit_price = Money::parse_fixed(line.unit_price.trim(), editor.currency)
-            .map_err(|error| format!("Line {position}: {error}"))?;
-        let rate = VatRate::parse_percent(line.rate.trim()).map_err(|error| format!("Line {position}: {error}"))?;
+        let quantity = Quantity::parse(line.quantity.trim()).map_err(|error| DraftError::Line {
+            position,
+            problem: LineProblem::Quantity(error),
+        })?;
+        let unit_price =
+            Money::parse_fixed(line.unit_price.trim(), editor.currency).map_err(|error| DraftError::Line {
+                position,
+                problem: LineProblem::UnitPrice(error),
+            })?;
+        let rate = VatRate::parse_percent(line.rate.trim()).map_err(|error| DraftError::Line {
+            position,
+            problem: LineProblem::Rate(error),
+        })?;
 
         draft.lines.push(DraftLine {
             id: LineId::new(),
@@ -4220,7 +4289,9 @@ mod tests {
         let mut editor = editor();
         editor.issue_date = "27-10-2026".to_owned();
         let error = build_draft(&editor, &seller()).unwrap_err();
-        assert!(error.contains("Issue date"), "{error}");
+        assert_eq!(error, DraftError::BadIssueDate);
+        let sentence = error.text(text::Language::English);
+        assert!(sentence.contains("invoice date"), "{sentence}");
     }
 
     #[test]
@@ -4228,7 +4299,15 @@ mod tests {
         let mut editor = editor();
         editor.lines[0].name = "  ".to_owned();
         let error = build_draft(&editor, &seller()).unwrap_err();
-        assert!(error.contains("item name"), "{error}");
+        assert_eq!(
+            error,
+            DraftError::Line {
+                position: 1,
+                problem: LineProblem::MissingName,
+            }
+        );
+        let sentence = error.text(text::Language::English);
+        assert!(sentence.contains("item name"), "{sentence}");
     }
 
     #[test]

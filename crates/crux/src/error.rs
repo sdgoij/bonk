@@ -81,3 +81,91 @@ pub enum DomainError {
     #[error("cannot sum an empty collection of amounts")]
     EmptySum,
 }
+
+impl DomainError {
+    /// A stable identifier for this error.
+    ///
+    /// [`Display`](std::fmt::Display) is for a developer reading a log: it is
+    /// English and it is not a part of the interface. A screen shows its own
+    /// sentence, chosen by this code, so the message follows the interface
+    /// language and the wording around a value can change without the code moving.
+    /// A code never changes once released, because findings and support bundles
+    /// quote it.
+    pub const fn code(&self) -> &'static str {
+        match self {
+            Self::InvalidCurrency(_) => "currency-invalid",
+            Self::CurrencyMismatch { .. } => "currency-mismatch",
+            Self::AmountOverflow => "amount-overflow",
+            Self::InvalidDecimal(_) => "decimal-invalid",
+            Self::InvalidScale(_) => "scale-invalid",
+            Self::InvalidQuantity(_) => "quantity-invalid",
+            Self::InvalidUnitCode(_) => "unit-code-invalid",
+            Self::InvalidVatRate(_) => "vat-rate-invalid",
+            Self::InvalidVatTreatment { .. } => "vat-treatment-invalid",
+            Self::InvalidDate(_) => "date-invalid",
+            Self::InvalidCountry(_) => "country-invalid",
+            Self::InvalidPhone(_) => "phone-invalid",
+            Self::EmptyInvoice => "invoice-empty",
+            Self::DateOutOfRange => "date-out-of-range",
+            Self::InvalidId(_) => "id-invalid",
+            Self::DivisionByZero => "division-by-zero",
+            Self::EmptySum => "sum-empty",
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DomainError;
+
+    /// One of every variant. The compiler makes `code` cover the enum; this list
+    /// is what proves the codes stay distinct, since the interface picks its
+    /// sentence by code.
+    fn every_error() -> Vec<DomainError> {
+        vec![
+            DomainError::InvalidCurrency("EU".to_owned()),
+            DomainError::CurrencyMismatch {
+                left: "EUR".to_owned(),
+                right: "USD".to_owned(),
+            },
+            DomainError::AmountOverflow,
+            DomainError::InvalidDecimal("x".to_owned()),
+            DomainError::InvalidScale(9),
+            DomainError::InvalidQuantity("x".to_owned()),
+            DomainError::InvalidUnitCode("x".to_owned()),
+            DomainError::InvalidVatRate("x".to_owned()),
+            DomainError::InvalidVatTreatment {
+                category: "S",
+                basis_points: 2100,
+            },
+            DomainError::InvalidDate("x".to_owned()),
+            DomainError::InvalidCountry("X".to_owned()),
+            DomainError::InvalidPhone("x".to_owned()),
+            DomainError::EmptyInvoice,
+            DomainError::DateOutOfRange,
+            DomainError::InvalidId("x".to_owned()),
+            DomainError::DivisionByZero,
+            DomainError::EmptySum,
+        ]
+    }
+
+    #[test]
+    fn every_error_has_its_own_code() {
+        let errors = every_error();
+        let mut codes: Vec<&str> = errors.iter().map(DomainError::code).collect();
+        let total = codes.len();
+        codes.sort_unstable();
+        codes.dedup();
+        assert_eq!(codes.len(), total, "two errors share a code: {codes:?}");
+
+        for code in codes {
+            assert!(
+                !code.is_empty()
+                    && code
+                        .chars()
+                        .all(|character| character.is_ascii_lowercase() || character == '-'),
+                "{code} is not a code"
+            );
+        }
+    }
+}

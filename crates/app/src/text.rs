@@ -1122,6 +1122,11 @@ pub mod editor {
         "Warning suppressed with a recorded reason."
     }
 
+    /// How many findings this document has suppressed, with reasons on file.
+    pub fn suppressed_warnings(_: Language, count: usize) -> String {
+        format!("{count} warning(s) suppressed with a recorded reason")
+    }
+
     /// A credit note was started from an invoice.
     pub fn credit_note_started(language: Language, number: &str) -> String {
         match language {
@@ -1385,9 +1390,108 @@ pub mod security {
     }
 }
 
+/// What is wrong with a form, phrased for the person who has to fix it.
+///
+/// These are values, not sentences built where the check failed, so the wording
+/// lives with the rest of the interface text and the domain keeps its own English
+/// wording for logs. A domain error is selected by [`DomainError::code`].
+pub mod problem {
+    use super::Language;
+    use crux::DomainError;
+
+    /// A sentence for a domain error.
+    pub fn domain(_: Language, error: &DomainError) -> String {
+        match error {
+            DomainError::InvalidCurrency(value) => format!("{value} is not a currency code."),
+            DomainError::CurrencyMismatch { left, right } => {
+                format!("Amounts in {left} and {right} cannot be added up.")
+            }
+            DomainError::AmountOverflow => "The amount is too large.".to_owned(),
+            DomainError::InvalidDecimal(value) => format!("{value} is not a number."),
+            DomainError::InvalidScale(places) => format!("{places} decimal places cannot be stored."),
+            DomainError::InvalidQuantity(value) => format!("{value} is not a quantity."),
+            DomainError::InvalidUnitCode(value) => format!("{value} is not a unit code."),
+            DomainError::InvalidVatRate(value) => format!("{value} is not a VAT rate."),
+            DomainError::InvalidVatTreatment { category, basis_points } => {
+                format!("VAT category {category} cannot use {}%.", percent(*basis_points))
+            }
+            DomainError::InvalidDate(value) => format!("{value} is not a date."),
+            DomainError::InvalidCountry(value) => format!("{value} is not a country code."),
+            DomainError::InvalidPhone(value) => format!("{value} is not a phone number."),
+            DomainError::EmptyInvoice => "The invoice has no lines.".to_owned(),
+            DomainError::DateOutOfRange => "The date is out of range.".to_owned(),
+            DomainError::InvalidId(value) => format!("{value} is not an identifier."),
+            DomainError::DivisionByZero => "A division by zero was attempted.".to_owned(),
+            DomainError::EmptySum => "An empty set of amounts cannot be added up.".to_owned(),
+        }
+    }
+
+    /// A rate in basis points as a percentage, without floating point.
+    fn percent(basis_points: u16) -> String {
+        let whole = basis_points / 100;
+        let fraction = basis_points % 100;
+        if fraction == 0 {
+            whole.to_string()
+        } else {
+            format!("{whole}.{fraction:02}")
+        }
+    }
+
+    /// The invoice has no customer yet.
+    pub fn select_customer(_: Language) -> &'static str {
+        "Select a customer."
+    }
+
+    /// A line without a description.
+    pub fn missing_item_name(_: Language) -> &'static str {
+        "the item name is required."
+    }
+
+    /// The invoice date does not parse.
+    pub fn bad_issue_date(_: Language) -> &'static str {
+        "The invoice date must be YYYY-MM-DD."
+    }
+
+    /// The due date does not parse.
+    pub fn bad_due_date(_: Language) -> &'static str {
+        "The due date must be YYYY-MM-DD."
+    }
+
+    /// The delivery date does not parse.
+    pub fn bad_delivery_date(_: Language) -> &'static str {
+        "The delivery date must be YYYY-MM-DD."
+    }
+
+    /// There are more lines than a document can carry.
+    pub fn too_many_lines(_: Language) -> &'static str {
+        "Too many lines."
+    }
+
+    /// A problem on one line, with the line named first.
+    pub fn on_line(_: Language, position: u32, problem: &str) -> String {
+        format!("Line {position}: {problem}")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_problem_is_a_sentence_not_the_log_wording() {
+        let language = Language::default();
+        let error = crux::DomainError::InvalidDecimal("two".to_owned());
+        let sentence = problem::domain(language, &error);
+        assert!(sentence.contains("two"), "the value is kept: {sentence}");
+        assert_ne!(
+            sentence,
+            error.to_string(),
+            "the interface writes its own sentence rather than printing the log wording"
+        );
+
+        let line = problem::on_line(language, 3, problem::missing_item_name(language));
+        assert_eq!(line, "Line 3: the item name is required.");
+    }
 
     #[test]
     fn the_device_switch_says_what_it_will_do() {
