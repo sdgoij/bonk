@@ -655,6 +655,15 @@ first suspect is per-row work after the query — each hit's party, status, and
 gross are assembled row by row, and the browse view materialises far more of
 them. `just demo-20k` seeds the archive and `just bench-search` reproduces it.
 
+**Paging did not move the number (2026-11-02).** `store::search_page` and the
+window's append-on-scroll are in, and `bench-search` now times a 50-row page: the
+word query is still 60 ms p95 and the browse page still 770 ms, for fifty rows
+instead of a thousand. So the cost is not the row count and not the per-row
+assembly; it is the query plan — the ordered read over `invoice_fts` joined to
+`document` has nothing to walk, so SQLite sorts every match before it can hand
+back the first fifty. The next step is `EXPLAIN QUERY PLAN` on both shapes and a
+composite index on the columns the order uses, not more paging.
+
 ---
 
 ### M6 — Security, keys, audit, backup (3 weeks, part of v1.0)

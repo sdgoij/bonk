@@ -18,7 +18,7 @@ use store::{
     CustomerRecord, Direction, DocumentRecord, DocumentStatus, IssueRequest, SavedSearch, SearchCounts, SearchHit,
     SearchRequest, SellerRecord, StoreError, Suppression, advance_status, archive::DocumentView, attach_artefact,
     credit_note_for, first_seller, insert_customer, insert_seller, issue_draft, list_customers, list_suppressions,
-    save_draft, save_suppression, search, set_supplier_match,
+    save_draft, save_suppression, set_supplier_match,
 };
 use zeroize::Zeroize;
 
@@ -139,7 +139,15 @@ struct SearchView {
     applied: Option<String>,
     /// Why the last save, apply, or delete failed.
     saved_error: Option<String>,
+    /// True when the archive has more rows than the ones loaded.
+    more: bool,
 }
+
+/// Rows the find panel asks for at a time.
+///
+/// A screenful and a bit: enough that the scroll bar has somewhere to go, small
+/// enough that a page costs a few milliseconds rather than a second.
+const SEARCH_PAGE: usize = 50;
 
 impl Default for SearchView {
     fn default() -> Self {
@@ -159,6 +167,7 @@ impl Default for SearchView {
             save_name: String::new(),
             applied: None,
             saved_error: None,
+            more: false,
         }
     }
 }
@@ -205,7 +214,7 @@ impl SearchView {
         (self.query.trim().to_owned(), self.direction, self.status)
     }
 
-    /// Runs what the panel describes and keeps the result, empty or not.
+    /// Runs what the panel describes and keeps the first page, empty or not.
     fn run(&mut self, database: &store::Database, owner: SellerId) -> Result<(), StoreError> {
         let query = self.query.trim();
         let request = SearchRequest {
@@ -215,9 +224,10 @@ impl SearchView {
             to: None,
             status: self.status,
         };
-        let outcome = match search(database.connection(), owner, &request) {
-            Ok(results) => {
-                self.results = results;
+        let outcome = match store::search_page(database.connection(), owner, &request, 0, SEARCH_PAGE) {
+            Ok(page) => {
+                self.results = page.hits;
+                self.more = page.more;
                 self.ran = true;
                 self.query_error = None;
                 Ok(())
@@ -238,6 +248,40 @@ impl SearchView {
         self.last_request = Some(self.request_key());
         self.sort_results();
         outcome
+    }
+
+    /// Appends the next page, when the bottom of the list comes into view.
+    ///
+    /// A row can arrive twice if the archive changed between two page queries;
+    /// the id is what a row means, so it decides whether the row is new.
+    fn load_more(&mut self, database: &store::Database, owner: SellerId) {
+        if !self.more {
+            return;
+        }
+        let query = self.query.trim();
+        let request = SearchRequest {
+            query: (!query.is_empty()).then_some(query),
+            direction: self.direction,
+            from: None,
+            to: None,
+            status: self.status,
+        };
+        match store::search_page(database.connection(), owner, &request, self.results.len(), SEARCH_PAGE) {
+            Ok(page) => {
+                for hit in page.hits {
+                    if !self.results.iter().any(|seen| seen.id == hit.id) {
+                        self.results.push(hit);
+                    }
+                }
+                self.more = page.more;
+            }
+            Err(error) => {
+                // A page that fails does not retry every frame; the footer count
+                // is still the truth about the archive.
+                self.more = false;
+                self.query_error = Some(error.to_string());
+            }
+        }
     }
 
     /// Re-applies the chosen sort to the current results.
@@ -1092,7 +1136,7 @@ impl Workspace {
         let mut save_artefact = None;
         let mut settle = None;
         let mut match_supplier = None;
-        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+        let list = egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             ui.set_width(width);
             if self.search.results.is_empty() {
                 ui.add_space(10.0);
@@ -1193,6 +1237,13 @@ impl Workspace {
             }
             ui.add_space(8.0);
         });
+
+        // The list asks for the next page when its end comes into view, which is
+        // what lets it be any length without fetching all of it.
+        let near_end = list.state.clamped_offset().y + list.inner_rect.height() >= list.content_size.y - 200.0;
+        if near_end {
+            self.search.load_more(session.database(), owner);
+        }
 
         if let Some(id) = toggle {
             self.activate_row(session, id);

@@ -1083,11 +1083,15 @@ fn run(cli: Cli) -> Result<(), CliError> {
             // before anything is typed.
             let words = query.trim();
             let query = (!words.is_empty()).then_some(words);
+            // One page, the size the find panel draws: the criterion is about
+            // what the window does, not about the largest query the archive can
+            // answer.
+            const PAGE: usize = 50;
             let mut samples = Vec::with_capacity(repeat);
             let mut rows = 0;
             for _ in 0..repeat {
                 let started = std::time::Instant::now();
-                let hits = store::search(
+                let page = store::search_page(
                     connection,
                     owner,
                     &SearchRequest {
@@ -1097,9 +1101,11 @@ fn run(cli: Cli) -> Result<(), CliError> {
                         to: None,
                         status: None,
                     },
+                    0,
+                    PAGE,
                 )?;
                 samples.push(started.elapsed().as_micros() as u64);
-                rows = hits.len();
+                rows = page.hits.len();
             }
 
             samples.sort_unstable();
