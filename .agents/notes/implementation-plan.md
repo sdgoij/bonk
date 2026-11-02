@@ -372,6 +372,17 @@ Still open from this criterion: the same corpus with *expected findings* — doc
 that deliberately break one rule each — so our engine's findings can be compared
 with the oracle's rule by rule, not only its verdict.
 
+**The expected-findings gate is in (2026-11-02).** `tools/validate-findings.sh`
+mutates one issued invoice three ways — no due date, a line net that no longer
+equals quantity times price, an invoice tax total that no longer matches the
+breakdown — and asserts the exact set of rules the validator fires: BR-CO-25, then
+BR-CO-13 and BR-S-08, then BR-CO-14 and BR-CO-15. The fixtures are mutations of the
+writer's own output, so they cannot drift from what it produces, and the gate was
+checked against a deliberately wrong expectation to prove it can fail. What is
+still not automated is comparing our engine's findings with the oracle's for the
+same input; today the oracle's set is the expectation, and our engine is checked
+separately by the T1 and BR tests.
+
 ---
 
 ### M3 — Import and payable register (3 weeks)

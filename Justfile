@@ -89,6 +89,11 @@ lf:
 validate-m1:
     sh tools/validate-m1.sh
 
+# The other half: documents that break one rule each report exactly that rule
+# (needs `just validate-m1` once, for the invoice and the validator).
+validate-findings:
+    sh tools/validate-findings.sh
+
 # VAT-category, exemption-reason, and breakdown matrix (needs Java 17+).
 validate-vat:
     sh tools/validate-vat-matrix.sh
