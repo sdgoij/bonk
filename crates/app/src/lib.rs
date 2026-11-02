@@ -562,10 +562,13 @@ impl BonkApp {
     fn new_with_context(context: &eframe::CreationContext<'_>) -> Self {
         theme::install(&context.egui_ctx);
         let mut app = Self::default();
-        if let Some(storage) = context.storage
-            && let Some(name) = storage.get_string(theme::STORAGE_KEY)
-        {
-            app.appearance = theme::from_name(&name).unwrap_or_default();
+        if let Some(storage) = context.storage {
+            if let Some(name) = storage.get_string(theme::STORAGE_KEY) {
+                app.appearance = theme::from_name(&name).unwrap_or_default();
+            }
+            if let Some(name) = storage.get_string(text::STORAGE_KEY) {
+                app.language = text::Language::from_name(&name).unwrap_or_default();
+            }
         }
         theme::set(&context.egui_ctx, app.appearance);
         app
@@ -1069,7 +1072,7 @@ impl eframe::App for BonkApp {
                     }
                 }
                 UiState::Unlocked { session, workspace } => {
-                    if workspace.ui(ui, session, &mut self.appearance) == WorkspaceAction::Lock {
+                    if workspace.ui(ui, session, &mut self.appearance, &mut self.language) == WorkspaceAction::Lock {
                         action = Some(Action::Lock);
                     }
                 }
@@ -1083,6 +1086,7 @@ impl eframe::App for BonkApp {
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         storage.set_string(theme::STORAGE_KEY, self.appearance.name().to_owned());
+        storage.set_string(text::STORAGE_KEY, self.language.name().to_owned());
     }
 }
 

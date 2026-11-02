@@ -761,7 +761,11 @@ impl Workspace {
         ui: &mut egui::Ui,
         session: &mut Session,
         appearance: &mut egui::ThemePreference,
+        language: &mut Language,
     ) -> WorkspaceAction {
+        // The app owns the choice, so it survives a lock; the workspace keeps a
+        // copy for the frame it is drawing.
+        self.language = *language;
         let mut lock = false;
         let mut focus = self.focus_request.take();
         let mut requested = None;
@@ -814,7 +818,9 @@ impl Workspace {
                 match self.tab {
                     Tab::Search => self.search_ui(ui, session, focus.as_deref()),
                     Tab::Customers => self.customers_ui(ui, session, focus.as_deref()),
-                    Tab::Settings => self.settings_ui(ui, session, appearance, &store::device::Keychain),
+                    Tab::Settings => {
+                        self.settings_ui(ui, session, appearance, language, &store::device::Keychain);
+                    }
                 }
             }
         });
@@ -1459,6 +1465,7 @@ impl Workspace {
         ui: &mut egui::Ui,
         session: &Session,
         appearance: &mut egui::ThemePreference,
+        interface: &mut Language,
         device: &dyn store::DeviceStore,
     ) {
         let language = self.language;
@@ -1497,6 +1504,24 @@ impl Workspace {
                     theme::set(ui.ctx(), *appearance);
                 }
                 ui.weak(text::settings::theme_note(language));
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    ui.label(text::settings::language(language));
+                    // A language names itself in its own tongue; translating the
+                    // option would hide the one you can read.
+                    if ui
+                        .selectable_value(&mut *interface, Language::English, "English")
+                        .changed()
+                    {
+                        self.language = Language::English;
+                    }
+                    if ui
+                        .selectable_value(&mut *interface, Language::Dutch, "Nederlands")
+                        .changed()
+                    {
+                        self.language = Language::Dutch;
+                    }
+                });
             });
             ui.add_space(8.0);
 
@@ -1934,7 +1959,7 @@ impl Workspace {
     /// The heading over the composer card.
     fn composer_heading(&self, language: Language) -> &'static str {
         if let Some(issued) = &self.issued {
-            text::editor::issued_heading(issued.number.contains("-C"))
+            text::editor::issued_heading(language, issued.number.contains("-C"))
         } else if self.editor.as_ref().is_some_and(|editor| editor.saved) {
             text::editor::draft_heading(language)
         } else {
@@ -4141,7 +4166,7 @@ mod tests {
             let context = egui::Context::default();
             let mut appearance = egui::ThemePreference::System;
             let output = context.run_ui(egui::RawInput::default(), |ui| {
-                let _ = workspace.ui(ui, &mut session, &mut appearance);
+                let _ = workspace.ui(ui, &mut session, &mut appearance, &mut Language::default());
             });
             output.drop_without_applying_deltas();
         }
@@ -4193,7 +4218,12 @@ mod tests {
         // Drawing is where duplicate widget ids and missing fonts show up as a
         // panic, so a headless frame is worth more than it looks.
         let output = context.run_ui(egui::RawInput::default(), |ui| {
-            action = workspace.ui(ui, &mut session, &mut egui::ThemePreference::System);
+            action = workspace.ui(
+                ui,
+                &mut session,
+                &mut egui::ThemePreference::System,
+                &mut Language::default(),
+            );
             // Panels are collapsed by default, so draw their contents directly:
             // a broken widget inside a closed header is still a broken widget.
             let _ = workspace.health_details_ui(ui);
@@ -4546,7 +4576,7 @@ mod tests {
         let context = egui::Context::default();
         let mut appearance = egui::ThemePreference::System;
         let output = context.run_ui(egui::RawInput::default(), |ui| {
-            let _ = workspace.ui(ui, &mut session, &mut appearance);
+            let _ = workspace.ui(ui, &mut session, &mut appearance, &mut Language::default());
         });
         output.drop_without_applying_deltas();
         assert!(workspace.pending_row.is_some(), "it waits until it is answered");
@@ -4657,7 +4687,7 @@ mod tests {
         let context = egui::Context::default();
         let mut appearance = egui::ThemePreference::System;
         let output = context.run_ui(egui::RawInput::default(), |ui| {
-            let _ = workspace.ui(ui, &mut session, &mut appearance);
+            let _ = workspace.ui(ui, &mut session, &mut appearance, &mut Language::default());
         });
         output.drop_without_applying_deltas();
     }
@@ -4724,7 +4754,7 @@ mod tests {
         let context = egui::Context::default();
         let mut appearance = egui::ThemePreference::System;
         let output = context.run_ui(egui::RawInput::default(), |ui| {
-            let _ = workspace.ui(ui, &mut session, &mut appearance);
+            let _ = workspace.ui(ui, &mut session, &mut appearance, &mut Language::default());
         });
         output.drop_without_applying_deltas();
 
@@ -4847,7 +4877,7 @@ mod tests {
                 ..egui::RawInput::default()
             };
             let output = context.run_ui(input, |ui| {
-                let _ = workspace.ui(ui, &mut session, &mut appearance);
+                let _ = workspace.ui(ui, &mut session, &mut appearance, &mut Language::default());
             });
             output.drop_without_applying_deltas();
         }
@@ -5005,7 +5035,7 @@ mod tests {
         let context = egui::Context::default();
         let mut appearance = egui::ThemePreference::System;
         let output = context.run_ui(egui::RawInput::default(), |ui| {
-            let _ = workspace.ui(ui, &mut session, &mut appearance);
+            let _ = workspace.ui(ui, &mut session, &mut appearance, &mut Language::default());
         });
         output.drop_without_applying_deltas();
 

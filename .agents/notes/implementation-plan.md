@@ -607,9 +607,15 @@ The footer under the results is pinned to the bottom of the window and reads `42
 
 **Form problems are values now (2026-11-02).** `build_draft` built an English sentence at each check, so the window could only ever show English and the wording lived in the validation rather than with the rest of the interface text. It returns a `DraftError` — a line position plus a `LineProblem` — and `text::problem` writes the sentence; the totals error, the suppressed-warning count, and the live message under the composer all use that table. `DomainError` gained a stable `code()`, so an interface picks its wording by identifier instead of printing the `Display` written for logs, and a test keeps the codes distinct.
 
-Remaining in M5: the Dutch table itself. Every string already takes the language and
-ignores it, so the work is one pass over `app::text` and the interface-language
-switch in Settings; the error path is ready for it.
+**The Dutch table is complete (2026-11-02).** Every string in `app::text` carries
+both columns, selected by `sentence!(language, english, dutch)`; the few that
+branch on an enum (statuses, facts, months, weekday names) wrap each arm. The
+interface-language choice lives in Settings beside the theme and is written to the
+frame storage, so it survives a lock. A test walks the source and refuses an arm
+that names both languages and returns one sentence, or a call that ignores the
+language, which is what makes "translated" checkable rather than claimed.
+
+Remaining in M5: nothing.
 
 ---
 

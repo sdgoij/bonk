@@ -35,6 +35,28 @@ macro_rules! sentence {
     };
 }
 
+/// The storage key the window writes the interface language under.
+pub const STORAGE_KEY: &str = "interface-language";
+
+impl Language {
+    /// The name written to the window's storage.
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::English => "en",
+            Self::Dutch => "nl",
+        }
+    }
+
+    /// Reads a stored name back, if this build knows it.
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "en" => Some(Self::English),
+            "nl" => Some(Self::Dutch),
+            _ => None,
+        }
+    }
+}
+
 /// The lock screen.
 pub mod shell {
     use super::Language;
@@ -293,8 +315,8 @@ pub mod find {
     use store::{Direction, DocumentStatus};
 
     /// Panel heading.
-    pub fn title(_: Language) -> &'static str {
-        "Find documents"
+    pub fn title(language: Language) -> &'static str {
+        sentence!(language, "Find documents", "Documenten zoeken")
     }
 
     /// The keyboard hint beside the heading.
@@ -859,6 +881,11 @@ pub mod settings {
     pub fn credentials(language: Language) -> &'static str {
         sentence!(language, "Credentials", "Inloggegevens")
     }
+
+    /// The interface language.
+    pub fn language(language: Language) -> &'static str {
+        sentence!(language, "Language", "Taal")
+    }
 }
 
 /// The seller and customer forms, the invoice editor, and what follows issuing.
@@ -895,453 +922,516 @@ pub mod editor {
     }
 
     /// The word for a party field.
-    pub fn field(_: Language, field: Field) -> &'static str {
+    pub fn field(language: Language, field: Field) -> &'static str {
         match field {
-            Field::LegalName => "Legal name",
-            Field::Name => "Name",
-            Field::Street => "Street",
-            Field::PostCode => "Post code",
-            Field::City => "City",
-            Field::Country => "Country",
-            Field::VatId => "VAT ID",
-            Field::Kvk => "KvK number",
-            Field::Peppol => "Peppol ID",
-            Field::Contact => "Contact",
-            Field::Email => "Email",
-            Field::Phone => "Phone",
+            Field::LegalName => sentence!(language, "Legal name", "Juridische naam"),
+            Field::Name => sentence!(language, "Name", "Naam"),
+            Field::Street => sentence!(language, "Street", "Straat"),
+            Field::PostCode => sentence!(language, "Post code", "Postcode"),
+            Field::City => sentence!(language, "City", "Plaats"),
+            Field::Country => sentence!(language, "Country", "Land"),
+            Field::VatId => sentence!(language, "VAT ID", "Btw-nummer"),
+            Field::Kvk => sentence!(language, "KvK number", "KvK-nummer"),
+            Field::Peppol => sentence!(language, "Peppol ID", "Peppol-id"),
+            Field::Contact => sentence!(language, "Contact", "Contactpersoon"),
+            Field::Email => sentence!(language, "Email", "E-mail"),
+            Field::Phone => sentence!(language, "Phone", "Telefoon"),
         }
     }
 
     /// Heading of the first-run seller form.
-    pub fn seller_heading(_: Language) -> &'static str {
-        "Create your seller profile"
+    pub fn seller_heading(language: Language) -> &'static str {
+        sentence!(language, "Create your seller profile", "Maak je verkopersprofiel")
     }
 
     /// What the first-run form promises.
-    pub fn seller_note(_: Language) -> &'static str {
-        "One legal entity per database in v1."
+    pub fn seller_note(language: Language) -> &'static str {
+        sentence!(
+            language,
+            "One legal entity per database in v1.",
+            "Eén rechtspersoon per database in v1."
+        )
     }
 
     /// Stores the seller.
-    pub fn create_seller_action(_: Language) -> &'static str {
-        "Create seller"
+    pub fn create_seller_action(language: Language) -> &'static str {
+        sentence!(language, "Create seller", "Verkoper aanmaken")
     }
 
     /// Heading of the customer form.
-    pub fn new_customer_heading(_: Language) -> &'static str {
-        "New customer"
+    pub fn new_customer_heading(language: Language) -> &'static str {
+        sentence!(language, "New customer", "Nieuwe klant")
     }
 
     /// Stores the customer.
-    pub fn save_customer_action(_: Language) -> &'static str {
-        "Save customer"
+    pub fn save_customer_action(language: Language) -> &'static str {
+        sentence!(language, "Save customer", "Klant opslaan")
     }
 
     /// Opens the customer form.
-    pub fn add_customer_action(_: Language) -> &'static str {
-        "Add customer"
+    pub fn add_customer_action(language: Language) -> &'static str {
+        sentence!(language, "Add customer", "Klant toevoegen")
     }
 
     /// The draft the user asked for is gone.
-    pub fn draft_missing(_: Language) -> &'static str {
-        "That draft is no longer in this archive; run the search again."
+    pub fn draft_missing(language: Language) -> &'static str {
+        sentence!(
+            language,
+            "That draft is no longer in this archive; run the search again.",
+            "Dat concept staat niet meer in dit archief; voer de zoekopdracht opnieuw uit."
+        )
     }
 
     /// The editor needs a party to bill.
-    pub fn no_customers(_: Language) -> &'static str {
-        "Add a customer before starting an invoice."
+    pub fn no_customers(language: Language) -> &'static str {
+        sentence!(
+            language,
+            "Add a customer before starting an invoice.",
+            "Voeg een klant toe voordat je een factuur begint."
+        )
     }
 
     /// Tooltip on the calendar button.
-    pub fn choose_date(_: Language) -> &'static str {
-        "Choose a date"
+    pub fn choose_date(language: Language) -> &'static str {
+        sentence!(language, "Choose a date", "Kies een datum")
     }
 
     /// Tooltip on the button that empties an optional date.
-    pub fn clear_date(_: Language) -> &'static str {
-        "Clear the date"
+    pub fn clear_date(language: Language) -> &'static str {
+        sentence!(language, "Clear the date", "Datum wissen")
     }
 
     /// Weekday headings in the calendar, Monday first.
-    pub fn weekdays(_: Language) -> [&'static str; 7] {
-        ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"]
+    pub fn weekdays(language: Language) -> [&'static str; 7] {
+        match language {
+            Language::English => ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"],
+            Language::Dutch => ["ma", "di", "wo", "do", "vr", "za", "zo"],
+        }
     }
 
     /// A month's name, for the calendar heading.
-    pub fn month_name(_: Language, month: time::Month) -> &'static str {
+    pub fn month_name(language: Language, month: time::Month) -> &'static str {
         match month {
-            time::Month::January => "January",
-            time::Month::February => "February",
-            time::Month::March => "March",
-            time::Month::April => "April",
-            time::Month::May => "May",
-            time::Month::June => "June",
-            time::Month::July => "July",
-            time::Month::August => "August",
-            time::Month::September => "September",
-            time::Month::October => "October",
-            time::Month::November => "November",
-            time::Month::December => "December",
+            time::Month::January => sentence!(language, "January", "januari"),
+            time::Month::February => sentence!(language, "February", "februari"),
+            time::Month::March => sentence!(language, "March", "maart"),
+            time::Month::April => sentence!(language, "April", "april"),
+            time::Month::May => sentence!(language, "May", "mei"),
+            time::Month::June => sentence!(language, "June", "juni"),
+            time::Month::July => sentence!(language, "July", "juli"),
+            time::Month::August => sentence!(language, "August", "augustus"),
+            time::Month::September => sentence!(language, "September", "september"),
+            time::Month::October => sentence!(language, "October", "oktober"),
+            time::Month::November => sentence!(language, "November", "november"),
+            time::Month::December => sentence!(language, "December", "december"),
         }
     }
 
     /// Switches to the customer tab.
-    pub fn go_to_customers(_: Language) -> &'static str {
-        "Go to customers"
+    pub fn go_to_customers(language: Language) -> &'static str {
+        sentence!(language, "Go to customers", "Naar klanten")
     }
 
     /// The name of the seller the workspace belongs to.
     pub fn seller_line(language: Language, name: &str) -> String {
-        match language {
-            Language::English | Language::Dutch => format!("Seller: {name}"),
-        }
+        sentence!(language, format!("Seller: {name}"), format!("Verkoper: {name}"))
     }
 
     /// Heading after issuing.
-    pub fn issued_heading(credit_note: bool) -> &'static str {
-        if credit_note { "Issued credit note" } else { "Issued" }
+    pub fn issued_heading(language: Language, credit_note: bool) -> &'static str {
+        match credit_note {
+            false => sentence!(language, "Issued", "Verstuurd"),
+            true => sentence!(language, "Issued credit note", "Creditnota verstuurd"),
+        }
     }
 
     /// Heading over a composer that reopened a stored draft.
-    pub fn draft_heading(_: Language) -> &'static str {
-        "Draft"
+    pub fn draft_heading(language: Language) -> &'static str {
+        sentence!(language, "Draft", "Concept")
     }
 
     /// Toggles the rendered preview.
-    pub fn preview_action(_: Language) -> &'static str {
-        "Preview"
+    pub fn preview_action(language: Language) -> &'static str {
+        sentence!(language, "Preview", "Voorbeeld")
     }
 
     /// Title over the question asked when a row click would lose work.
-    pub fn unsaved_title(_: Language) -> &'static str {
-        "Unsaved invoice"
+    pub fn unsaved_title(language: Language) -> &'static str {
+        sentence!(language, "Unsaved invoice", "Niet-opgeslagen factuur")
     }
 
     /// What that question asks.
-    pub fn unsaved_note(_: Language) -> &'static str {
-        "This invoice has not been saved yet. Save it as a draft, or discard it?"
+    pub fn unsaved_note(language: Language) -> &'static str {
+        sentence!(
+            language,
+            "This invoice has not been saved yet. Save it as a draft, or discard it?",
+            "Deze factuur is nog niet opgeslagen. Als concept opslaan of weggooien?"
+        )
     }
 
     /// Throws the work away and does what was clicked.
-    pub fn discard_action(_: Language) -> &'static str {
-        "Discard"
+    pub fn discard_action(language: Language) -> &'static str {
+        sentence!(language, "Discard", "Weggooien")
     }
 
     /// Stays on the invoice.
-    pub fn keep_editing_action(_: Language) -> &'static str {
-        "Keep editing"
+    pub fn keep_editing_action(language: Language) -> &'static str {
+        sentence!(language, "Keep editing", "Doorgaan met bewerken")
     }
 
     /// Heading over the rendered preview.
-    pub fn preview_heading(_: Language) -> &'static str {
-        "Preview"
+    pub fn preview_heading(language: Language) -> &'static str {
+        sentence!(language, "Preview", "Voorbeeld")
     }
 
     /// The number field of a preview: nothing has been allocated yet.
-    pub fn preview_number(_: Language) -> &'static str {
-        "(not issued)"
+    pub fn preview_number(language: Language) -> &'static str {
+        sentence!(language, "(not issued)", "(nog niet verstuurd)")
     }
 
     /// The preview could not be rendered.
-    pub fn preview_failed(_: Language, error: &str) -> String {
-        format!("Could not render the preview: {error}")
+    pub fn preview_failed(language: Language, error: &str) -> String {
+        sentence!(
+            language,
+            format!("Could not render the preview: {error}"),
+            format!("Het voorbeeld kon niet worden opgemaakt: {error}")
+        )
     }
 
     /// A note under a preview that runs to more than one page.
     pub fn preview_more_pages(language: Language, pages: usize) -> String {
-        match language {
-            Language::English | Language::Dutch => {
-                format!("The document runs to {pages} pages; the preview shows the first.")
-            }
-        }
+        sentence!(
+            language,
+            format!("The document runs to {pages} pages; the preview shows the first."),
+            format!("Het document telt {pages} pagina's; het voorbeeld toont de eerste.")
+        )
     }
 
     /// Number of the issued document.
     pub fn number_line(language: Language, number: &str) -> String {
-        match language {
-            Language::English | Language::Dutch => format!("Number: {number}"),
-        }
+        sentence!(language, format!("Number: {number}"), format!("Nummer: {number}"))
     }
 
     /// Issue date of the issued document.
     pub fn issue_date_line(language: Language, date: &str) -> String {
-        match language {
-            Language::English | Language::Dutch => format!("Issue date: {date}"),
-        }
+        sentence!(language, format!("Issue date: {date}"), format!("Factuurdatum: {date}"))
     }
 
     /// Amount payable.
     pub fn payable_line(language: Language, amount: &str) -> String {
-        match language {
-            Language::English | Language::Dutch => format!("Payable: {amount}"),
-        }
+        sentence!(language, format!("Payable: {amount}"), format!("Te betalen: {amount}"))
     }
 
     /// Hash of the UBL artefact.
     pub fn ubl_hash_line(language: Language, hash: &str) -> String {
-        match language {
-            Language::English | Language::Dutch => format!("UBL SHA-256: {hash}"),
-        }
+        sentence!(language, format!("UBL SHA-256: {hash}"), format!("UBL SHA-256: {hash}"))
     }
 
     /// Hash of the PDF artefact.
     pub fn pdf_hash_line(language: Language, hash: &str) -> String {
-        match language {
-            Language::English | Language::Dutch => format!("PDF SHA-256: {hash}"),
-        }
+        sentence!(language, format!("PDF SHA-256: {hash}"), format!("PDF SHA-256: {hash}"))
     }
 
     /// Label above the PDF path field.
     /// Writes the PDF, after the platform's save panel asks where.
-    pub fn save_pdf_action(_: Language) -> &'static str {
-        "Save PDF…"
+    pub fn save_pdf_action(language: Language) -> &'static str {
+        sentence!(language, "Save PDF…", "PDF opslaan…")
     }
 
     /// Starts a credit note for the issued invoice.
-    pub fn credit_note_action(_: Language) -> &'static str {
-        "Credit note"
+    pub fn credit_note_action(language: Language) -> &'static str {
+        sentence!(language, "Credit note", "Creditnota")
     }
 
     /// Starts an empty invoice.
-    pub fn new_invoice_action(_: Language) -> &'static str {
-        "New invoice"
+    pub fn new_invoice_action(language: Language) -> &'static str {
+        sentence!(language, "New invoice", "Nieuwe factuur")
     }
 
     /// Banner at the top of a credit-note editor.
     pub fn credit_note_banner(language: Language, number: &str) -> String {
-        match language {
-            Language::English | Language::Dutch => format!("Credit note for invoice {number}"),
-        }
+        sentence!(
+            language,
+            format!("Credit note for invoice {number}"),
+            format!("Creditnota bij factuur {number}")
+        )
     }
 
     /// Label above the customer picker.
-    pub fn customer_label(_: Language) -> &'static str {
-        "Customer"
+    pub fn customer_label(language: Language) -> &'static str {
+        sentence!(language, "Customer", "Klant")
     }
 
     /// Shown in the customer picker before one is chosen.
-    pub fn select_customer(_: Language) -> &'static str {
-        "Select customer"
+    pub fn select_customer(language: Language) -> &'static str {
+        sentence!(language, "Select customer", "Kies een klant")
     }
 
     /// Issue date field.
-    pub fn issue_date_label(_: Language) -> &'static str {
-        "Issue date"
+    pub fn issue_date_label(language: Language) -> &'static str {
+        sentence!(language, "Issue date", "Factuurdatum")
     }
 
     /// Due date field.
-    pub fn due_date_label(_: Language) -> &'static str {
-        "Due date"
+    pub fn due_date_label(language: Language) -> &'static str {
+        sentence!(language, "Due date", "Vervaldatum")
     }
 
     /// Buyer reference field.
-    pub fn buyer_reference_label(_: Language) -> &'static str {
-        "Buyer ref"
+    pub fn buyer_reference_label(language: Language) -> &'static str {
+        sentence!(language, "Buyer ref", "Ref. afnemer")
     }
 
     /// Order reference field.
-    pub fn order_reference_label(_: Language) -> &'static str {
-        "Order ref"
+    pub fn order_reference_label(language: Language) -> &'static str {
+        sentence!(language, "Order ref", "Orderref.")
     }
 
     /// Delivery date field.
-    pub fn delivery_date_label(_: Language) -> &'static str {
-        "Delivery date"
+    pub fn delivery_date_label(language: Language) -> &'static str {
+        sentence!(language, "Delivery date", "Leverdatum")
     }
 
     /// Language picker for the printed document.
-    pub fn document_language_label(_: Language) -> &'static str {
-        "Document language"
+    pub fn document_language_label(language: Language) -> &'static str {
+        sentence!(language, "Document language", "Taal van het document")
     }
 
     /// Label beside the currency picker.
-    pub fn currency_label(_: Language) -> &'static str {
-        "Currency"
+    pub fn currency_label(language: Language) -> &'static str {
+        sentence!(language, "Currency", "Valuta")
     }
 
     /// Free-text note field.
-    pub fn note_label(_: Language) -> &'static str {
-        "Note"
+    pub fn note_label(language: Language) -> &'static str {
+        sentence!(language, "Note", "Notitie")
     }
 
     /// Line entry columns, in order.
-    pub fn line_columns(_: Language) -> [&'static str; 5] {
-        ["Item", "Qty", "Unit price", "Rate %", "VAT"]
+    pub fn line_columns(language: Language) -> [&'static str; 5] {
+        match language {
+            Language::English => ["Item", "Qty", "Unit price", "Rate %", "VAT"],
+            Language::Dutch => ["Omschrijving", "Aantal", "Prijs", "Tarief %", "Btw"],
+        }
     }
 
     /// Removes a line.
-    pub fn remove_line_action(_: Language) -> &'static str {
-        "Remove"
+    pub fn remove_line_action(language: Language) -> &'static str {
+        sentence!(language, "Remove", "Verwijderen")
     }
 
     /// Appends a line.
-    pub fn add_line_action(_: Language) -> &'static str {
-        "Add line"
+    pub fn add_line_action(language: Language) -> &'static str {
+        sentence!(language, "Add line", "Regel toevoegen")
     }
 
     /// Stores the draft without issuing it.
-    pub fn save_draft_action(_: Language) -> &'static str {
-        "Save draft"
+    pub fn save_draft_action(language: Language) -> &'static str {
+        sentence!(language, "Save draft", "Concept opslaan")
     }
 
     /// Issues the draft.
-    pub fn issue_action(_: Language) -> &'static str {
-        "Issue"
+    pub fn issue_action(language: Language) -> &'static str {
+        sentence!(language, "Issue", "Versturen")
     }
 
     /// Live totals under the lines.
     pub fn totals(language: Language, net: &str, tax: &str, gross: &str) -> String {
-        match language {
-            Language::English | Language::Dutch => format!("Net {net}   VAT {tax}   Total {gross}"),
-        }
+        sentence!(
+            language,
+            format!("Net {net}   VAT {tax}   Total {gross}"),
+            format!("Netto {net}   Btw {tax}   Totaal {gross}")
+        )
     }
 
     /// Title of the suppression dialog.
-    pub fn suppress_title(_: Language) -> &'static str {
-        "Suppress warning"
+    pub fn suppress_title(language: Language) -> &'static str {
+        sentence!(language, "Suppress warning", "Waarschuwing onderdrukken")
     }
 
     /// Which finding is being suppressed.
     pub fn suppress_target(language: Language, code: &str, field: &str) -> String {
-        match language {
-            Language::English | Language::Dutch => format!("{code} at {field}"),
-        }
+        sentence!(language, format!("{code} at {field}"), format!("{code} bij {field}"))
     }
 
     /// Label above the suppression reason.
-    pub fn reason_label(_: Language) -> &'static str {
-        "Reason"
+    pub fn reason_label(language: Language) -> &'static str {
+        sentence!(language, "Reason", "Reden")
     }
 
     /// Stores the suppression.
-    pub fn record_suppression_action(_: Language) -> &'static str {
-        "Record suppression"
+    pub fn record_suppression_action(language: Language) -> &'static str {
+        sentence!(language, "Record suppression", "Onderdrukking vastleggen")
     }
 
     /// Closes a dialog without acting.
-    pub fn cancel_action(_: Language) -> &'static str {
-        "Cancel"
+    pub fn cancel_action(language: Language) -> &'static str {
+        sentence!(language, "Cancel", "Annuleren")
     }
 
     /// Points the form at the field a finding names.
-    pub fn focus_action(_: Language) -> &'static str {
-        "Focus"
+    pub fn focus_action(language: Language) -> &'static str {
+        sentence!(language, "Focus", "Naar veld")
     }
 
     /// Records a reason for ignoring a warning.
-    pub fn suppress_action(_: Language) -> &'static str {
-        "Suppress"
+    pub fn suppress_action(language: Language) -> &'static str {
+        sentence!(language, "Suppress", "Onderdrukken")
     }
 
     /// The draft was stored.
-    pub fn draft_saved(_: Language) -> &'static str {
-        "Draft saved."
+    pub fn draft_saved(language: Language) -> &'static str {
+        sentence!(language, "Draft saved.", "Concept opgeslagen.")
     }
 
     /// The seller record was stored.
-    pub fn seller_created(_: Language) -> &'static str {
-        "Seller created."
+    pub fn seller_created(language: Language) -> &'static str {
+        sentence!(language, "Seller created.", "Verkoper aangemaakt.")
     }
 
     /// The customer record was stored.
-    pub fn customer_created(_: Language) -> &'static str {
-        "Customer created."
+    pub fn customer_created(language: Language) -> &'static str {
+        sentence!(language, "Customer created.", "Klant aangemaakt.")
     }
 
     /// The editor has no customer yet.
-    pub fn select_customer_required(_: Language) -> &'static str {
-        "Select a customer."
+    pub fn select_customer_required(language: Language) -> &'static str {
+        sentence!(language, "Select a customer.", "Kies een klant.")
     }
 
     /// The live totals cannot be calculated without a customer.
-    pub fn select_customer_to_validate(_: Language) -> &'static str {
-        "Select a customer to validate."
+    pub fn select_customer_to_validate(language: Language) -> &'static str {
+        sentence!(
+            language,
+            "Select a customer to validate.",
+            "Kies een klant om te controleren."
+        )
     }
 
     /// Suppressing a finding requires a seller.
-    pub fn seller_required_to_suppress(_: Language) -> &'static str {
-        "Create the seller before suppressing findings."
+    pub fn seller_required_to_suppress(language: Language) -> &'static str {
+        sentence!(
+            language,
+            "Create the seller before suppressing findings.",
+            "Maak eerst de verkoper aan voordat je bevindingen onderdrukt."
+        )
     }
 
     /// Suppressing a finding requires an open invoice.
-    pub fn invoice_required_to_suppress(_: Language) -> &'static str {
-        "Open an invoice before suppressing findings."
+    pub fn invoice_required_to_suppress(language: Language) -> &'static str {
+        sentence!(
+            language,
+            "Open an invoice before suppressing findings.",
+            "Open een factuur voordat je bevindingen onderdrukt."
+        )
     }
 
     /// A suppression needs a reason.
-    pub fn suppression_reason_required(_: Language) -> &'static str {
-        "A suppression reason is required."
+    pub fn suppression_reason_required(language: Language) -> &'static str {
+        sentence!(
+            language,
+            "A suppression reason is required.",
+            "Een reden voor onderdrukking is verplicht."
+        )
     }
 
     /// The suppression was recorded.
-    pub fn warning_suppressed(_: Language) -> &'static str {
-        "Warning suppressed with a recorded reason."
+    pub fn warning_suppressed(language: Language) -> &'static str {
+        sentence!(
+            language,
+            "Warning suppressed with a recorded reason.",
+            "Waarschuwing onderdrukt met een vastgelegde reden."
+        )
     }
 
     /// How many findings this document has suppressed, with reasons on file.
-    pub fn suppressed_warnings(_: Language, count: usize) -> String {
-        format!("{count} warning(s) suppressed with a recorded reason")
+    pub fn suppressed_warnings(language: Language, count: usize) -> String {
+        sentence!(
+            language,
+            format!("{count} warning(s) suppressed with a recorded reason"),
+            format!("{count} waarschuwing(en) onderdrukt met een vastgelegde reden")
+        )
     }
 
     /// A credit note was started from an invoice.
     pub fn credit_note_started(language: Language, number: &str) -> String {
-        match language {
-            Language::English | Language::Dutch => format!("Credit note for {number}"),
-        }
+        sentence!(
+            language,
+            format!("Credit note for {number}"),
+            format!("Creditnota bij {number}")
+        )
     }
 
     /// The number a credit note should correct was not found.
     pub fn invoice_not_found(language: Language, number: &str) -> String {
-        match language {
-            Language::English | Language::Dutch => format!("invoice {number} was not found"),
-        }
+        sentence!(
+            language,
+            format!("invoice {number} was not found"),
+            format!("factuur {number} is niet gevonden")
+        )
     }
 
     /// A draft handed to `start_credit_note` had no preceding invoice.
-    pub fn no_preceding_invoice(_: Language) -> &'static str {
-        "the draft has no preceding invoice"
+    pub fn no_preceding_invoice(language: Language) -> &'static str {
+        sentence!(
+            language,
+            "the draft has no preceding invoice",
+            "het concept heeft geen voorafgaande factuur"
+        )
     }
 
     /// Counts the findings that stopped an issue.
     pub fn blocking_findings(language: Language, count: usize) -> String {
-        match language {
-            Language::English | Language::Dutch => format!("{count} blocking finding(s); nothing was issued."),
-        }
+        sentence!(
+            language,
+            format!("{count} blocking finding(s); nothing was issued."),
+            format!("{count} blokkerende bevinding(en); er is niets verstuurd.")
+        )
     }
 
     /// Counts the conformance findings that stopped an issue.
     pub fn conformance_findings(language: Language, count: usize) -> String {
-        match language {
-            Language::English | Language::Dutch => format!("{count} conformance finding(s); nothing was issued."),
-        }
+        sentence!(
+            language,
+            format!("{count} conformance finding(s); nothing was issued."),
+            format!("{count} conformiteitsbevinding(en); er is niets verstuurd.")
+        )
     }
 
     /// The invoice was issued but no PDF could be made.
     pub fn issued_without_pdf(language: Language, error: &str) -> String {
-        match language {
-            Language::English | Language::Dutch => format!("Issued. PDF not rendered: {error}"),
-        }
+        sentence!(
+            language,
+            format!("Issued. PDF not rendered: {error}"),
+            format!("Verstuurd. PDF niet opgemaakt: {error}")
+        )
     }
 
     /// The PDF was made but could not be attached to the archive.
     pub fn issued_with_unattached_pdf(language: Language, error: &str) -> String {
-        match language {
-            Language::English | Language::Dutch => format!("Issued, but the PDF was not attached: {error}"),
-        }
+        sentence!(
+            language,
+            format!("Issued, but the PDF was not attached: {error}"),
+            format!("Verstuurd, maar de PDF is niet toegevoegd: {error}")
+        )
     }
 
     /// The PDF was written, and where.
     pub fn pdf_saved(language: Language, path: &str) -> String {
-        match language {
-            Language::English | Language::Dutch => format!("PDF saved to {path}"),
-        }
+        sentence!(
+            language,
+            format!("PDF saved to {path}"),
+            format!("PDF opgeslagen in {path}")
+        )
     }
 
     /// The PDF could not be written.
     pub fn pdf_save_failed(language: Language, error: &str) -> String {
-        match language {
-            Language::English | Language::Dutch => format!("Could not save the PDF: {error}"),
-        }
+        sentence!(
+            language,
+            format!("Could not save the PDF: {error}"),
+            format!("De PDF kon niet worden opgeslagen: {error}")
+        )
     }
 }
 
@@ -1350,91 +1440,99 @@ pub mod health {
     use super::Language;
 
     /// Title of the archive health panel.
-    pub fn panel_title(_: Language) -> &'static str {
-        "Archive health"
+    pub fn panel_title(language: Language) -> &'static str {
+        sentence!(language, "Archive health", "Gezondheid van het archief")
     }
 
     /// The archive's facts could not be read.
-    pub fn unreadable(_: Language) -> &'static str {
-        "Health could not be read from this archive."
+    pub fn unreadable(language: Language) -> &'static str {
+        sentence!(
+            language,
+            "Health could not be read from this archive.",
+            "De gezondheid kon niet uit dit archief worden gelezen."
+        )
     }
 
     /// Schema version.
     pub fn schema(language: Language, version: i64) -> String {
-        match language {
-            Language::English | Language::Dutch => format!("schema {version}"),
-        }
+        sentence!(language, format!("schema {version}"), format!("schema {version}"))
     }
 
     /// How large the archive is.
     pub fn size(language: Language, kibibytes: u64) -> String {
-        match language {
-            Language::English | Language::Dutch => format!("{kibibytes} KB"),
-        }
+        sentence!(language, format!("{kibibytes} KB"), format!("{kibibytes} KB"))
     }
 
     /// The audit chain, when it has links.
     pub fn chain(language: Language, events: i64) -> String {
-        match language {
-            Language::English | Language::Dutch => format!("audit: {events} events, head"),
-        }
+        sentence!(
+            language,
+            format!("audit: {events} events, head"),
+            format!("audit: {events} gebeurtenissen, kop")
+        )
     }
 
     /// An archive that has never recorded an event.
-    pub fn empty_chain(_: Language) -> &'static str {
-        "audit: empty chain"
+    pub fn empty_chain(language: Language) -> &'static str {
+        sentence!(language, "audit: empty chain", "audit: lege keten")
     }
 
     /// The payload audit failed.
     pub fn integrity_failed(language: Language, error: &str) -> String {
-        match language {
-            Language::English | Language::Dutch => format!("integrity: {error}"),
-        }
+        sentence!(language, format!("integrity: {error}"), format!("integriteit: {error}"))
     }
 
     /// Every payload verified.
     pub fn integrity_ok(language: Language, payloads: usize) -> String {
-        match language {
-            Language::English | Language::Dutch => format!("integrity: {payloads} payloads verified"),
-        }
+        sentence!(
+            language,
+            format!("integrity: {payloads} payloads verified"),
+            format!("integriteit: {payloads} payloads gecontroleerd")
+        )
     }
 
     /// Everything verified, but some blobs are unreferenced.
     pub fn integrity_with_orphans(language: Language, payloads: usize, orphans: usize) -> String {
-        match language {
-            Language::English | Language::Dutch => {
-                format!("integrity: {payloads} payloads verified, {orphans} unreferenced (wasted space only)")
-            }
-        }
+        sentence!(
+            language,
+            format!("integrity: {payloads} payloads verified, {orphans} unreferenced (wasted space only)"),
+            format!(
+                "integriteit: {payloads} payloads gecontroleerd, {orphans} ongerefereerd (alleen verspilde ruimte)"
+            )
+        )
     }
 
     /// The audit has not been run.
-    pub fn not_checked(_: Language) -> &'static str {
-        "integrity: not checked"
+    pub fn not_checked(language: Language) -> &'static str {
+        sentence!(language, "integrity: not checked", "integriteit: niet gecontroleerd")
     }
 
     /// When the audit last ran.
     pub fn checked(language: Language, at: &str) -> String {
-        match language {
-            Language::English | Language::Dutch => format!("checked {at}"),
-        }
+        sentence!(language, format!("checked {at}"), format!("gecontroleerd {at}"))
     }
 
     /// The newest backup beside the archive.
     pub fn last_backup(language: Language, name: &str, kibibytes: u64) -> String {
-        match language {
-            Language::English | Language::Dutch => format!("last backup: {name} ({kibibytes} KB)"),
-        }
+        sentence!(
+            language,
+            format!("last backup: {name} ({kibibytes} KB)"),
+            format!("laatste back-up: {name} ({kibibytes} KB)")
+        )
     }
 
     /// There is no backup yet.
-    pub fn no_backup(_: Language) -> &'static str {
-        "last backup: none — run bonk backup"
+    pub fn no_backup(language: Language) -> &'static str {
+        sentence!(
+            language,
+            "last backup: none — run bonk backup",
+            "laatste back-up: geen — voer bonk backup uit"
+        )
     }
 
     /// Runs the payload audit now.
-    pub fn check_action(_: Language) -> &'static str {
-        "Check integrity now"
+    pub fn check_action(language: Language) -> &'static str {
+        sentence!(language, "Check integrity now", "Nu integriteit controleren")
     }
 }
 
@@ -1443,58 +1541,70 @@ pub mod security {
     use super::Language;
 
     /// Title of the security panel.
-    pub fn panel_title(_: Language) -> &'static str {
-        "Security"
+    pub fn panel_title(language: Language) -> &'static str {
+        sentence!(language, "Security", "Beveiliging")
     }
 
     /// Why the current passphrase is asked for again.
-    pub fn note(_: Language) -> &'static str {
-        "A credential change asks for the current passphrase again."
+    pub fn note(language: Language) -> &'static str {
+        sentence!(
+            language,
+            "A credential change asks for the current passphrase again.",
+            "Bij een wijziging van inloggegevens wordt opnieuw om de huidige wachtwoordzin gevraagd."
+        )
     }
 
     /// The current passphrase.
-    pub fn current_label(_: Language) -> &'static str {
-        "Current passphrase"
+    pub fn current_label(language: Language) -> &'static str {
+        sentence!(language, "Current passphrase", "Huidige wachtwoordzin")
     }
 
     /// Rewraps the data key.
-    pub fn change_action(_: Language) -> &'static str {
-        "Change passphrase"
+    pub fn change_action(language: Language) -> &'static str {
+        sentence!(language, "Change passphrase", "Wachtwoordzin wijzigen")
     }
 
     /// Adds or replaces the recovery key.
-    pub fn add_key_action(_: Language) -> &'static str {
-        "Add recovery key"
+    pub fn add_key_action(language: Language) -> &'static str {
+        sentence!(language, "Add recovery key", "Herstelsleutel toevoegen")
     }
 
     /// Acknowledges a shown key.
-    pub fn done_action(_: Language) -> &'static str {
-        "Done"
+    pub fn done_action(language: Language) -> &'static str {
+        sentence!(language, "Done", "Klaar")
     }
 
     /// The key was added.
-    pub fn key_added(_: Language) -> &'static str {
-        "Recovery key added."
+    pub fn key_added(language: Language) -> &'static str {
+        sentence!(language, "Recovery key added.", "Herstelsleutel toegevoegd.")
     }
 
     /// The passphrase was changed.
-    pub fn passphrase_changed(_: Language) -> &'static str {
-        "Passphrase changed. Backups made before this change still need the old one."
+    pub fn passphrase_changed(language: Language) -> &'static str {
+        sentence!(
+            language,
+            "Passphrase changed. Backups made before this change still need the old one.",
+            "Wachtwoordzin gewijzigd. Back-ups van vóór deze wijziging vragen nog om de oude."
+        )
     }
 
     /// The passphrase field is empty when a key is requested.
-    pub fn enter_current(_: Language) -> &'static str {
-        "Enter the current passphrase first."
+    pub fn enter_current(language: Language) -> &'static str {
+        sentence!(
+            language,
+            "Enter the current passphrase first.",
+            "Vul eerst de huidige wachtwoordzin in."
+        )
     }
 
     /// Keeps the key in this device's credential store.
-    pub fn remember_action(_: Language) -> &'static str {
-        "Remember this device"
+    pub fn remember_action(language: Language) -> &'static str {
+        sentence!(language, "Remember this device", "Dit apparaat onthouden")
     }
 
     /// Stops this device from keeping the key.
-    pub fn forget_action(_: Language) -> &'static str {
-        "Forget this device"
+    pub fn forget_action(language: Language) -> &'static str {
+        sentence!(language, "Forget this device", "Dit apparaat vergeten")
     }
 
     /// The switch's label: what pressing it will do.
@@ -1511,38 +1621,66 @@ pub mod security {
     }
 
     /// Tooltip when the switch is off.
-    pub fn remember_hint(_: Language) -> &'static str {
-        "Keep the archive key in this machine's credential store, so your login opens it instead of the passphrase."
+    pub fn remember_hint(language: Language) -> &'static str {
+        sentence!(
+            language,
+            "Keep the archive key in this machine's credential store, so your login opens it instead of the passphrase.",
+            "Bewaar de archiefsleutel in de inloggegevens van deze machine, zodat je aanmelding hem opent in plaats van de wachtwoordzin."
+        )
     }
 
     /// Tooltip when the switch is on.
-    pub fn forget_hint(_: Language) -> &'static str {
-        "Remove the stored key; the passphrase opens this archive again."
+    pub fn forget_hint(language: Language) -> &'static str {
+        sentence!(
+            language,
+            "Remove the stored key; the passphrase opens this archive again.",
+            "Verwijder de bewaarde sleutel; de wachtwoordzin opent dit archief weer."
+        )
     }
 
     /// What the switch means while it is on.
-    pub fn device_on_note(_: Language) -> &'static str {
-        "On — this archive opens with your login, not the passphrase."
+    pub fn device_on_note(language: Language) -> &'static str {
+        sentence!(
+            language,
+            "On — this archive opens with your login, not the passphrase.",
+            "Aan — dit archief opent met je aanmelding, niet met de wachtwoordzin."
+        )
     }
 
     /// What the switch means while it is off.
-    pub fn device_off_note(_: Language) -> &'static str {
-        "Off — the passphrase opens this archive."
+    pub fn device_off_note(language: Language) -> &'static str {
+        sentence!(
+            language,
+            "Off — the passphrase opens this archive.",
+            "Uit — de wachtwoordzin opent dit archief."
+        )
     }
 
     /// The device now holds the key.
-    pub fn device_remembered(_: Language) -> &'static str {
-        "This device now opens the archive without the passphrase; your login protects it while it does."
+    pub fn device_remembered(language: Language) -> &'static str {
+        sentence!(
+            language,
+            "This device now opens the archive without the passphrase; your login protects it while it does.",
+            "Dit apparaat opent het archief nu zonder de wachtwoordzin; je aanmelding beschermt het zolang dat duurt."
+        )
     }
 
     /// The device no longer holds it.
-    pub fn device_forgotten(_: Language) -> &'static str {
-        "This device has forgotten the key; the passphrase is needed again."
+    pub fn device_forgotten(language: Language) -> &'static str {
+        sentence!(
+            language,
+            "This device has forgotten the key; the passphrase is needed again.",
+            "Dit apparaat is de sleutel vergeten; de wachtwoordzin is weer nodig."
+        )
     }
 
     /// There was nothing to forget.
-    pub fn device_no_key(_: Language) -> &'static str {
-        "This device held no key for the archive."
+    pub fn device_no_key(language: Language) -> &'static str {
+        sentence!(
+            language,
+            "This device held no key for the archive.",
+            "Dit apparaat had geen sleutel voor het archief."
+        )
     }
 }
 
@@ -1556,29 +1694,100 @@ pub mod problem {
     use crux::DomainError;
 
     /// A sentence for a domain error.
-    pub fn domain(_: Language, error: &DomainError) -> String {
+    pub fn domain(language: Language, error: &DomainError) -> String {
         match error {
-            DomainError::InvalidCurrency(value) => format!("{value} is not a currency code."),
-            DomainError::CurrencyMismatch { left, right } => {
-                format!("Amounts in {left} and {right} cannot be added up.")
+            DomainError::InvalidCurrency(value) => sentence!(
+                language,
+                format!("{value} is not a currency code."),
+                format!("{value} is geen valutacode.")
+            ),
+            DomainError::CurrencyMismatch { left, right } => sentence!(
+                language,
+                format!("Amounts in {left} and {right} cannot be added up."),
+                format!("Bedragen in {left} en {right} kunnen niet worden opgeteld.")
+            ),
+            DomainError::AmountOverflow => sentence!(
+                language,
+                "The amount is too large.".to_owned(),
+                "Het bedrag is te groot.".to_owned()
+            ),
+            DomainError::InvalidDecimal(value) => {
+                sentence!(
+                    language,
+                    format!("{value} is not a number."),
+                    format!("{value} is geen getal.")
+                )
             }
-            DomainError::AmountOverflow => "The amount is too large.".to_owned(),
-            DomainError::InvalidDecimal(value) => format!("{value} is not a number."),
-            DomainError::InvalidScale(places) => format!("{places} decimal places cannot be stored."),
-            DomainError::InvalidQuantity(value) => format!("{value} is not a quantity."),
-            DomainError::InvalidUnitCode(value) => format!("{value} is not a unit code."),
-            DomainError::InvalidVatRate(value) => format!("{value} is not a VAT rate."),
+            DomainError::InvalidScale(places) => sentence!(
+                language,
+                format!("{places} decimal places cannot be stored."),
+                format!("{places} decimalen kunnen niet worden opgeslagen.")
+            ),
+            DomainError::InvalidQuantity(value) => sentence!(
+                language,
+                format!("{value} is not a quantity."),
+                format!("{value} is geen hoeveelheid.")
+            ),
+            DomainError::InvalidUnitCode(value) => sentence!(
+                language,
+                format!("{value} is not a unit code."),
+                format!("{value} is geen eenheidscode.")
+            ),
+            DomainError::InvalidVatRate(value) => sentence!(
+                language,
+                format!("{value} is not a VAT rate."),
+                format!("{value} is geen btw-tarief.")
+            ),
             DomainError::InvalidVatTreatment { category, basis_points } => {
-                format!("VAT category {category} cannot use {}%.", percent(*basis_points))
+                let rate = percent(*basis_points);
+                sentence!(
+                    language,
+                    format!("VAT category {category} cannot use {rate}%."),
+                    format!("Btw-categorie {category} kan niet met {rate}%.")
+                )
             }
-            DomainError::InvalidDate(value) => format!("{value} is not a date."),
-            DomainError::InvalidCountry(value) => format!("{value} is not a country code."),
-            DomainError::InvalidPhone(value) => format!("{value} is not a phone number."),
-            DomainError::EmptyInvoice => "The invoice has no lines.".to_owned(),
-            DomainError::DateOutOfRange => "The date is out of range.".to_owned(),
-            DomainError::InvalidId(value) => format!("{value} is not an identifier."),
-            DomainError::DivisionByZero => "A division by zero was attempted.".to_owned(),
-            DomainError::EmptySum => "An empty set of amounts cannot be added up.".to_owned(),
+            DomainError::InvalidDate(value) => {
+                sentence!(
+                    language,
+                    format!("{value} is not a date."),
+                    format!("{value} is geen datum.")
+                )
+            }
+            DomainError::InvalidCountry(value) => sentence!(
+                language,
+                format!("{value} is not a country code."),
+                format!("{value} is geen landcode.")
+            ),
+            DomainError::InvalidPhone(value) => sentence!(
+                language,
+                format!("{value} is not a phone number."),
+                format!("{value} is geen telefoonnummer.")
+            ),
+            DomainError::EmptyInvoice => sentence!(
+                language,
+                "The invoice has no lines.".to_owned(),
+                "De factuur heeft geen regels.".to_owned()
+            ),
+            DomainError::DateOutOfRange => sentence!(
+                language,
+                "The date is out of range.".to_owned(),
+                "De datum valt buiten het bereik.".to_owned()
+            ),
+            DomainError::InvalidId(value) => sentence!(
+                language,
+                format!("{value} is not an identifier."),
+                format!("{value} is geen identificatie.")
+            ),
+            DomainError::DivisionByZero => sentence!(
+                language,
+                "A division by zero was attempted.".to_owned(),
+                "Er werd door nul gedeeld.".to_owned()
+            ),
+            DomainError::EmptySum => sentence!(
+                language,
+                "An empty set of amounts cannot be added up.".to_owned(),
+                "Een lege reeks bedragen kan niet worden opgeteld.".to_owned()
+            ),
         }
     }
 
@@ -1594,44 +1803,96 @@ pub mod problem {
     }
 
     /// The invoice has no customer yet.
-    pub fn select_customer(_: Language) -> &'static str {
-        "Select a customer."
+    pub fn select_customer(language: Language) -> &'static str {
+        sentence!(language, "Select a customer.", "Kies een klant.")
     }
 
     /// A line without a description.
-    pub fn missing_item_name(_: Language) -> &'static str {
-        "the item name is required."
+    pub fn missing_item_name(language: Language) -> &'static str {
+        sentence!(language, "the item name is required.", "de omschrijving is verplicht.")
     }
 
     /// The invoice date does not parse.
-    pub fn bad_issue_date(_: Language) -> &'static str {
-        "The invoice date must be YYYY-MM-DD."
+    pub fn bad_issue_date(language: Language) -> &'static str {
+        sentence!(
+            language,
+            "The invoice date must be YYYY-MM-DD.",
+            "De factuurdatum moet JJJJ-MM-DD zijn."
+        )
     }
 
     /// The due date does not parse.
-    pub fn bad_due_date(_: Language) -> &'static str {
-        "The due date must be YYYY-MM-DD."
+    pub fn bad_due_date(language: Language) -> &'static str {
+        sentence!(
+            language,
+            "The due date must be YYYY-MM-DD.",
+            "De vervaldatum moet JJJJ-MM-DD zijn."
+        )
     }
 
     /// The delivery date does not parse.
-    pub fn bad_delivery_date(_: Language) -> &'static str {
-        "The delivery date must be YYYY-MM-DD."
+    pub fn bad_delivery_date(language: Language) -> &'static str {
+        sentence!(
+            language,
+            "The delivery date must be YYYY-MM-DD.",
+            "De leverdatum moet JJJJ-MM-DD zijn."
+        )
     }
 
     /// There are more lines than a document can carry.
-    pub fn too_many_lines(_: Language) -> &'static str {
-        "Too many lines."
+    pub fn too_many_lines(language: Language) -> &'static str {
+        sentence!(language, "Too many lines.", "Te veel regels.")
     }
 
     /// A problem on one line, with the line named first.
-    pub fn on_line(_: Language, position: u32, problem: &str) -> String {
-        format!("Line {position}: {problem}")
+    pub fn on_line(language: Language, position: u32, problem: &str) -> String {
+        sentence!(
+            language,
+            format!("Line {position}: {problem}"),
+            format!("Regel {position}: {problem}")
+        )
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// No string is left with an English-only column.
+    ///
+    /// A match arm that names both languages and returns the same sentence is a
+    /// translation nobody wrote, and a parameter that ignores the language is a
+    /// string that never asks. The two exceptions are language-neutral by nature:
+    /// the keyboard hint and the matched-over-total counter.
+    #[test]
+    fn no_string_falls_back_to_english() {
+        let source = include_str!("text.rs");
+
+        // Built rather than written out, so this test does not find itself.
+        let fallback = concat!("Language::English | ", "Language::Dutch");
+        assert!(!source.contains(fallback), "a Dutch arm still copies the English one");
+
+        let ignored = concat!("(_: ", "Language");
+        assert_eq!(
+            source.matches(ignored).count(),
+            2,
+            "only the shortcut hint and the count line are language-neutral"
+        );
+    }
+
+    #[test]
+    fn the_dutch_table_says_something_different() {
+        let english = Language::English;
+        let dutch = Language::Dutch;
+
+        assert_eq!(tabs::search(english), "Search");
+        assert_eq!(tabs::search(dutch), "Zoeken");
+        assert_eq!(editor::issue_action(dutch), "Versturen");
+        assert!(find::columns(dutch).contains(&"Nummer"));
+        assert!(editor::weekdays(dutch).contains(&"ma"));
+        assert_ne!(shell::tagline(english), shell::tagline(dutch));
+        assert_eq!(settings::language(dutch), "Taal");
+    }
 
     #[test]
     fn a_problem_is_a_sentence_not_the_log_wording() {
