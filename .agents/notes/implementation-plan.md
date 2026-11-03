@@ -184,11 +184,12 @@ test cannot pass vacuously. This covers process death only: power loss, a torn
 sector below SQLite, and a disk that reorders writes are out of reach here and
 remain a hardware/OS assumption.
 
-**CI, 2026-11-03.** Run #15 passed in 7m 0s: the test matrix on ubuntu, macos, and
-windows, the unencrypted fallback build, and the licence/advisory check
-(<https://github.com/sdgoij/bonk/actions/runs/41646658591>). That run was on the
-commit before the crash test, so the M0 criteria are complete locally and the
-next push is the one that carries the crash test through CI.
+**CI, 2026-11-03.** Run [#15](https://github.com/sdgoij/bonk/actions/runs/41646658591)
+passed in 7m 0s: the test matrix on ubuntu, macos, and windows, the unencrypted
+fallback build, and the licence/advisory check. Run
+[#16](https://github.com/sdgoij/bonk/actions/runs/41650629025) then passed on the
+crash-test commit, so the write-ahead-log assumption behind that test holds on
+macOS and Linux as well as Windows. M0's exit criteria are met.
 
 ---
 
