@@ -173,8 +173,19 @@ rejection, and an encrypted `VACUUM INTO` backup), `app`, `cli`, CI, and ADRs
 001–012. Spike 3 is closed (`.agents/notes/spikes/sqlcipher.md`): the Windows
 build needs Strawberry Perl, and `tools/cargo-strawberry.sh` is the documented
 entry point. Spikes 1 and 2 remain open and are scheduled before M4 and M2.
-Still open from the exit criteria: crash-during-write torture, and the CI run
-on three OSes (workflow written, not yet executed).
+
+**Crash-during-write, 2026-11-03.** `store/tests/crash.rs` spawns
+`store/src/bin/crash-writer.rs` and kills it without warning twelve times on the
+same archive, each kill landing while the write-ahead log still holds frames.
+Every reopen must pass `integrity_check`, `verify_chain`, the whole-archive audit,
+and a check that each surviving draft kept every line its note records. A control
+test flips the page header and requires the same checks to reject the file, so the
+test cannot pass vacuously. This covers process death only: power loss, a torn
+sector below SQLite, and a disk that reorders writes are out of reach here and
+remain a hardware/OS assumption.
+
+Still open from the exit criteria: the CI run on three OSes (workflow written, not
+yet executed).
 
 ---
 
