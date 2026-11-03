@@ -1613,7 +1613,7 @@ fail CI.
 | PDF | veraPDF in CI | PDF/A-3 validity for every template × profile |
 | Storage | Fixture DBs from every release | Migrations, FTS integrity, trigger enforcement |
 | E2E | `assert_cmd` on `cli` | Issue → export → verify → evidence bundle |
-| UI smoke | Scripted egui harness | Frame time, no panics on empty states |
+| UI smoke | Scripted egui harness | Frame time, no panics on empty states, nothing painted past its layout at the minimum window on a 100/125/150 % display |
 
 ### 16.2 CI pipeline
 

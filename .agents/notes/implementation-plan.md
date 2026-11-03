@@ -751,6 +751,18 @@ from the index, so a rename shows immediately; a trigger writes the same name
 back into the index, or the words that find the document would still be the old
 ones.
 
+**The layout is checked at 125 % and 150 % (2026-11-03).** Points are logical, so
+a scale factor changes how many physical pixels a point gets and not how much
+room a row has; what a scaled laptop panel really changes is how many points the
+window offers. `the_layout_survives_a_scaled_display` therefore draws every tab
+at the minimum window the app allows (900 × 560 points) at 100 %, 125 %, and
+150 %, with a result folded open so the facts, the line table, the artefact
+hashes, and the history are on screen, and measures what egui was asked to
+paint: no shape may reach past the rectangle the layout gave it, and the worst
+overflow at 125 % and 150 % must equal the one at 100 %. The measure was proven
+against a deliberately too-narrow window, where it reports the first overflowing
+row, so it cannot pass by looking at a frame that drew nothing.
+
 ---
 
 ### M6 — Security, keys, audit, backup (3 weeks, part of v1.0)

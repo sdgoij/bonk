@@ -4382,6 +4382,156 @@ mod tests {
         }
     }
 
+    /// Draws one tab at a given window size and display scale, and returns what
+    /// egui was asked to paint.
+    ///
+    /// Two passes: the first lays text out for the first time, and the second is
+    /// the steady state a user actually sees.
+    fn draw_at(
+        workspace: &mut Workspace,
+        session: &mut Session,
+        tab: Tab,
+        size: egui::Vec2,
+        scale: f32,
+    ) -> Vec<egui::epaint::ClippedShape> {
+        workspace.tab = tab;
+        let context = egui::Context::default();
+        context.set_pixels_per_point(scale);
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, size);
+        let mut shapes = Vec::new();
+        for _ in 0..2 {
+            let mut appearance = egui::ThemePreference::System;
+            let output = context.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(screen),
+                    ..Default::default()
+                },
+                |ui| {
+                    let _ = workspace.ui(ui, session, &mut appearance, &mut Language::default());
+                },
+            );
+            shapes = output.shapes.clone();
+            output.drop_without_applying_deltas();
+        }
+        shapes
+    }
+
+    /// How far the widest shape reaches past the rectangle it was clipped to.
+    ///
+    /// A widget that is given less room than it wants still paints its whole
+    /// content; the clip rectangle is what the layout actually granted it. The
+    /// difference is how much of the row is outside the window.
+    fn worst_overflow(shapes: &[egui::epaint::ClippedShape]) -> f32 {
+        shapes.iter().fold(0.0_f32, |worst, clipped| {
+            let content = clipped.shape.visual_bounding_rect();
+            let clip = clipped.clip_rect;
+            let right = content.max.x - clip.max.x;
+            let left = clip.min.x - content.min.x;
+            worst.max(right).max(0.0).max(if left > 0.0 { left } else { 0.0 })
+        })
+    }
+
+    /// A scaled display must not change the layout, and the layout must fit the
+    /// smallest window the app allows.
+    ///
+    /// Points are logical, so 125 % and 150 % draw the same widgets at the same
+    /// point size; what a scaled laptop panel changes is how many points the
+    /// window has. So the check runs at the minimum window, where a row that
+    /// needs more width than it has would show as content painted past its clip.
+    ///
+    /// The densest state is drawn too: a result folded open carries the facts,
+    /// the line table, the artefact hashes, and the history, which is where a row
+    /// would first run out of room.
+    #[test]
+    fn the_layout_survives_a_scaled_display() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let mut session = Session::create(
+            dir.path().join("bonk.db"),
+            dir.path().join("keystore.bin"),
+            "passphrase",
+        )
+        .unwrap();
+        let seller = seller();
+        insert_seller(session.database().connection(), &seller, NOW).unwrap();
+        let customer = CustomerRecord {
+            id: CustomerId::new(),
+            party: Party::new("Acme BV", Address::new("Rotterdam", CountryCode::NL)),
+        };
+        insert_customer(session.database().connection(), &customer, NOW).unwrap();
+
+        let mut form = editor();
+        form.customer = Some(customer.id);
+        let draft = build_draft(&form, &seller).unwrap();
+        insert_draft(session.database().connection(), &draft, NOW).unwrap();
+        let issued = issue_draft(
+            session.database_mut().connection_mut(),
+            IssueRequest {
+                draft_id: draft.id,
+                actor: "test",
+                device: "test",
+                renderer_version: "test",
+                now: NOW,
+            },
+            |_| Ok(b"<Invoice/>".to_vec()),
+        )
+        .unwrap();
+
+        let mut workspace = Workspace::new(&session).unwrap();
+        // Fold the result open and ask for it, so the Search tab draws its panel.
+        workspace.search.run(session.database(), seller.id).unwrap();
+        workspace.search.opened = store::archive::load(session.database().connection(), issued.id).unwrap();
+
+        let minimum = egui::vec2(900.0, 560.0);
+        for tab in [Tab::Search, Tab::Customers, Tab::Settings] {
+            let unscaled = draw_at(&mut workspace, &mut session, tab, minimum, 1.0);
+            assert!(!unscaled.is_empty(), "{tab:?} has to draw something to be measured");
+            let baseline = worst_overflow(&unscaled);
+            for scale in [1.25, 1.5] {
+                let scaled = draw_at(&mut workspace, &mut session, tab, minimum, scale);
+                let overflow = worst_overflow(&scaled);
+                let percent = scale * 100.0;
+                assert!(
+                    overflow < 1.0,
+                    "{tab:?} at {percent:.0} % paints {overflow} pt past the layout it was given"
+                );
+                assert!(
+                    (overflow - baseline).abs() < 1.0,
+                    "{tab:?} overflows {overflow} pt at {percent:.0} % but {baseline} pt at 100 %"
+                );
+            }
+        }
+    }
+
+    /// The measure has to be able to see an overflow, or the check above would
+    /// pass because it looked at nothing.
+    #[test]
+    fn an_overflow_is_visible_to_the_measure() {
+        let clip = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(10.0, 10.0));
+        let shape = |rect: egui::Rect| egui::epaint::ClippedShape {
+            clip_rect: clip,
+            shape: egui::Shape::rect_filled(rect, 0.0, egui::Color32::WHITE),
+            transform_after_tessellation: egui::emath::TSTransform::IDENTITY,
+        };
+
+        let inside = shape(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(8.0, 8.0)));
+        assert!(
+            worst_overflow(&[inside]) < 1.0,
+            "a shape within its clip is not an overflow"
+        );
+
+        let past_the_edge = shape(egui::Rect::from_min_size(
+            egui::Pos2::new(5.0, 0.0),
+            egui::vec2(20.0, 8.0),
+        ));
+        assert!((worst_overflow(&[past_the_edge]) - 15.0).abs() < 0.01);
+
+        let past_the_left = shape(egui::Rect::from_min_size(
+            egui::Pos2::new(-4.0, 0.0),
+            egui::vec2(8.0, 8.0),
+        ));
+        assert!((worst_overflow(&[past_the_left]) - 4.0).abs() < 0.01);
+    }
+
     #[test]
     fn the_workspace_draws_without_panicking() {
         let dir = tempfile::TempDir::new().unwrap();
