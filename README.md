@@ -239,6 +239,10 @@ Before the shell, the window shows a lock screen: the archive path, the keystore
 path, the passphrase, and the recovery route. Both paths have the platform's file
 picker beside a field that stays editable. `bonk gui --db … --keystore …` starts
 the window on that archive; without the flags it uses the platform data directory.
+A passphrase given on the command line is deliberately ignored by the window:
+typing it at the lock screen is the only way in, and **Remember this device** is
+the supported shortcut for repeat use. Auto-unlocking from a flag or
+`BONK_PASSPHRASE` would turn an unattended launch into an open archive.
 
 The window is a three-tab shell: a thin icon rail on the left switches **Search**,
 **Customers**, and **Settings**, with the content inset from the rail so tables do
