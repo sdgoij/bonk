@@ -1299,6 +1299,18 @@ impl eframe::App for BonkApp {
         storage.set_string(text::STORAGE_KEY, self.language.name().to_owned());
         store_watch(storage, self.watch_folder.as_deref(), self.watch_enabled);
     }
+
+    /// Keeps egui's memory out of the settings file.
+    ///
+    /// eframe serialises the whole memory blob on every autosave, and that blob
+    /// changes while the user types, scrolls, or focuses a field — so persisting
+    /// it turns into a disk write every 30 seconds of normal use. What it buys
+    /// here is a remembered scroll offset and text cursor; the table's column
+    /// widths are this app's own state, not egui's. That is not worth the write
+    /// amplification on an archive that is meant to sit quietly on a local disk.
+    fn persist_egui_memory(&self) -> bool {
+        false
+    }
 }
 
 /// Launches the desktop window against `database` and `keystore`.
@@ -1833,6 +1845,15 @@ mod tests {
         // storage dirty even when it found nothing.
         store_watch(&mut storage, None, false);
         assert_eq!(storage.removals, 1, "a missing key is not removed again");
+    }
+
+    /// eframe serialises the whole egui memory on every autosave, and it changes
+    /// while the user types and scrolls. Persisting it would write the settings
+    /// file every 30 seconds of use, which is not worth a remembered cursor.
+    #[test]
+    fn the_window_keeps_egui_memory_out_of_its_settings_file() {
+        use eframe::App as _;
+        assert!(!BonkApp::default().persist_egui_memory());
     }
 
     /// A template beside the archive is one a document can be drawn with, and the

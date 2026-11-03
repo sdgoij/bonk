@@ -284,7 +284,10 @@ hashes, paths — are. Light and dark share one layout. The folder watcher's fol
 and its on/off switch are a per-device preference, kept in the window's own
 storage rather than in the archive, so they survive a restart and a lock; the
 first poll after reopening primes the folder, so a restored watch still never
-imports its history.
+imports its history. That file is written when a value in it changes, not every
+time the autosave timer fires: egui's own memory is left out of it, because it
+changes while you type and scroll and would otherwise rewrite the file every 30
+seconds.
 
 Peppol BIS 3.0 requires an endpoint identifier for both parties and a buyer or
 order reference, and a Dutch seller also needs a street, a post code, and a KvK
