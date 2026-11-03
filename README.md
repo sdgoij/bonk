@@ -123,13 +123,17 @@ README, and `LICENSE.md`:
 |--------|--------|---------|
 | `x86_64-unknown-linux-gnu` | `ubuntu-latest` | `bonk-x86_64-unknown-linux-gnu.tar.gz` |
 | `aarch64-unknown-linux-gnu` | `ubuntu-24.04-arm` | `bonk-aarch64-unknown-linux-gnu.tar.gz` |
-| `aarch64-apple-darwin` | `macos-latest` | `bonk-aarch64-apple-darwin.tar.gz` |
+| `aarch64-apple-darwin` | `macos-15-intel` | `bonk-aarch64-apple-darwin.tar.gz` |
 | `x86_64-apple-darwin` | `macos-15-intel` | `bonk-x86_64-apple-darwin.tar.gz` |
 | `x86_64-pc-windows-msvc` | `windows-latest` | `bonk-x86_64-pc-windows-msvc.zip` |
 
-Each build runs on a runner of its own architecture and refuses to continue if
-the runner's host triple is not the target it was asked for, so an archive cannot
-be labelled with an architecture it does not contain. The conformance stage runs
+Linux and Windows build on a runner of their own architecture and refuse to
+continue if the runner's host triple is not the target they were asked for. Both
+macOS targets are cross-built from one Intel runner, because the arm64 macOS pool
+runs dry for long stretches and a release must not wait on a queue; the Intel
+binary is smoke-tested and the arm64 one is verified with `lipo -archs`, so
+neither archive can be labelled with an architecture it does not contain. The
+test matrix runs on Intel macOS for the same reason. The conformance stage runs
 the shipped Linux binary over the EN 16931 corpus and the official validator
 before the release is created.
 

@@ -1233,15 +1233,18 @@ Developer ID, a company VAT number for the Peppol provider contract, and a
 trademark/name check.
 
 **Status, 2026-11-03.** The first pipeline is in place: checks (fmt, clippy,
-deny) → the three-OS tests plus the unencrypted build → five release builds on
-native runners (Linux x86_64/aarch64, macOS arm64/Intel, Windows x86_64) → the
-conformance gate, which runs the *shipped* Linux binary through the EN 16931
-corpus and Mustang → a GitHub release for any tag starting with `v`. Each archive
-holds the binary, `README.md`, and `LICENSE.md`, and each build refuses to
-continue when its runner's host triple differs from the target it was asked for,
-so an archive cannot be labelled with an architecture it does not contain. Still
-missing against the table above, and required before v1.0: installers, code
-signing, notarisation, the SBOM and SHA-256 sums, and the signed update manifest.
+deny) → the three-OS tests plus the unencrypted build → four release builds (Linux
+x86_64/aarch64, Windows x86_64, and both Apple targets cross-compiled from one
+Intel macOS runner) → the conformance gate, which runs the *shipped* Linux binary
+through the EN 16931 corpus and Mustang → a GitHub release for any tag starting
+with `v`. Each archive holds the binary, `README.md`, and `LICENSE.md`. Linux and
+Windows builds fail when their runner's host triple differs from the target they
+were asked for; the macOS job verifies the cross-built arm64 binary with `lipo`
+and smoke-tests the Intel one, so no archive is labelled with an architecture it
+does not contain. The arm64 macOS runner pool is deliberately out of the critical
+path: it had already left a release queued with no machine twice. Still missing
+against the table above, and required before v1.0: installers, code signing,
+notarisation, the SBOM and SHA-256 sums, and the signed update manifest.
 
 ---
 
