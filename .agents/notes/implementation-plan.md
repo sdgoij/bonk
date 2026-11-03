@@ -378,10 +378,38 @@ equals quantity times price, an invoice tax total that no longer matches the
 breakdown — and asserts the exact set of rules the validator fires: BR-CO-25, then
 BR-CO-13 and BR-S-08, then BR-CO-14 and BR-CO-15. The fixtures are mutations of the
 writer's own output, so they cannot drift from what it produces, and the gate was
-checked against a deliberately wrong expectation to prove it can fail. What is
-still not automated is comparing our engine's findings with the oracle's for the
-same input; today the oracle's set is the expectation, and our engine is checked
-separately by the T1 and BR tests.
+checked against a deliberately wrong expectation to prove it can fail.
+
+**Both engines now read the same document (2026-11-03).** `xtask compare` runs our
+rule engine and the official validator over one directory and classifies each
+document: agreeing rules, **gaps** (a rule only the authority reports — work we
+have not done) and **extras** (a rule only we report — a finding that would block
+an invoice the authority accepts). The gate fails on extras only, because a gap
+is a backlog item and an extra is a defect. Over the 66-document corpus and the
+four mutated fixtures both engines report exactly the same rule sets: **66/66
+agree, 0 gaps, 0 extras**.
+
+Getting there needed three things the engine had been missing, all found by the
+comparison rather than by a test:
+
+*UBL → the semantic view.* `conformance::ImportedSemantics` turns what
+`syntax::read` extracted into the same `SemanticInvoice` the composer uses, so
+the same rule code runs over a draft and over a received document. Its lines are
+the document's claims, not a recomputation.
+
+*BT-106 and BT-109 are different statements.* The reader fills `totals.net` from
+BT-109, and our rules had no way to see the document's own sum of line nets. A
+received document is read with `line_extension_total` (BT-106) kept apart, and
+the semantic view carries the stated line amounts (BT-131), so BR-CO-10 and
+BR-CO-13 compare what the document says with what it says elsewhere. This is what
+makes the `line-net` fixture agree: our engine now reports BR-CO-13 and BR-S-08
+where before it reported nothing.
+
+*BT-120/BT-121 live on the breakdown.* The standard states an exemption reason
+once per VAT category; our model keeps it on the line treatment. The reader now
+fills the line's reason from its category's subtotal, which removed 24 false
+positives — every K, G, and AE invoice in the corpus was being reported as
+missing a reason it had.
 
 ---
 

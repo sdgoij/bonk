@@ -50,6 +50,18 @@ pub struct SemanticInvoice<'a> {
     pub rounding: Money,
     /// Amount due for payment (BT-115).
     pub amount_due: Money,
+    /// Sum of line net amounts as the document states it (BT-106).
+    ///
+    /// `None` for a draft, whose totals are computed from its lines and cannot
+    /// disagree with them. A received document states its own totals, and the
+    /// difference between them is exactly what validating it is for.
+    pub stated_line_total: Option<Money>,
+    /// Line net amounts as the document states them (BT-131), one per line.
+    ///
+    /// `None` for a draft, where each line net is `quantity × price` and is
+    /// computed. A received document's line nets are claims, so the rules that
+    /// compare them with its own totals have something to compare.
+    pub stated_line_nets: Option<&'a [Money]>,
     /// Profile whose rules and specification identifier apply.
     pub profile: Profile,
 }
@@ -92,7 +104,20 @@ impl<'a> SemanticInvoice<'a> {
             paid: zero,
             rounding: zero,
             amount_due,
+            stated_line_total: None,
+            stated_line_nets: None,
             profile,
+        }
+    }
+
+    /// The line net this line contributes to the document's totals.
+    ///
+    /// A draft's is computed; a received document's is what it says, and the
+    /// computation is only used where the document states nothing.
+    pub fn line_net(&self, index: usize) -> Option<Money> {
+        match self.stated_line_nets {
+            Some(nets) => nets.get(index).copied(),
+            None => self.lines.get(index).and_then(|line| line.net().ok()),
         }
     }
 }

@@ -10,6 +10,7 @@
 
 pub mod bt;
 pub mod codelist;
+pub mod imported;
 pub mod profile;
 pub mod rule;
 pub mod semantic;
@@ -17,6 +18,7 @@ pub mod validate;
 
 pub use bt::{Bg, Bt};
 pub use codelist::{BUNDLE_VERSION, Codelist};
+pub use imported::ImportedSemantics;
 pub use profile::Profile;
 pub use rule::{CORE_RULES, CategoryRules, Rule, category_rules};
 pub use semantic::SemanticInvoice;

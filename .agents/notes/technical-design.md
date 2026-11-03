@@ -1168,6 +1168,23 @@ reviewed PR with a diff of expected results over the corpus.
 Ships with the app: artifacts + a curated corpus. Ships in CI: the same corpus
 plus differential runs against the Java oracle.
 
+The differential run is `xtask compare <directory>`. It reads each document with
+our own reader, validates it with our own rules, validates it with the oracle,
+and classifies the difference per rule identifier: **agreement**, **gaps** (the
+oracle reports a rule we do not implement) and **extras** (we report a rule the
+oracle does not). Gaps are the engine's backlog and are printed; an extra would
+block an invoice the authority accepts, so it fails the run. `tools/validate-
+findings.sh` runs it over the mutated fixtures, which is the only place both
+verdicts are produced for one document.
+
+Two modelling details make that comparison honest. A received document is read
+through `conformance::ImportedSemantics`, which turns the parsed document into
+the same `SemanticInvoice` the composer validates, so both paths run one rule
+implementation. And the document's own amounts are kept as statements rather
+than recomputed: BT-106 (`line_extension_total`) apart from BT-109
+(`totals.net`), and each line's BT-131 carried into the view, because a received
+invoice can disagree with itself and that is precisely what is being checked.
+
 ### 8.4 Identifier validation
 
 | Check | Offline | Online |

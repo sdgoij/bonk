@@ -8,4 +8,6 @@ publish = false
 
 [dependencies]
 sha2.workspace = true
+conformance = { path = "../crates/conformance" }
 conformance-official = { path = "../crates/conformance-official", features = ["official-validation"] }
+syntax = { path = "../crates/syntax" }

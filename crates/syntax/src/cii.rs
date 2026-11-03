@@ -7,8 +7,8 @@
 //! never learns which syntax arrived.
 
 use crux::{
-    Address, CountryCode, Currency, DocType, InvoiceTotals, LocalDate, Party, Quantity, TaxBreakdown, TaxTreatment,
-    UnitCode, VatCategory, VatRate,
+    Address, CountryCode, Currency, DocType, InvoiceTotals, LocalDate, Money, Party, Quantity, TaxBreakdown,
+    TaxTreatment, UnitCode, VatCategory, VatRate,
 };
 
 use crate::dom::{Node, money, namespace, text};
@@ -88,6 +88,8 @@ pub(crate) fn from_root(root: &Node) -> Result<ImportedInvoice, ImportError> {
         .map(date)
         .transpose()?;
 
+    let (line_extension_total, totals) = totals(settlement, currency)?;
+
     Ok(ImportedInvoice {
         doc_type,
         number,
@@ -108,7 +110,8 @@ pub(crate) fn from_root(root: &Node) -> Result<ImportedInvoice, ImportError> {
         seller,
         customer,
         lines,
-        totals: totals(settlement, currency)?,
+        line_extension_total,
+        totals,
     })
 }
 
@@ -193,12 +196,16 @@ fn line(item: &Node, currency: Currency, index: usize) -> Result<ImportedLine, I
     })
 }
 
-fn totals(settlement: &Node, currency: Currency) -> Result<InvoiceTotals, ImportError> {
+fn totals(settlement: &Node, currency: Currency) -> Result<(Money, InvoiceTotals), ImportError> {
     let summation = settlement
         .first("SpecifiedTradeSettlementHeaderMonetarySummation")
         .ok_or(ImportError::Missing(
             "ram:SpecifiedTradeSettlementHeaderMonetarySummation",
         ))?;
+    // BT-106, kept apart from BT-109 (`TaxBasisTotalAmount`): a document that
+    // does not agree with itself can state them differently.
+    let line_total = money(summation.first("LineTotalAmount"), currency, "ram:LineTotalAmount")?
+        .ok_or(ImportError::Missing("ram:LineTotalAmount"))?;
     let net = money(
         summation.first("TaxBasisTotalAmount"),
         currency,
@@ -233,12 +240,15 @@ fn totals(settlement: &Node, currency: Currency) -> Result<InvoiceTotals, Import
         });
     }
 
-    Ok(InvoiceTotals {
-        net,
-        tax,
-        gross,
-        breakdown,
-    })
+    Ok((
+        line_total,
+        InvoiceTotals {
+            net,
+            tax,
+            gross,
+            breakdown,
+        },
+    ))
 }
 
 fn preceding(settlement: &Node) -> Result<Option<ImportedReference>, ImportError> {

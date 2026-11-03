@@ -7,6 +7,11 @@
 # caught by the official artefacts rather than by our engine agreeing with
 # itself.
 #
+# It also runs our own rule engine over the same files and compares the two
+# findings rule by rule. A rule only the authority reports is a gap — work the
+# engine has not done yet — and is printed; a rule only we report would block an
+# invoice the authority accepts, and fails the gate.
+#
 # The fixtures are mutations of one issued invoice, so they cannot drift away
 # from what the writer actually produces. Run tools/validate-m1.sh once first: it
 # issues the invoice and fetches the validator.
@@ -79,3 +84,9 @@ if [ "$fail" -ne 0 ]; then
 fi
 
 echo "expected findings: 3/3 documents report exactly the rules they were built to break"
+
+# The same files, read by our engine. This is the only place both verdicts are
+# produced for one document, so it is where a rule we apply and the authority
+# does not — a finding that would block a valid invoice — is caught.
+MUSTANG_JAR="$MUSTANG_JAR" JAVA="$JAVA_BIN" \
+    cargo run -q -p xtask -- compare "$WORK"

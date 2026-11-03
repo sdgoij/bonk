@@ -224,15 +224,29 @@ fn party_codelists(party: &Party, role: &str, country_bt: Bt, endpoint_bt: Bt, f
 fn sum_line_nets(invoice: &SemanticInvoice<'_>, findings: &mut Vec<Finding>) -> Option<Money> {
     let mut sum = Money::zero(invoice.currency);
     for (index, line) in invoice.lines.iter().enumerate() {
-        let net = match line.net() {
-            Ok(net) => net,
-            Err(error) => {
-                findings.push(BR_CO_10.finding(
-                    format!("lines[{index}].quantity"),
-                    format!("line net cannot be computed: {error}"),
-                ));
-                return None;
-            }
+        // A received document states its line nets, so they are what its totals
+        // agree or disagree with; a draft's are computed and cannot disagree.
+        let net = match invoice.stated_line_nets {
+            Some(nets) => match nets.get(index) {
+                Some(net) => *net,
+                None => {
+                    findings.push(BR_CO_10.finding(
+                        format!("lines[{index}].line_net"),
+                        "the document states fewer line net amounts than it has lines",
+                    ));
+                    return None;
+                }
+            },
+            None => match line.net() {
+                Ok(net) => net,
+                Err(error) => {
+                    findings.push(BR_CO_10.finding(
+                        format!("lines[{index}].quantity"),
+                        format!("line net cannot be computed: {error}"),
+                    ));
+                    return None;
+                }
+            },
         };
         if net.currency() != invoice.currency {
             findings.push(BR_CO_10.finding(
@@ -253,20 +267,21 @@ fn sum_line_nets(invoice: &SemanticInvoice<'_>, findings: &mut Vec<Finding>) -> 
 }
 
 fn validate_totals(invoice: &SemanticInvoice<'_>, line_nets: Money, findings: &mut Vec<Finding>) {
-    if invoice.totals.net != line_nets {
+    // BT-106: what the document says its line nets add up to. A draft computes
+    // it, so `totals.net` is the same number; a received document states it.
+    let line_total = invoice.stated_line_total.unwrap_or(invoice.totals.net);
+    if line_total != line_nets {
         findings.push(BR_CO_10.finding(
             "totals.net",
             format!(
                 "sum of line net amounts is {}, but BT-106 is {}",
                 money_text(line_nets),
-                money_text(invoice.totals.net)
+                money_text(line_total)
             ),
         ));
     }
 
-    let expected_exclusive = invoice
-        .totals
-        .net
+    let expected_exclusive = line_total
         .checked_sub(invoice.allowances)
         .and_then(|value| value.checked_add(invoice.charges));
     compare_amount(
@@ -394,8 +409,8 @@ fn validate_breakdowns(invoice: &SemanticInvoice<'_>, findings: &mut Vec<Finding
 
 fn line_bases(invoice: &SemanticInvoice<'_>) -> BTreeMap<(VatCategory, u16), Money> {
     let mut bases = BTreeMap::new();
-    for line in invoice.lines {
-        let Ok(net) = line.net() else {
+    for (index, line) in invoice.lines.iter().enumerate() {
+        let Some(net) = invoice.line_net(index) else {
             continue;
         };
         let rate = if line.treatment.category == VatCategory::Standard {

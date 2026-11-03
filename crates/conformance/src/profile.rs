@@ -36,6 +36,19 @@ impl Profile {
     pub const fn is_peppol(self) -> bool {
         matches!(self, Self::PeppolBis3)
     }
+
+    /// The profile a BT-24 specification identifier claims.
+    ///
+    /// The identifier is the sender's claim, and an unrecognised one must not
+    /// stop a document from being read: it is validated as plain EN 16931, which
+    /// every profile is a refinement of.
+    pub fn from_specification_identifier(identifier: &str) -> Self {
+        if identifier.to_ascii_lowercase().contains("peppol") {
+            Self::PeppolBis3
+        } else {
+            Self::En16931
+        }
+    }
 }
 
 impl fmt::Display for Profile {

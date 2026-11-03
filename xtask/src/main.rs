@@ -2,11 +2,13 @@
 //! Developer automation: artifact fetching, conformance runs, packaging.
 
 mod codelists;
+mod compare;
 mod conformance;
 
 fn tasks() -> &'static [(&'static str, &'static str)] {
     &[
         ("conformance", "validate a directory with the official artefacts"),
+        ("compare", "diff our findings against the official validator"),
         ("codelists", "regenerate the vendored EN 16931 code lists"),
         ("spikes", "re-run the M0 risk spikes"),
         ("package", "build signed installers (M6/M7)"),
@@ -25,6 +27,7 @@ fn main() -> std::process::ExitCode {
         }
         Some("codelists") => codelists::run(arguments.get(2..).unwrap_or_default()),
         Some("conformance") => conformance::run(arguments.get(2..).unwrap_or_default()),
+        Some("compare") => compare::run(arguments.get(2..).unwrap_or_default()),
         Some(other) => {
             eprintln!("xtask: unknown task {other:?}");
             std::process::ExitCode::from(2)
@@ -37,5 +40,6 @@ mod tests {
     #[test]
     fn tasks_are_listed() {
         assert!(super::tasks().iter().any(|(name, _)| *name == "conformance"));
+        assert!(super::tasks().iter().any(|(name, _)| *name == "compare"));
     }
 }

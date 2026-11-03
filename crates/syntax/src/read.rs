@@ -91,6 +91,12 @@ pub struct ImportedInvoice {
     pub customer: Party,
     /// Lines (BG-25).
     pub lines: Vec<ImportedLine>,
+    /// Sum of line net amounts as the document states it (BT-106).
+    ///
+    /// Kept apart from `totals.net`, which is BT-109: the two are equal in a
+    /// document that satisfies its own rules, and a difference between them is
+    /// one of the things a received document is checked for.
+    pub line_extension_total: Money,
     /// Totals as sent (BG-22, BG-23).
     pub totals: InvoiceTotals,
 }
@@ -220,6 +226,26 @@ pub(crate) fn from_root(root: &Node) -> Result<ImportedInvoice, ImportError> {
         lines.push(line(element, currency, index)?);
     }
 
+    // The standard states the exemption reason once per VAT category (BT-120 and
+    // BT-121 on a `TaxSubtotal`); our model keeps it on the treatment. Filling it
+    // in here is what lets a received document answer the same rules as a draft,
+    // instead of looking exempt without a reason because the reason sits one
+    // element higher than the reader looked.
+    let exemptions = breakdown_exemptions(root);
+    for line in &mut lines {
+        if line.treatment.exemption_reason.is_some() || line.treatment.exemption_reason_code.is_some() {
+            continue;
+        }
+        let Some((_, _, reason, code)) = exemptions.iter().find(|(category, rate_bp, ..)| {
+            *category == line.treatment.category
+                && (*category != VatCategory::Standard || *rate_bp == line.treatment.rate.basis_points())
+        }) else {
+            continue;
+        };
+        line.treatment.exemption_reason = reason.clone();
+        line.treatment.exemption_reason_code = code.clone();
+    }
+
     Ok(ImportedInvoice {
         doc_type,
         number,
@@ -238,6 +264,7 @@ pub(crate) fn from_root(root: &Node) -> Result<ImportedInvoice, ImportError> {
         seller,
         customer,
         lines,
+        line_extension_total: document_line_total(root, currency)?,
         totals: totals(root, currency)?,
     })
 }
@@ -318,6 +345,45 @@ fn line(element: &Node, currency: Currency, index: usize) -> Result<ImportedLine
             exemption_reason_code: category.and_then(|category| text(category, "TaxExemptionReasonCode")),
         },
     })
+}
+
+/// BT-120 and BT-121 as the VAT breakdown states them, per category and rate.
+fn breakdown_exemptions(root: &Node) -> Vec<(VatCategory, u16, Option<String>, Option<String>)> {
+    let mut rows = Vec::new();
+    let Some(tax_total) = root.first("TaxTotal") else {
+        return rows;
+    };
+    for row in tax_total.children("TaxSubtotal") {
+        let Some(category_node) = row.first("TaxCategory") else {
+            continue;
+        };
+        let Some(code) = text(category_node, "ID") else {
+            continue;
+        };
+        let Ok(category) = VatCategory::parse(&code) else {
+            continue;
+        };
+        let rate_bp = text(category_node, "Percent")
+            .and_then(|percent| VatRate::parse_percent(&percent).ok())
+            .map_or(0, |rate| rate.basis_points());
+        let reason = text(category_node, "TaxExemptionReason");
+        let reason_code = text(category_node, "TaxExemptionReasonCode");
+        if reason.is_some() || reason_code.is_some() {
+            rows.push((category, rate_bp, reason, reason_code));
+        }
+    }
+    rows
+}
+
+/// BT-106, which the reader keeps apart from BT-109 on purpose.
+fn document_line_total(root: &Node, currency: Currency) -> Result<Money, ImportError> {
+    money(
+        root.first("LegalMonetaryTotal")
+            .and_then(|node| node.first("LineExtensionAmount")),
+        currency,
+        "BT-106",
+    )?
+    .ok_or(ImportError::Missing("cac:LegalMonetaryTotal/cbc:LineExtensionAmount"))
 }
 
 fn totals(root: &Node, currency: Currency) -> Result<InvoiceTotals, ImportError> {
@@ -582,6 +648,93 @@ mod tests {
         assert_eq!(imported.totals.gross.micros(), 121_000_000);
         assert_eq!(imported.totals.breakdown.len(), 1);
         assert_eq!(imported.totals.breakdown[0].rate_bp, 2100);
+        assert_eq!(
+            imported.line_extension_total.micros(),
+            100_000_000,
+            "BT-106 is read, and is its own fact rather than the tax basis"
+        );
+    }
+
+    /// BT-106 and BT-109 are two different statements. A reader that filled one
+    /// from the other could not tell a document that disagrees with itself from
+    /// one that does not, which is what a received document is checked for.
+    #[test]
+    fn the_line_total_and_the_tax_basis_are_read_apart() {
+        let xml = written(DocType::Invoice);
+        let mut diverging = xml.clone();
+        // The document-level BT-106 only; the line keeps its own amount.
+        diverging = diverging.replacen(
+            "<cbc:LineExtensionAmount currencyID=\"EUR\">100.00</cbc:LineExtensionAmount>",
+            "<cbc:LineExtensionAmount currencyID=\"EUR\">90.00</cbc:LineExtensionAmount>",
+            1,
+        );
+        assert_ne!(xml, diverging, "the fixture must contain the element");
+
+        let imported = read_invoice(&diverging).expect("import");
+        assert_eq!(imported.line_extension_total.micros(), 90_000_000);
+        assert_eq!(
+            imported.totals.net.micros(),
+            100_000_000,
+            "BT-109 still says what the document says"
+        );
+        assert_eq!(imported.lines[0].line_net.micros(), 100_000_000);
+    }
+
+    /// The standard states an exemption reason once per VAT category; our model
+    /// keeps it on the treatment. A received document has to come back with the
+    /// reason where our model looks for it, or the rule that requires it fails on
+    /// a document that has one.
+    #[test]
+    fn an_exemption_reason_reaches_the_line_it_belongs_to() {
+        let treatment = TaxTreatment::zero(VatCategory::Exempt).with_exemption_reason("Exempt supply");
+        let line = UblLine {
+            id: 1,
+            name: "Consulting",
+            description: None,
+            quantity: Quantity::ONE,
+            unit: UnitCode::PIECE,
+            unit_price: Money::from_major_units(100, Currency::EUR).expect("price"),
+            base_quantity: Quantity::ONE,
+            line_net: Money::from_major_units(100, Currency::EUR).expect("line net"),
+            treatment: &treatment,
+        };
+        let lines = [line];
+        let totals = InvoiceTotals {
+            net: Money::from_major_units(100, Currency::EUR).expect("net"),
+            tax: Money::zero(Currency::EUR),
+            gross: Money::from_major_units(100, Currency::EUR).expect("gross"),
+            breakdown: vec![TaxBreakdown {
+                category: VatCategory::Exempt,
+                rate_bp: 0,
+                taxable_base: Money::from_major_units(100, Currency::EUR).expect("base"),
+                tax: Money::zero(Currency::EUR),
+            }],
+        };
+        let seller = endpoint_party("Seller BV", "0106:12345678");
+        let customer = endpoint_party("Customer BV", "0106:87654321");
+        let invoice = UblInvoice {
+            number: "2026-0001",
+            issue_date: LocalDate::parse_iso("2026-10-27").expect("date"),
+            due_date: None,
+            delivery_date: None,
+            doc_type: DocType::Invoice,
+            currency: Currency::EUR,
+            buyer_reference: None,
+            order_reference: None,
+            note: None,
+            preceding_invoice: None,
+            seller: &seller,
+            customer: &customer,
+            lines: &lines,
+            totals: &totals,
+        };
+        let xml = write_invoice(&invoice).expect("writer");
+
+        let imported = read_invoice(&xml).expect("import");
+        assert_eq!(
+            imported.lines[0].treatment.exemption_reason.as_deref(),
+            Some("Exempt supply")
+        );
     }
 
     #[test]
