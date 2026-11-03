@@ -1637,6 +1637,7 @@ impl Workspace {
         let language = self.language;
         let mut check = false;
         let mut backup = false;
+        let mut recovery_kit = false;
 
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             ui.set_width(ui.available_width());
@@ -1728,6 +1729,9 @@ impl Workspace {
                     backup = true;
                 }
                 ui.weak(text::settings::recovery_kit_note(language));
+                if ui.button(text::settings::recovery_kit_action(language)).clicked() {
+                    recovery_kit = true;
+                }
             });
             ui.add_space(8.0);
 
@@ -1746,6 +1750,31 @@ impl Workspace {
         }
         if backup {
             self.run_backup(session);
+        }
+        if recovery_kit && let Some(directory) = dialog::folder(text::settings::recovery_kit_action(language)) {
+            self.write_recovery_kit(session, &directory);
+        }
+    }
+
+    /// Writes the key, and its instructions, where the user chose.
+    ///
+    /// The store refuses a directory inside the archive — a kit beside the data
+    /// is taken by the same theft or disk failure — and says why.
+    fn write_recovery_kit(&mut self, session: &Session, directory: &Path) {
+        let language = self.language;
+        match store::kit::write(
+            session.keystore_path(),
+            session.database_path(),
+            directory,
+            &store::now_rfc3339(),
+        ) {
+            Ok(report) => {
+                self.message = Some(Message::ok(text::settings::recovery_kit_done(
+                    language,
+                    &report.directory.display().to_string(),
+                )));
+            }
+            Err(error) => self.message = Some(Message::error(error.to_string())),
         }
     }
 
@@ -5562,6 +5591,37 @@ mod tests {
         workspace.search.run(session.database(), seller.id).unwrap();
         let id = workspace.search.results[0].id;
         (workspace, id)
+    }
+
+    /// The window writes the same kit the command does — same key, same steps —
+    /// and the store's refusal keeps it out of the archive directory.
+    #[test]
+    fn the_window_writes_a_recovery_kit_somewhere_else() {
+        let (_dir, session, _seller) = session_with_one_issued();
+        let mut workspace = Workspace::new(&session).unwrap();
+
+        let kit = tempfile::TempDir::new().unwrap();
+        workspace.write_recovery_kit(&session, kit.path());
+        assert!(kit.path().join("keystore.bin").exists());
+        assert!(kit.path().join("RECOVERY.txt").exists());
+        assert!(
+            workspace.message.as_ref().is_some_and(|message| !message.error),
+            "the window confirms where it wrote it: {:?}",
+            workspace.message.as_ref().map(|message| message.text.as_str())
+        );
+
+        // The archive directory is refused, and the panel says why.
+        let inside = session.database_path().parent().unwrap().join("kit");
+        workspace.write_recovery_kit(&session, &inside);
+        assert!(!inside.join("keystore.bin").exists(), "a refused kit copies nothing");
+        assert!(
+            workspace
+                .message
+                .as_ref()
+                .is_some_and(|message| message.error && message.text.contains("archive directory")),
+            "{:?}",
+            workspace.message.as_ref().map(|message| message.text.as_str())
+        );
     }
 
     #[test]

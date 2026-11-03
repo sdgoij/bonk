@@ -495,28 +495,11 @@ fn run(cli: Cli) -> Result<(), CliError> {
             Ok(())
         }
         Some(Command::RecoveryKit { directory }) => {
-            // A kit beside the archive travels with it, and then one theft or one
-            // lost disk takes both halves of a restore. Resolve both paths before
-            // comparing: the same folder can be reached two ways.
-            std::fs::create_dir_all(&directory)?;
-            let target = std::fs::canonicalize(&directory)?;
-            let archive = database.parent().unwrap_or_else(|| Path::new("."));
-            if let Ok(resolved) = std::fs::canonicalize(archive)
-                && target.starts_with(&resolved)
-            {
-                return Err(CliError::Input(format!(
-                    "a recovery kit must not be written inside the archive directory ({}); use another medium",
-                    archive.display()
-                )));
-            }
+            let report = store::kit::write(&keystore, &database, &directory, &store::now_rfc3339())?;
 
-            let key = store::copy_to_directory(&keystore, &directory)?;
-            let instructions = directory.join("RECOVERY.txt");
-            std::fs::write(&instructions, recovery_kit_text(&database, &store::now_rfc3339()))?;
-
-            println!("kit:          {}", directory.display());
-            println!("key:          {}", key.display());
-            println!("instructions: {}", instructions.display());
+            println!("kit:          {}", report.directory.display());
+            println!("key:          {}", report.key.display());
+            println!("instructions: {}", report.instructions.display());
             println!();
             println!("the backups do not contain this key: keep the kit on another medium,");
             println!("and write a new one after a passphrase or recovery-key change");
@@ -1474,47 +1457,6 @@ fn remove_archive(database: &Path, keystore: &Path) -> Result<(), CliError> {
         }
     }
     Ok(())
-}
-
-/// The note that travels with a recovery kit.
-///
-/// It is written next to the key because the person who needs it may not be the
-/// person who took it, and because nobody remembers what a 97-byte `keystore.bin`
-/// was for six months later.
-fn recovery_kit_text(database: &Path, stamp: &str) -> String {
-    let archive = database
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "bonk.db".to_owned());
-    let body = r#"Bonk recovery kit
-=================
-
-Written: STAMP
-Archive: ARCHIVE
-
-keystore.bin in this directory is the key to that archive. The database backups
-do not contain it: a backup, this file, and the passphrase (or the recovery key
-enabled when this copy was taken) are what restore an archive.
-
-Keep this directory apart from the database and its backups — use another medium:
-a different disk, a USB stick in a safe, or an attachment in a password manager.
-Anyone who has both this file and the credential has the archive.
-
-To restore:
-  1. Put a database backup next to this file, named as the application expects
-     (for example bonk.db).
-  2. Open it with this keystore, or check it first:
-       bonk verify --db bonk.db --keystore keystore.bin
-  3. Enter the passphrase that was current when this kit was written.
-
-This kit holds no passphrase and no recovery key. If both are lost, the archive
-cannot be opened, whatever copies exist.
-
-If the passphrase changes, or a recovery key is added or replaced, write a new
-kit: an old copy still unwraps the same data key, but with the credential it was
-taken under, so it is a second way in with the old passphrase.
-"#;
-    body.replace("STAMP", stamp).replace("ARCHIVE", &archive)
 }
 
 /// Reports a long audit's progress on stderr.

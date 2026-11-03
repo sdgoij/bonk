@@ -868,8 +868,22 @@ pub mod settings {
     pub fn recovery_kit_note(language: Language) -> &'static str {
         sentence!(
             language,
-            "The copies hold no key. Keep a recovery kit on another medium: bonk recovery-kit <dir>.",
-            "De kopieën bevatten geen sleutel. Bewaar een herstelset op een ander medium: bonk recovery-kit <dir>."
+            "The copies hold no key. Write a recovery kit and keep it on another medium.",
+            "De kopieën bevatten geen sleutel. Schrijf een herstelset en bewaar die op een ander medium."
+        )
+    }
+
+    /// Opens the picker for a kit directory.
+    pub fn recovery_kit_action(language: Language) -> &'static str {
+        sentence!(language, "Write a recovery kit…", "Herstelset schrijven…")
+    }
+
+    /// Confirms where the kit landed.
+    pub fn recovery_kit_done(language: Language, directory: &str) -> String {
+        sentence!(
+            language,
+            format!("Recovery kit written to {directory}; keep it apart from the backups."),
+            format!("Herstelset geschreven naar {directory}; bewaar die los van de back-ups.")
         )
     }
 
@@ -2063,7 +2077,9 @@ mod tests {
         assert!(editor::weekdays(dutch).contains(&"ma"));
         assert_ne!(shell::tagline(english), shell::tagline(dutch));
         assert_eq!(settings::language(dutch), "Taal");
-        assert!(settings::recovery_kit_note(english).contains("recovery-kit"));
+        assert!(settings::recovery_kit_note(english).contains("recovery kit"));
+        assert!(!settings::recovery_kit_action(dutch).is_empty());
+        assert!(settings::recovery_kit_done(english, "/media/usb").contains("/media/usb"));
     }
 
     #[test]

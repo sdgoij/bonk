@@ -350,7 +350,8 @@ it refuses to write inside the archive directory or its `backups/` folder — a 
 stored beside the copies travels with them, and one theft then takes both halves.
 Keep it on another medium, and write a new one after a passphrase change or a
 recovery-key change: an old copy still unwraps the same data key, but with the
-credential it was taken under.
+credential it was taken under. The window's **Backup** card offers the same action
+as **Write a recovery kit…**, and the command is what to use on a headless box.
 
 Restoring is a file copy onto the clean machine: stop the application, put the
 database file and the kit's `keystore.bin` in one directory, then run
