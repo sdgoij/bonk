@@ -583,10 +583,18 @@ fn load_watch(storage: &dyn eframe::Storage) -> (Option<PathBuf>, bool) {
 
 /// Writes them back. No folder removes the key rather than storing an empty
 /// path, so "nothing chosen" stays distinguishable from a path.
+///
+/// `remove_string` is only called when the key is there: eframe's storage marks
+/// itself dirty on every `remove_string`, even a miss, and the window saves every
+/// 30 seconds — a miss would rewrite the file forever.
 fn store_watch(storage: &mut dyn eframe::Storage, folder: Option<&std::path::Path>, enabled: bool) {
     match folder {
         Some(folder) => storage.set_string(WATCH_FOLDER_KEY, folder.display().to_string()),
-        None => storage.remove_string(WATCH_FOLDER_KEY),
+        None => {
+            if storage.get_string(WATCH_FOLDER_KEY).is_some() {
+                storage.remove_string(WATCH_FOLDER_KEY);
+            }
+        }
     }
     storage.set_string(WATCH_ENABLED_KEY, if enabled { "1" } else { "0" }.to_owned());
 }
@@ -1775,22 +1783,30 @@ mod tests {
     }
 
     /// The folder watcher's folder and switch are remembered through the window's
-    /// storage, so a restart does not forget them.
+    /// storage, so a restart does not forget them — and a save with nothing to
+    /// change must not touch the disk.
     #[test]
     fn the_watch_settings_round_trip_through_window_storage() {
         use eframe::Storage as _;
+
         #[derive(Default)]
-        struct Memory(std::collections::BTreeMap<String, String>);
+        struct Memory {
+            values: std::collections::BTreeMap<String, String>,
+            removals: usize,
+        }
 
         impl eframe::Storage for Memory {
             fn get_string(&self, key: &str) -> Option<String> {
-                self.0.get(key).cloned()
+                self.values.get(key).cloned()
             }
             fn set_string(&mut self, key: &str, value: String) {
-                self.0.insert(key.to_owned(), value);
+                self.values.insert(key.to_owned(), value);
             }
             fn remove_string(&mut self, key: &str) {
-                self.0.remove(key);
+                // eframe's own storage sets its dirty flag here whatever the
+                // key, so the calls are counted, not just the effects.
+                self.removals += 1;
+                self.values.remove(key);
             }
             fn flush(&mut self) {}
         }
@@ -1810,6 +1826,13 @@ mod tests {
         store_watch(&mut storage, None, false);
         assert_eq!(storage.get_string(WATCH_FOLDER_KEY), None);
         assert_eq!(load_watch(&storage), (None, false));
+        assert_eq!(storage.removals, 1);
+
+        // Saving again with nothing chosen must not remove a key that is not
+        // there: the window saves every 30 seconds, and a removal marks the
+        // storage dirty even when it found nothing.
+        store_watch(&mut storage, None, false);
+        assert_eq!(storage.removals, 1, "a missing key is not removed again");
     }
 
     /// A template beside the archive is one a document can be drawn with, and the
