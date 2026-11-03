@@ -39,7 +39,7 @@ pub use device::DeviceStore;
 pub use error::StoreError;
 pub use evidence::EvidenceReport;
 pub use integrity::IntegrityReport;
-pub use keystore::{KdfParams, KeyStore};
+pub use keystore::{KdfParams, KeyStore, copy_to_directory};
 pub use repo::{
     CustomerRecord, Direction, DocumentRecord, DocumentStatus, ImportSource, IssueRequest, IssueView, IssuedReference,
     ReceivedDocument, ReceivedLine, ReceivedSummary, SEARCH_LIMIT, SearchCounts, SearchHit, SearchPage, SearchRequest,

@@ -819,6 +819,18 @@ directory `backups` beside the database, `--keep` for retention) and
 encryption, rotation, refusal before pruning, damage detection, and a restore on
 a fresh path.
 
+**The key has a copy of its own (2026-11-03).** A database copy cannot be opened
+without the keystore: the archive is encrypted with a random data key, and the
+passphrase only unwraps that key from `keystore.bin`, so a recovery key is inert
+without the file it lives in. The backups deliberately carry no key — a stolen
+backup folder is then worth a 256-bit brute force rather than a passphrase guess —
+and `bonk recovery-kit <dir>` writes the other half: a byte copy of the keystore
+plus a `RECOVERY.txt` with the restore steps. It needs no passphrase, refuses to
+write inside the archive directory (a kit beside the copies travels with them),
+and never replaces an existing kit. The note says to take a new one after a
+passphrase or recovery-key change, because an old copy still unwraps the same data
+key but with the credential it was taken under.
+
 M6.3's chain-head display is in as well: `audit::head` returns the newest link,
 and both `bonk verify` and `bonk verify-backup` print it, so comparing two copies
 of an archive is a diff of sequence number, hash, and time rather than a guess.

@@ -1727,6 +1727,7 @@ impl Workspace {
                 if ui.button(text::settings::backup_now(language)).clicked() {
                     backup = true;
                 }
+                ui.weak(text::settings::recovery_kit_note(language));
             });
             ui.add_space(8.0);
 

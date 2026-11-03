@@ -338,9 +338,24 @@ file.
 `backup` takes a verified encrypted copy (`VACUUM INTO`, so it inherits the key)
 and prunes older copies beyond `--keep`; nothing is pruned until the new copy has
 passed an integrity check and the audit chain. `verify-backup` checks a copy
-without opening the live database. Restoring is a file copy onto the clean
-machine plus the same keystore — stop the application first, replace the database
-file, then run `bonk verify`.
+without opening the live database.
+
+The backups deliberately do not contain the key. The database is encrypted with a
+random data key, and that key lives only inside the keystore, so a backup on its
+own cannot be opened — not even with the passphrase, and a recovery key does not
+help without the file it lives in. `recovery-kit <dir>` writes the other half of
+a restore: a byte copy of the keystore as `keystore.bin`, plus `RECOVERY.txt`
+with the restore steps. It needs no passphrase, because nothing is decrypted, and
+it refuses to write inside the archive directory or its `backups/` folder — a kit
+stored beside the copies travels with them, and one theft then takes both halves.
+Keep it on another medium, and write a new one after a passphrase change or a
+recovery-key change: an old copy still unwraps the same data key, but with the
+credential it was taken under.
+
+Restoring is a file copy onto the clean machine: stop the application, put the
+database file and the kit's `keystore.bin` in one directory, then run
+`bonk verify` with the passphrase (or the recovery key) that was current when the
+kit was written.
 
 `verify` prints the audit chain head — sequence number, hash, and time. Two
 copies of the same archive must agree on that triple; `verify-backup` prints the

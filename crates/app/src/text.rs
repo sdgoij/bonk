@@ -864,6 +864,15 @@ pub mod settings {
         )
     }
 
+    /// Where the other half of a restore comes from.
+    pub fn recovery_kit_note(language: Language) -> &'static str {
+        sentence!(
+            language,
+            "The copies hold no key. Keep a recovery kit on another medium: bonk recovery-kit <dir>.",
+            "De kopieën bevatten geen sleutel. Bewaar een herstelset op een ander medium: bonk recovery-kit <dir>."
+        )
+    }
+
     /// Runs a backup now.
     pub fn backup_now(language: Language) -> &'static str {
         sentence!(language, "Back up now", "Nu een back-up maken")
@@ -2054,6 +2063,7 @@ mod tests {
         assert!(editor::weekdays(dutch).contains(&"ma"));
         assert_ne!(shell::tagline(english), shell::tagline(dutch));
         assert_eq!(settings::language(dutch), "Taal");
+        assert!(settings::recovery_kit_note(english).contains("recovery-kit"));
     }
 
     #[test]

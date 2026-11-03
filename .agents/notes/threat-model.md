@@ -76,6 +76,7 @@ the machine, not a machine an attacker is already logged into.
 | Threat | Mitigation | Residual |
 |---|---|---|
 | Forgotten passphrase | Recovery key: a second wrap of the same DEK under a 160-bit secret, shown once, never stored; `passphrase-reset` uses it and rotates it | If the recovery key is lost too, the archive is unrecoverable. That is the design, not a bug |
+| Machine lost with every backup on it, or backups copied without the key | `bonk recovery-kit <dir>` copies the keystore to a chosen medium with restore instructions; backups carry no key, so the two are stored apart | A kit stored beside the backups defeats the split. The command refuses the archive directory and its `backups/` folder, and an old kit keeps the passphrase it was taken under |
 | Attacker with a copy of the keystore adds their own route | `recovery-add` requires the passphrase and re-derives it from the file before writing | An attacker who already has the passphrase has nothing left to gain |
 | Corrupted or partial keystore write | Rewrites build and unwrap the new bytes in memory, then write a temporary file and rename it into place. Where the OS will not rename over an existing file, the previous keystore is parked as `keystore.old` and removed only after the new one lands, and put back if the rename fails | A crash can leave `keystore.tmp` or `keystore.old` behind; recovery is a manual rename, not a lost key |
 | Passphrase left in memory | DEK and KEK live in `Zeroizing` buffers | Passphrase `String`s are not zeroised; they are dropped, not wiped |

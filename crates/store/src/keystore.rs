@@ -30,6 +30,7 @@
 //! recovery key can open.
 
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 
 use aes_gcm::aead::{Aead, AeadCore, KeyInit, OsRng, Payload};
@@ -617,6 +618,40 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), StoreError> {
     }
 }
 
+/// Copies a keystore file into `directory` as `keystore.bin`.
+///
+/// The copy is the archive's wrapped data key, not the password: whoever holds
+/// it and the passphrase (or the recovery key) can open the archive. It is
+/// written with the same restrictions as the original and never replaces an
+/// existing file — a kit is meant to be found, not silently overwritten.
+///
+/// No passphrase is needed, because nothing is decrypted: a kit can be taken
+/// from an archive that is not open.
+pub fn copy_to_directory(source: impl AsRef<Path>, directory: impl AsRef<Path>) -> Result<PathBuf, StoreError> {
+    let source = source.as_ref();
+    let directory = directory.as_ref();
+    if !source.exists() {
+        return Err(StoreError::Io(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("keystore file does not exist: {}", source.display()),
+        )));
+    }
+    fs::create_dir_all(directory)?;
+
+    let destination = directory.join("keystore.bin");
+    if destination.exists() {
+        return Err(StoreError::Rejected(format!(
+            "{} already exists; choose an empty directory or remove the old kit",
+            destination.display()
+        )));
+    }
+
+    let bytes = fs::read(source)?;
+    write_atomic(&destination, &bytes)?;
+    permissions::restrict_quietly(&destination);
+    Ok(destination)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -692,6 +727,24 @@ mod tests {
         assert!(KeyStore::open(&path, PASS).is_err());
         let reopened = KeyStore::open(&path, "a new passphrase").unwrap();
         assert_eq!(reopened.dek(), &dek);
+    }
+
+    #[test]
+    fn a_recovery_kit_is_a_byte_copy_that_never_overwrites() {
+        let (_dir, store) = temp_store();
+        let kit = tempfile::TempDir::new().unwrap();
+
+        let copied = super::copy_to_directory(store.path(), kit.path()).unwrap();
+        assert_eq!(copied, kit.path().join("keystore.bin"));
+        assert_eq!(fs::read(&copied).unwrap(), fs::read(store.path()).unwrap());
+
+        // The copy is a keystore like any other.
+        let reopened = KeyStore::open(&copied, PASS).unwrap();
+        assert_eq!(reopened.dek(), store.dek());
+
+        // A kit is never silently replaced.
+        let error = super::copy_to_directory(store.path(), kit.path()).unwrap_err();
+        assert!(matches!(error, StoreError::Rejected(_)), "{error}");
     }
 
     #[test]

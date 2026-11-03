@@ -1335,3 +1335,66 @@ fn demo_seed_fills_an_archive_and_refuses_to_clobber_one() {
     ]);
     assert!(verified.contains("integrity check passed"), "{verified}");
 }
+
+#[test]
+fn a_recovery_kit_restores_a_database_copy() {
+    let dir = TempDir::new().expect("temp dir");
+    let (database, keystore) = run_init(&dir);
+
+    let kit = TempDir::new().expect("kit dir");
+    let kit_dir = kit.path().to_str().expect("temp path is UTF-8");
+    let said = bonk_ok(&["recovery-kit", kit_dir, "--db", &database, "--keystore", &keystore]);
+    assert!(said.contains("keystore.bin"), "{said}");
+
+    let key = kit.path().join("keystore.bin");
+    let instructions = std::fs::read_to_string(kit.path().join("RECOVERY.txt")).expect("instructions are written");
+    assert!(instructions.contains("passphrase"), "{instructions}");
+    assert!(instructions.contains("another medium"), "{instructions}");
+
+    // A second run must not replace a key that is already there.
+    let again = bonk()
+        .args(["recovery-kit", kit_dir, "--db", &database, "--keystore", &keystore])
+        .output()
+        .expect("binary runs");
+    assert!(!again.status.success(), "an existing kit is not overwritten");
+    assert!(String::from_utf8_lossy(&again.stderr).contains("already exists"));
+
+    // The point of the kit: a copy of the archive plus this key opens.
+    let restored = kit.path().join("bonk.db");
+    std::fs::copy(&database, &restored).expect("archive copy");
+    let verified = bonk_ok(&[
+        "verify",
+        "--db",
+        restored.to_str().expect("temp path is UTF-8"),
+        "--keystore",
+        key.to_str().expect("temp path is UTF-8"),
+        "--passphrase",
+        "correct horse battery staple",
+    ]);
+    assert!(verified.contains("integrity check passed"), "{verified}");
+}
+
+#[test]
+fn a_recovery_kit_refuses_to_sit_inside_the_archive() {
+    let dir = TempDir::new().expect("temp dir");
+    let (database, keystore) = run_init(&dir);
+
+    let refused = bonk()
+        .args([
+            "recovery-kit",
+            dir.path().to_str().expect("temp path is UTF-8"),
+            "--db",
+            &database,
+            "--keystore",
+            &keystore,
+        ])
+        .output()
+        .expect("binary runs");
+    assert!(!refused.status.success());
+    let stderr = String::from_utf8_lossy(&refused.stderr);
+    assert!(stderr.contains("archive directory"), "{stderr}");
+    assert!(
+        !dir.path().join("RECOVERY.txt").exists(),
+        "a refused kit writes nothing"
+    );
+}
