@@ -24,3 +24,8 @@ pub(crate) fn save(description: &str, file_name: &str, extension: &str) -> Optio
         .add_filter(description, &[extension])
         .save_file()
 }
+
+/// Picks an existing folder.
+pub(crate) fn folder(description: &str) -> Option<PathBuf> {
+    rfd::FileDialog::new().set_title(description).pick_folder()
+}

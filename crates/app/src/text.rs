@@ -887,6 +887,72 @@ pub mod settings {
         )
     }
 
+    /// The watcher card.
+    pub fn watching(language: Language) -> &'static str {
+        sentence!(language, "Watching a folder", "Een map volgen")
+    }
+
+    /// What watching a folder does, and what it deliberately does not.
+    pub fn watching_note(language: Language) -> &'static str {
+        sentence!(
+            language,
+            "Invoices dropped into the folder are imported once they stop changing. Files already there when watching starts are left alone.",
+            "Facturen in de map worden geïmporteerd zodra ze niet meer veranderen. Bestanden die er al stonden bij het starten blijven staan."
+        )
+    }
+
+    /// The folder being watched.
+    pub fn watching_folder(language: Language) -> &'static str {
+        sentence!(language, "Folder", "Map")
+    }
+
+    /// No folder has been chosen yet.
+    pub fn watching_none(language: Language) -> &'static str {
+        sentence!(language, "none chosen", "geen gekozen")
+    }
+
+    /// Opens the platform's folder picker.
+    pub fn watching_choose(language: Language) -> &'static str {
+        sentence!(language, "Choose folder…", "Map kiezen…")
+    }
+
+    /// Arms the watcher.
+    pub fn watching_start(language: Language) -> &'static str {
+        sentence!(language, "Start watching", "Volgen starten")
+    }
+
+    /// Disarms the watcher.
+    pub fn watching_stop(language: Language) -> &'static str {
+        sentence!(language, "Stop watching", "Volgen stoppen")
+    }
+
+    /// What a running watcher has done.
+    pub fn watching_running(language: Language, imported: usize, duplicates: usize, failed: usize) -> String {
+        sentence!(
+            language,
+            format!("watching · {imported} imported, {duplicates} already there, {failed} unreadable"),
+            format!("volgt · {imported} geïmporteerd, {duplicates} al aanwezig, {failed} onleesbaar")
+        )
+    }
+
+    /// A dropped file that is not an invoice.
+    pub fn watching_skipped(language: Language, file: &str, error: &str) -> String {
+        sentence!(
+            language,
+            format!("{file} was left alone: {error}"),
+            format!("{file} is blijven staan: {error}")
+        )
+    }
+
+    /// Why the folder could not be read; watching stops.
+    pub fn watching_failed(language: Language, error: &str) -> String {
+        sentence!(
+            language,
+            format!("Watching stopped: {error}"),
+            format!("Volgen gestopt: {error}")
+        )
+    }
+
     /// The credentials card.
     pub fn credentials(language: Language) -> &'static str {
         sentence!(language, "Credentials", "Inloggegevens")

@@ -8,6 +8,7 @@
 #![allow(clippy::float_arithmetic)]
 
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant, SystemTime};
 
 use crux::{
     Address, CountryCode, Currency, CustomerId, DocType, DocumentId, DomainError, DraftLine, Finding, InvoiceDraft,
@@ -44,6 +45,15 @@ const CATEGORIES: [VatCategory; 6] = [
 
 /// Who the window records as the actor of a decision it made.
 const ACTOR: &str = "desktop";
+
+/// How often a running watcher looks at its folder.
+const WATCH_EVERY: Duration = Duration::from_secs(2);
+
+/// How long a file must be untouched before a running watcher reads it.
+const WATCH_QUIET: Duration = Duration::from_secs(5);
+
+/// How many of the most recent drops the card remembers.
+const WATCH_RECENT: usize = 4;
 
 /// The three places the window can be.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -88,6 +98,8 @@ pub struct Workspace {
     match_target: Option<CustomerId>,
     /// The preview of the composer's invoice, once one has been asked for.
     preview: Option<Preview>,
+    /// The folder watcher, and what it last did.
+    watch: Watch,
     /// Every layout in `<archive>/templates`, sorted by file name. A document
     /// names the one it wants; the archive default is the one named `default`.
     /// Everything that lays a document out resolves through this list, so the
@@ -425,6 +437,33 @@ struct Preview {
 struct Message {
     text: String,
     error: bool,
+}
+
+/// The Settings tab's folder watcher.
+///
+/// The folder is chosen in the window and watched while the archive is unlocked:
+/// nothing is watched when it is locked, because the watcher writes documents.
+#[derive(Default)]
+struct Watch {
+    /// Folder the user picked, kept when watching is stopped so it can be
+    /// started again without finding it twice.
+    folder: Option<PathBuf>,
+    /// The running watcher, when one is watching.
+    running: Option<RunningWatch>,
+    /// What the most recent drops did, newest first.
+    recent: Vec<String>,
+    /// Why the last poll failed; a failed poll stops the watch.
+    error: Option<String>,
+}
+
+/// One armed folder watcher, and what it has done so far.
+struct RunningWatch {
+    watcher: import::Watcher,
+    every: Duration,
+    last_poll: Option<Instant>,
+    imported: usize,
+    duplicates: usize,
+    failed: usize,
 }
 
 impl Message {
@@ -810,6 +849,7 @@ impl Workspace {
             pdf: None,
             match_target: None,
             preview: None,
+            watch: Watch::default(),
             templates,
             device_remembered: Session::device_ready(session.keystore_path(), &store::device::Keychain),
             conformance_findings: Vec::new(),
@@ -1648,6 +1688,11 @@ impl Workspace {
             });
             ui.add_space(8.0);
 
+            theme::card(ui, text::settings::watching(language), |ui| {
+                self.watch_ui(ui, session);
+            });
+            ui.add_space(8.0);
+
             theme::card(ui, text::settings::credentials(language), |ui| {
                 self.security_details_ui(ui, session, device);
             });
@@ -1680,6 +1725,193 @@ impl Workspace {
                     &error.to_string(),
                 )))
             }
+        }
+    }
+
+    /// The watcher card: the folder, the switch, and what the last drops did.
+    ///
+    /// The poll happens here rather than on a thread because the archive is not
+    /// shared: a document is written by the same connection the window draws
+    /// from, so one frame does one poll. `request_repaint_after` is what keeps
+    /// the frames coming while the user is doing nothing.
+    fn watch_ui(&mut self, ui: &mut egui::Ui, session: &Session) {
+        let language = self.language;
+        let tokens = *theme::palette(ui.ctx());
+
+        ui.weak(text::settings::watching_note(language));
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            ui.weak(text::settings::watching_folder(language));
+            match self.watch.folder.as_ref() {
+                Some(folder) => theme::value_mono(ui, folder.display().to_string()),
+                None => theme::value(ui, text::settings::watching_none(language)),
+            };
+            if ui.button(text::settings::watching_choose(language)).clicked()
+                && let Some(folder) = dialog::folder(text::settings::watching_choose(language))
+            {
+                // A folder that cannot be read is reported on the next poll, not
+                // guessed at here; choosing one does not start the watch.
+                self.watch.folder = Some(folder);
+                self.watch.error = None;
+            }
+        });
+
+        let counts = self
+            .watch
+            .running
+            .as_ref()
+            .map(|running| (running.imported, running.duplicates, running.failed));
+        let mut start = false;
+        let mut stop = false;
+        ui.horizontal(|ui| match counts {
+            Some((imported, duplicates, failed)) => {
+                if ui.button(text::settings::watching_stop(language)).clicked() {
+                    stop = true;
+                }
+                ui.weak(text::settings::watching_running(language, imported, duplicates, failed));
+            }
+            None => {
+                start = ui
+                    .add_enabled(
+                        self.watch.folder.is_some(),
+                        egui::Button::new(text::settings::watching_start(language)),
+                    )
+                    .clicked();
+            }
+        });
+
+        if stop {
+            self.watch.running = None;
+        }
+        if start {
+            self.start_watch();
+        }
+
+        if let Some(error) = &self.watch.error {
+            ui.colored_label(tokens.error, error);
+        }
+        for line in &self.watch.recent {
+            theme::value(ui, line.clone());
+        }
+
+        // Poll on the frame that is due, then ask for the next one, so a watch
+        // keeps running while nothing is touched.
+        let due = self
+            .watch
+            .running
+            .as_ref()
+            .is_some_and(|running| running.last_poll.is_none_or(|last| last.elapsed() >= running.every));
+        if due {
+            self.poll_watch(session);
+        }
+        if let Some(running) = &self.watch.running {
+            ui.ctx().request_repaint_after(running.every);
+        }
+    }
+
+    /// Arms the watcher on the chosen folder.
+    ///
+    /// Nothing is imported yet: the first poll records what is already there,
+    /// which is what keeps starting a watch from importing a folder's history.
+    fn start_watch(&mut self) {
+        self.start_watch_with(WATCH_QUIET, WATCH_EVERY);
+    }
+
+    /// Arms the watcher with explicit timings, so a test need not wait them out.
+    fn start_watch_with(&mut self, quiet: Duration, every: Duration) {
+        if self.watch.folder.is_none() {
+            return;
+        }
+        self.watch.recent.clear();
+        self.watch.error = None;
+        self.watch.running = Some(RunningWatch {
+            watcher: import::Watcher::new(quiet),
+            every,
+            last_poll: None,
+            imported: 0,
+            duplicates: 0,
+            failed: 0,
+        });
+    }
+
+    /// Polls the watched folder once and imports what is ready.
+    ///
+    /// A bad file is reported and the watch keeps running: a drop folder keeps
+    /// its purpose even when one drop is not an invoice. A folder that cannot be
+    /// read stops the watch, because the next poll would fail the same way.
+    fn poll_watch(&mut self, session: &Session) {
+        let language = self.language;
+        let Some(folder) = self.watch.folder.clone() else {
+            return;
+        };
+        let Some(owner) = self.seller.as_ref().map(|seller| seller.id) else {
+            return;
+        };
+
+        let polled = match self.watch.running.as_mut() {
+            Some(running) => {
+                running.last_poll = Some(Instant::now());
+                running.watcher.poll(&folder, SystemTime::now())
+            }
+            None => return,
+        };
+        let files = match polled {
+            Ok(files) => files,
+            Err(error) => {
+                self.watch.running = None;
+                self.watch.error = Some(text::settings::watching_failed(language, &error.to_string()));
+                return;
+            }
+        };
+
+        let mut imported = 0_usize;
+        let mut duplicates = 0_usize;
+        let mut failed = 0_usize;
+        let mut lines = Vec::with_capacity(files.len());
+        for path in &files {
+            match import::import_file(session.database(), owner, path, &store::now_rfc3339()) {
+                Ok(outcome) => {
+                    let supplier = outcome
+                        .supplier
+                        .and_then(|id| self.customers.iter().find(|customer| customer.id == id))
+                        .map(|customer| customer.party.legal_name.clone());
+                    if outcome.duplicate {
+                        duplicates += 1;
+                    } else {
+                        imported += 1;
+                    }
+                    lines.push(text::find::imported(
+                        language,
+                        &outcome.number,
+                        supplier.as_deref(),
+                        outcome.duplicate,
+                    ));
+                }
+                Err(error) => {
+                    failed += 1;
+                    let name = path.file_name().map_or_else(
+                        || path.display().to_string(),
+                        |name| name.to_string_lossy().into_owned(),
+                    );
+                    lines.push(text::settings::watching_skipped(language, &name, &error.to_string()));
+                }
+            }
+        }
+
+        if let Some(running) = self.watch.running.as_mut() {
+            running.imported += imported;
+            running.duplicates += duplicates;
+            running.failed += failed;
+        }
+        for line in lines {
+            self.watch.recent.insert(0, line);
+        }
+        self.watch.recent.truncate(WATCH_RECENT);
+
+        if imported > 0 {
+            // New documents appear in the list that is already on screen; the
+            // filters are the user's, so they are not reset behind their back.
+            self.refresh_search(session);
         }
     }
 
@@ -4370,6 +4602,11 @@ mod tests {
         };
         insert_customer(session.database().connection(), &customer, NOW).unwrap();
         let mut workspace = Workspace::new(&session).unwrap();
+        // The watcher card has two faces; draw the running one too.
+        let drop_folder = dir.path().join("drop");
+        std::fs::create_dir_all(&drop_folder).unwrap();
+        workspace.watch.folder = Some(drop_folder);
+        workspace.start_watch_with(Duration::ZERO, Duration::ZERO);
 
         for tab in [Tab::Search, Tab::Customers, Tab::Settings] {
             workspace.tab = tab;
@@ -4530,6 +4767,159 @@ mod tests {
             egui::vec2(8.0, 8.0),
         ));
         assert!((worst_overflow(&[past_the_left]) - 4.0).abs() < 0.01);
+    }
+
+    /// A UBL invoice a supplier would drop into a folder.
+    fn dropped_invoice(number: &str) -> String {
+        let treatment = TaxTreatment::standard(VatRate::STANDARD_NL);
+        let line = syntax::UblLine {
+            id: 1,
+            name: "Consulting",
+            description: None,
+            quantity: Quantity::ONE,
+            unit: UnitCode::PIECE,
+            unit_price: Money::from_major_units(100, Currency::EUR).unwrap(),
+            base_quantity: Quantity::ONE,
+            line_net: Money::from_major_units(100, Currency::EUR).unwrap(),
+            treatment: &treatment,
+        };
+        let lines = [line];
+        let net = Money::from_major_units(100, Currency::EUR).unwrap();
+        let tax = Money::from_major_units(21, Currency::EUR).unwrap();
+        let totals = crux::InvoiceTotals {
+            net,
+            tax,
+            gross: Money::from_major_units(121, Currency::EUR).unwrap(),
+            breakdown: vec![crux::TaxBreakdown {
+                category: VatCategory::Standard,
+                rate_bp: VatRate::STANDARD_NL.basis_points(),
+                taxable_base: net,
+                tax,
+            }],
+        };
+        let supplier = Party::new(
+            "Supplier BV",
+            Address {
+                street: Some("Main 1".to_owned()),
+                city: "Amsterdam".to_owned(),
+                postal_code: Some("1000 AA".to_owned()),
+                country: CountryCode::NL,
+            },
+        );
+        let buyer = Party::new(
+            "Buyer BV",
+            Address {
+                street: Some("Buyer 1".to_owned()),
+                city: "Rotterdam".to_owned(),
+                postal_code: Some("3000 AA".to_owned()),
+                country: CountryCode::NL,
+            },
+        );
+        let invoice = syntax::UblInvoice {
+            number,
+            issue_date: LocalDate::parse_iso("2026-10-27").unwrap(),
+            due_date: None,
+            delivery_date: None,
+            doc_type: DocType::Invoice,
+            currency: Currency::EUR,
+            buyer_reference: None,
+            order_reference: None,
+            note: None,
+            preceding_invoice: None,
+            seller: &supplier,
+            customer: &buyer,
+            lines: &lines,
+            totals: &totals,
+        };
+        String::from_utf8(syntax::write_invoice(&invoice).unwrap().into_bytes()).unwrap()
+    }
+
+    /// The folder watcher is armed from the window and imports what is dropped
+    /// in, once per file.
+    #[test]
+    fn a_watched_folder_imports_a_dropped_invoice() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let session = Session::create(
+            dir.path().join("bonk.db"),
+            dir.path().join("keystore.bin"),
+            "passphrase",
+        )
+        .unwrap();
+        let seller = seller();
+        insert_seller(session.database().connection(), &seller, NOW).unwrap();
+        let mut workspace = Workspace::new(&session).unwrap();
+
+        let drop_folder = dir.path().join("drop");
+        std::fs::create_dir_all(&drop_folder).unwrap();
+        workspace.watch.folder = Some(drop_folder.clone());
+        // The UI waits seconds; the test must not.
+        workspace.start_watch_with(Duration::ZERO, Duration::ZERO);
+
+        // The first poll records what is there and imports nothing.
+        workspace.poll_watch(&session);
+        assert_eq!(received(&session, seller.id).len(), 0);
+
+        std::fs::write(drop_folder.join("invoice.xml"), dropped_invoice("SUP-1")).unwrap();
+        workspace.poll_watch(&session);
+        let documents = received(&session, seller.id);
+        assert_eq!(documents.len(), 1, "the drop is imported once");
+        assert_eq!(documents[0].number, "SUP-1");
+        assert_eq!(documents[0].status, DocumentStatus::Received);
+
+        let running = workspace.watch.running.as_ref().expect("the watch keeps running");
+        assert_eq!((running.imported, running.failed), (1, 0));
+        assert!(
+            workspace.watch.recent[0].contains("SUP-1"),
+            "the card says what arrived: {:?}",
+            workspace.watch.recent
+        );
+
+        // The same file is not offered again, so a poll is not an importer.
+        workspace.poll_watch(&session);
+        assert_eq!(received(&session, seller.id).len(), 1);
+        assert_eq!(workspace.watch.running.as_ref().unwrap().imported, 1);
+    }
+
+    /// A drop that is not an invoice is reported and the watch carries on.
+    #[test]
+    fn a_drop_that_is_not_an_invoice_does_not_stop_the_watch() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let session = Session::create(
+            dir.path().join("bonk.db"),
+            dir.path().join("keystore.bin"),
+            "passphrase",
+        )
+        .unwrap();
+        let seller = seller();
+        insert_seller(session.database().connection(), &seller, NOW).unwrap();
+        let mut workspace = Workspace::new(&session).unwrap();
+
+        let drop_folder = dir.path().join("drop");
+        std::fs::create_dir_all(&drop_folder).unwrap();
+        workspace.watch.folder = Some(drop_folder.clone());
+        workspace.start_watch_with(Duration::ZERO, Duration::ZERO);
+        workspace.poll_watch(&session);
+
+        std::fs::write(drop_folder.join("notes.txt"), "not an invoice").unwrap();
+        workspace.poll_watch(&session);
+
+        assert!(workspace.watch.running.is_some(), "a bad drop is not a reason to stop");
+        assert_eq!(workspace.watch.running.as_ref().unwrap().failed, 1);
+        assert!(
+            workspace.watch.recent[0].contains("notes.txt"),
+            "the card names the file it left alone: {:?}",
+            workspace.watch.recent
+        );
+
+        // And a good drop after it still lands.
+        std::fs::write(drop_folder.join("invoice.xml"), dropped_invoice("SUP-2")).unwrap();
+        workspace.poll_watch(&session);
+        assert_eq!(received(&session, seller.id).len(), 1);
+    }
+
+    /// Received documents, as the register lists them.
+    fn received(session: &Session, owner: SellerId) -> Vec<store::ReceivedSummary> {
+        store::list_received(session.database().connection(), owner).unwrap()
     }
 
     #[test]

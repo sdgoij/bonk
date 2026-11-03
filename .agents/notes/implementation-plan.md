@@ -543,6 +543,21 @@ inbound document shows its supplier with a picker over the party table and
 **Match supplier**, plus **Approve** while it is received and **Mark paid** once
 it is approved — the same `set_supplier_match` and `advance_status` calls, with
 the same audit events, as `bonk match`, `approve`, and `mark-paid`.
+
+**The window can watch a folder too (2026-11-03).** Settings has a **Watching a
+folder** card: pick a drop folder with the platform's folder picker, then
+**Start watching**. It is the same `import::Watcher` with the same quiet period
+and the same priming rule — the first poll records what is already there, so
+starting a watch never imports a back catalogue — and each offered file goes
+through `import::import_file`, so a watched drop and an **Import received…** are
+one code path. The poll runs where the archive is: on the frame that is due,
+with `request_repaint_after` asking for the next one, rather than on a thread
+that would need the connection the window is drawing from. A drop that is not an
+invoice is named in the card and the watch carries on, because a folder keeps its
+purpose when one file is not an invoice; a folder that cannot be read stops the
+watch and says why, because every later poll would fail the same way. Imported
+documents join the list already on screen without resetting the user's filters.
+Watching stops when the archive is locked, since it writes documents.
 `archive::load` now exposes the effective match as `DocumentView::supplier_match`
 — the human decision when there is one, otherwise the match the import made — so
 the panel shows what the register already assumed, and the register still prefers
@@ -649,7 +664,8 @@ of the window. The Customers tab filters the party table and creates, imports,
 and exports CSV through `app::customers`; an import skips parties already on file
 by VAT identifier, Peppol endpoint, or legal name and city, because the archive
 treats a party as an identity rather than a list entry. Settings holds appearance,
-the archive path and encryption state, health, verified backups, and credentials.
+the archive path and encryption state, health, verified backups, a watched folder,
+and credentials.
 `Session` keeps the data key from unlock so the window can write a verified
 backup through `store::backup::backup_with_key` without asking for the passphrase
 again. Both light and dark palettes live in `app::theme`; the choice is
