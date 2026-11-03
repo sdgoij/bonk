@@ -184,8 +184,11 @@ test cannot pass vacuously. This covers process death only: power loss, a torn
 sector below SQLite, and a disk that reorders writes are out of reach here and
 remain a hardware/OS assumption.
 
-Still open from the exit criteria: the CI run on three OSes (workflow written, not
-yet executed).
+**CI, 2026-11-03.** Run #15 passed in 7m 0s: the test matrix on ubuntu, macos, and
+windows, the unencrypted fallback build, and the licence/advisory check
+(<https://github.com/sdgoij/bonk/actions/runs/41646658591>). That run was on the
+commit before the crash test, so the M0 criteria are complete locally and the
+next push is the one that carries the crash test through CI.
 
 ---
 
@@ -502,7 +505,9 @@ time on nightly, and `just fuzz-all` runs all three. A first run of a minute
 across the three targets executed about 340 000 cases with no panic, hang, or
 crash. The property tests stay the offline gate, because the fuzz targets need
 nightly and `cargo-fuzz`, which the CI runner does not have; the targets are the
-periodic, deeper run (threat model O4).
+periodic, deeper run (threat model O4). The one-hour run the M3 exit criterion
+asks for is scheduled and not yet recorded; `just fuzz-all 3600` is the command
+that will produce it.
 
 M3.5 is in as well. `bonk received` lists inbound documents with supplier, dates,
 amount, and status; `bonk approve` and `bonk mark-paid` move a document forward.
