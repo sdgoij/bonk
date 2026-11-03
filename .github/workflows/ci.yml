@@ -1,17 +1,52 @@
 name: CI
 
+# One pipeline, in order: the cheap gates run once, the tests gate every
+# platform, then the release binaries are built and the shipped Linux binary is
+# run through the official validator. A tag starting with `v` turns the last
+# stage into a GitHub release.
 on:
   push:
     branches: ["main"]
+    tags: ["v*"]
   pull_request:
+
+permissions:
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
   RUST_VERSION: "1.98.0"
 
 jobs:
+  checks:
+    name: format and clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Format
+        run: cargo fmt --all --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+  deny:
+    name: licences and advisories
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+
   test:
     name: test (${{ matrix.os }})
+    needs: [checks, deny]
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -22,7 +57,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.RUST_VERSION }}
-          components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
 
       # The vendored OpenSSL build needs a full Perl and nmake on Windows.
@@ -32,33 +66,174 @@ jobs:
         if: runner.os == 'Windows'
         uses: ilammy/msvc-dev-cmd@v1
 
-      - name: Format
-        run: cargo fmt --all --check
-
-      - name: Clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
-
       - name: Test
         run: cargo test --workspace
 
   plain:
     name: unencrypted fallback builds
+    needs: [checks, deny]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.RUST_VERSION }}
-          components: clippy
       - uses: Swatinem/rust-cache@v2
       - name: Test without SQLCipher
         run: cargo test --workspace --no-default-features --features plain
 
-  deny:
-    name: licences and advisories
+  # Native builds on a runner of each architecture. Cross-compiling the vendored
+  # OpenSSL/SQLCipher pair is the part that breaks quietly, and a native runner
+  # removes that variable entirely; the target check below makes a mislabelled
+  # runner fail instead of shipping the wrong architecture under the right name.
+  build:
+    name: build (${{ matrix.target }})
+    needs: [test, plain]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            binary: bonk
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            binary: bonk
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            binary: bonk
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+            binary: bonk
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            binary: bonk.exe
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: MSVC environment
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Runner matches the target
+        shell: bash
+        run: |
+          host=$(rustc -vV | sed -n 's/^host: //p')
+          if [ "$host" != "${{ matrix.target }}" ]; then
+            echo "runner is $host, matrix says ${{ matrix.target }}" >&2
+            exit 1
+          fi
+
+      - name: Build
+        run: cargo build --locked --release -p cli
+
+      - name: Smoke test
+        shell: bash
+        run: ./target/release/${{ matrix.binary }} --version
+
+      # The release package is the binary plus the two files a user needs to
+      # decide whether they may run it.
+      - name: Package (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -eu
+          name="bonk-${{ matrix.target }}"
+          mkdir -p "dist/$name"
+          cp "target/release/${{ matrix.binary }}" "dist/$name/"
+          cp README.md LICENSE.md "dist/$name/"
+          tar -czf "dist/$name.tar.gz" -C dist "$name"
+          ls -l dist
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $name = "bonk-${{ matrix.target }}"
+          New-Item -ItemType Directory -Force -Path "dist/$name" | Out-Null
+          Copy-Item "target/release/${{ matrix.binary }}" "dist/$name/"
+          Copy-Item README.md, LICENSE.md "dist/$name/"
+          Compress-Archive -Path "dist/$name" -DestinationPath "dist/$name.zip"
+          Get-ChildItem dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bonk-${{ matrix.target }}
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+          if-no-files-found: error
+          retention-days: 14
+
+  # The same binary that will be published, run over the EN 16931 corpus and
+  # through the official validator. One platform is enough: the bytes are
+  # written by platform-independent code, and Mustang is a Java process.
+  conformance:
+    name: conformance (Mustang EN 16931)
+    needs: build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: EmbarkStudios/cargo-deny-action@v2
+      - uses: dtolnay/rust-toolchain@master
         with:
-          command: check
+          toolchain: ${{ env.RUST_VERSION }}
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: actions/cache@v4
+        with:
+          path: target/validator
+          key: mustang-2.17.0
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: bonk-x86_64-unknown-linux-gnu
+          path: package
+
+      - name: Unpack the shipped binary
+        run: |
+          tar -xzf package/bonk-x86_64-unknown-linux-gnu.tar.gz -C "$RUNNER_TEMP"
+          chmod +x "$RUNNER_TEMP/bonk-x86_64-unknown-linux-gnu/bonk"
+          echo "BONK_BIN=$RUNNER_TEMP/bonk-x86_64-unknown-linux-gnu/bonk" >> "$GITHUB_ENV"
+
+      - name: EN 16931 corpus
+        run: sh tools/validate-m1.sh
+
+      - name: Expected findings against the authority
+        run: sh tools/validate-findings.sh
+
+      - name: VAT category matrix
+        run: sh tools/validate-vat-matrix.sh
+
+  release:
+    name: release
+    needs: [build, conformance]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: List the assets
+        run: ls -l dist
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.tar.gz
+            dist/*.zip
+          fail_on_unmatched_files: true
+          generate_release_notes: true

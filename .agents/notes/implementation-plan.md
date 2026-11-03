@@ -1232,6 +1232,17 @@ Lead-time items to start early: Windows code-signing certificate, Apple
 Developer ID, a company VAT number for the Peppol provider contract, and a
 trademark/name check.
 
+**Status, 2026-11-03.** The first pipeline is in place: checks (fmt, clippy,
+deny) → the three-OS tests plus the unencrypted build → five release builds on
+native runners (Linux x86_64/aarch64, macOS arm64/Intel, Windows x86_64) → the
+conformance gate, which runs the *shipped* Linux binary through the EN 16931
+corpus and Mustang → a GitHub release for any tag starting with `v`. Each archive
+holds the binary, `README.md`, and `LICENSE.md`, and each build refuses to
+continue when its runner's host triple differs from the target it was asked for,
+so an archive cannot be labelled with an architecture it does not contain. Still
+missing against the table above, and required before v1.0: installers, code
+signing, notarisation, the SBOM and SHA-256 sums, and the signed update manifest.
+
 ---
 
 ## 11. Operating rhythm

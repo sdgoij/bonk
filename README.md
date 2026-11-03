@@ -113,6 +113,30 @@ the GUI shows a permanent red warning, and the CLI prints
 `encryption: none (test build)`. Never ship or use it for real data. See
 [`.agents/notes/spikes/sqlcipher.md`](.agents/notes/spikes/sqlcipher.md).
 
+## Releases
+
+Pushing a tag that starts with `v` runs the full pipeline and, when every stage
+is green, publishes one archive per target. An archive contains the binary, this
+README, and `LICENSE.md`:
+
+| Target | Runner | Archive |
+|--------|--------|---------|
+| `x86_64-unknown-linux-gnu` | `ubuntu-latest` | `bonk-x86_64-unknown-linux-gnu.tar.gz` |
+| `aarch64-unknown-linux-gnu` | `ubuntu-24.04-arm` | `bonk-aarch64-unknown-linux-gnu.tar.gz` |
+| `aarch64-apple-darwin` | `macos-latest` | `bonk-aarch64-apple-darwin.tar.gz` |
+| `x86_64-apple-darwin` | `macos-15-intel` | `bonk-x86_64-apple-darwin.tar.gz` |
+| `x86_64-pc-windows-msvc` | `windows-latest` | `bonk-x86_64-pc-windows-msvc.zip` |
+
+Each build runs on a runner of its own architecture and refuses to continue if
+the runner's host triple is not the target it was asked for, so an archive cannot
+be labelled with an architecture it does not contain. The conformance stage runs
+the shipped Linux binary over the EN 16931 corpus and the official validator
+before the release is created.
+
+None of the binaries are signed. On macOS, Gatekeeper quarantines the download:
+`xattr -d com.apple.quarantine bonk` after unpacking, or allow it under System
+Settings → Privacy & Security. On Windows, SmartScreen warns on the first run.
+
 ## Repository setup
 
 Install the pre-commit gate once per clone (`just hooks` does the same):
