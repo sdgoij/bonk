@@ -20,9 +20,11 @@ just fuzz ubl 60                  # the same, via the Justfile
 just fuzz-all 60                  # all three, a minute each
 ```
 
-The corpora are seeded with one real document per format (`fuzz/corpus/<target>/`),
-so mutation starts near the shape each parser understands. New interesting inputs
-land in the same directory and are worth committing when they improve coverage.
+The corpora start from one real document per format, kept in
+`fuzz/seeds/<target>/`, so mutation begins near the shape each parser
+understands. `just fuzz` copies the seeds into `fuzz/corpus/<target>/`, which is
+ignored: a long run writes thousands of generated inputs there, and only one that
+improves coverage is worth keeping, by moving it into `seeds/<target>/`.
 
 This is a separate Cargo workspace: the shipped binary must never depend on a
 fuzz harness, and the targets need `-Z sanitizer` flags the stable build does

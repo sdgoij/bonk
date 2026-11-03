@@ -1,3 +1,7 @@
 # Build output and crash artefacts; the corpus seeds are committed.
 target/
 artifacts/
+# The working corpus: generated inputs accumulate here by the thousand during a
+# run. The hand-picked starting points live in `seeds/` and are copied in by
+# `just fuzz`; move an input into `seeds/<target>/` when it is worth keeping.
+corpus/

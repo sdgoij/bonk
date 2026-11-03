@@ -121,8 +121,13 @@ xtask *args:
 # `cargo fuzz` (`cargo install cargo-fuzz`); the targets are a separate workspace
 # so the shipped binary never depends on a fuzz harness.
 #   just fuzz ubl 60
+#
+# cargo-fuzz finds `fuzz/` from the repository root on its own. It has no
+# `--manifest-path` option, so do not add one back.
 fuzz target seconds="60":
-    cargo +nightly fuzz run --manifest-path fuzz/Cargo.toml {{target}} -- -max_total_time={{seconds}}
+    mkdir -p fuzz/corpus/{{target}}
+    cp -n fuzz/seeds/{{target}}/* fuzz/corpus/{{target}}/
+    cargo +nightly fuzz run {{target}} -- -max_total_time={{seconds}}
 
 # Fuzz all three parsers for N seconds each (ubl, cii, pdf).
 fuzz-all seconds="60":
