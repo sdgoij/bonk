@@ -16,6 +16,7 @@ use crux::{
     LineId, LocalDate, Money, Party, PhoneNumber, PrecedingInvoice, Quantity, SavedSearchId, SellerId, Severity,
     TaxTreatment, UnitCode, VatCategory, VatRate, calculate_totals, has_blocking, validate_draft,
 };
+use store::backup::BackupStage;
 use store::{
     CustomerRecord, Direction, DocumentRecord, DocumentStatus, IssueRequest, SavedSearch, SearchCounts, SearchHit,
     SearchRequest, SellerRecord, StoreError, Suppression, advance_status, archive::DocumentView, attach_artefact,
@@ -103,6 +104,8 @@ pub struct Workspace {
     watch: Watch,
     /// The payload audit, while one is running on a worker thread.
     health_check: Option<HealthCheck>,
+    /// The backup, while one is running on a worker thread.
+    backup_job: Option<BackupJob>,
     /// Every layout in `<archive>/templates`, sorted by file name. A document
     /// names the one it wants; the archive default is the one named `default`.
     /// Everything that lays a document out resolves through this list, so the
@@ -476,6 +479,25 @@ struct HealthCheck {
     updates: mpsc::Receiver<HealthUpdate>,
     /// The last thing the worker said it was doing.
     stage: HealthStage,
+}
+
+/// A backup running off the UI thread.
+///
+/// `VACUUM INTO` and the copy's page scan are single SQLite calls with no
+/// progress of their own; the chain check reports link by link. Either way the
+/// frame keeps drawing.
+struct BackupJob {
+    updates: mpsc::Receiver<BackupUpdate>,
+    /// The last stage the worker reported.
+    stage: BackupStage,
+}
+
+/// What the backup worker sends.
+enum BackupUpdate {
+    /// The stage it is in, and how far the chain check has got.
+    Stage(BackupStage),
+    /// The outcome, once the copy has been verified or the run failed.
+    Finished(Result<store::BackupReport, StoreError>),
 }
 
 /// The panel's view of a running check.
@@ -886,6 +908,7 @@ impl Workspace {
             preview: None,
             watch: Watch::default(),
             health_check: None,
+            backup_job: None,
             templates,
             device_remembered: Session::device_ready(session.keystore_path(), &store::device::Keychain),
             conformance_findings: Vec::new(),
@@ -923,6 +946,10 @@ impl Workspace {
         // running one keeps the frames coming so its answer shows promptly.
         self.poll_health_check();
         if self.health_check.is_some() {
+            ui.ctx().request_repaint_after(Duration::from_millis(200));
+        }
+        self.poll_backup(session);
+        if self.backup_job.is_some() {
             ui.ctx().request_repaint_after(Duration::from_millis(200));
         }
         let mut lock = false;
@@ -1725,8 +1752,33 @@ impl Workspace {
                     ui,
                     text::settings::backup_directory(language, &backup_directory(session).display().to_string()),
                 );
-                if ui.button(text::settings::backup_now(language)).clicked() {
+                let running = self.backup_job.as_ref().map(|job| job.stage);
+                if ui
+                    .add_enabled(
+                        running.is_none(),
+                        egui::Button::new(text::settings::backup_now(language)),
+                    )
+                    .clicked()
+                {
                     backup = true;
+                }
+                match running {
+                    Some(BackupStage::Copying) => {
+                        ui.horizontal(|ui| {
+                            ui.add(egui::Spinner::new().size(14.0));
+                            ui.weak(text::settings::backing_up_copying(language));
+                        });
+                    }
+                    Some(BackupStage::VerifyingStructure) => {
+                        ui.horizontal(|ui| {
+                            ui.add(egui::Spinner::new().size(14.0));
+                            ui.weak(text::settings::backing_up_verifying(language));
+                        });
+                    }
+                    Some(BackupStage::VerifyingChain { done, total }) => {
+                        staged_progress(ui, text::settings::backing_up_chain(language, done, total), done, total);
+                    }
+                    None => {}
                 }
                 ui.weak(text::settings::recovery_kit_note(language));
                 if ui.button(text::settings::recovery_kit_action(language)).clicked() {
@@ -1779,23 +1831,106 @@ impl Workspace {
     }
 
     /// Writes and verifies a backup beside the archive.
+    /// Starts the backup on a worker thread.
+    ///
+    /// `VACUUM INTO` copies the whole archive and the copy is then verified, so
+    /// on a large archive this is tens of seconds; on the frame it would freeze
+    /// the window. The worker opens its own connection with the same key and the
+    /// window adopts the outcome when it arrives.
     fn run_backup(&mut self, session: &Session) {
-        let language = self.language;
+        if self.backup_job.is_some() {
+            return; // one backup at a time
+        }
+
+        let path = session.database_path().to_path_buf();
+        let dek = Zeroizing::new(*session.dek());
         let directory = backup_directory(session);
-        match session.backup(&directory, &store::now_rfc3339(), store::backup::RETENTION) {
-            Ok(report) => {
-                self.message = Some(Message::ok(text::settings::backup_done(
-                    language,
-                    &report.path.display().to_string(),
-                    report.bytes / 1024,
-                )));
-                self.health = Health::snapshot(session.database(), session.database_path()).ok();
+        let stamp = store::now_rfc3339();
+        let (sender, updates) = mpsc::channel();
+        let worker = std::thread::Builder::new()
+            .name("bonk-backup".to_owned())
+            .spawn(move || {
+                let outcome = match store::Database::open_with_key(&path, &dek) {
+                    Ok(database) => {
+                        let mut last: Option<Instant> = None;
+                        store::backup::backup_with_key_progress(
+                            &database,
+                            &dek,
+                            &directory,
+                            &stamp,
+                            store::backup::RETENTION,
+                            &mut |stage| {
+                                // The chain walk ticks once per link; the window
+                                // does not need to hear about 40 000 of them.
+                                let due = !matches!(stage, BackupStage::VerifyingChain { done, total } if done < total)
+                                    || last.is_none_or(|at| at.elapsed() >= Duration::from_millis(100));
+                                if due {
+                                    last = Some(Instant::now());
+                                    let _ = sender.send(BackupUpdate::Stage(stage));
+                                }
+                            },
+                        )
+                    }
+                    Err(error) => Err(error),
+                };
+                let _ = sender.send(BackupUpdate::Finished(outcome));
+            });
+        match worker {
+            Ok(_) => {
+                self.backup_job = Some(BackupJob {
+                    updates,
+                    stage: BackupStage::Copying,
+                });
             }
             Err(error) => {
-                self.message = Some(Message::error(text::settings::backup_failed(
-                    language,
-                    &error.to_string(),
-                )))
+                self.message = Some(Message::error(format!("could not start the backup: {error}")));
+            }
+        }
+    }
+
+    /// Adopts the backup's progress and, when it is done, its outcome.
+    fn poll_backup(&mut self, session: &Session) {
+        loop {
+            let update = match &self.backup_job {
+                Some(job) => job.updates.try_recv(),
+                None => return,
+            };
+            match update {
+                Ok(BackupUpdate::Stage(stage)) => {
+                    if let Some(job) = &mut self.backup_job {
+                        job.stage = stage;
+                    }
+                }
+                Ok(BackupUpdate::Finished(outcome)) => {
+                    self.backup_job = None;
+                    let language = self.language;
+                    match outcome {
+                        Ok(report) => {
+                            self.message = Some(Message::ok(text::settings::backup_done(
+                                language,
+                                &report.path.display().to_string(),
+                                report.bytes / 1024,
+                            )));
+                            self.health = Health::snapshot(session.database(), session.database_path()).ok();
+                        }
+                        Err(error) => {
+                            self.message = Some(Message::error(text::settings::backup_failed(
+                                language,
+                                &error.to_string(),
+                            )));
+                        }
+                    }
+                    return;
+                }
+                Err(mpsc::TryRecvError::Empty) => return,
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    // The worker died without answering, so the card must not
+                    // show a backup that is not coming.
+                    self.backup_job = None;
+                    let language = self.language;
+                    self.message = Some(Message::error(text::settings::backup_stopped(language).to_owned()));
+                    return;
+                }
             }
         }
     }
@@ -5180,6 +5315,32 @@ mod tests {
             health.links.is_some_and(|links| links > 0),
             "the check covers the chain as well: {:?}",
             health.links
+        );
+    }
+
+    /// A backup copies the whole archive and verifies the copy, so it must not
+    /// run on the frame either; the card adopts the outcome when it arrives.
+    #[test]
+    fn a_backup_runs_off_the_ui_thread() {
+        let (dir, session, _seller) = session_with_one_issued();
+        let mut workspace = Workspace::new(&session).unwrap();
+
+        workspace.run_backup(&session);
+        assert!(workspace.backup_job.is_some(), "the backup is a job, not a call");
+
+        let deadline = Instant::now() + Duration::from_secs(60);
+        while workspace.backup_job.is_some() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+            workspace.poll_backup(&session);
+        }
+
+        assert!(workspace.backup_job.is_none(), "the worker answered");
+        let message = workspace.message.as_ref().expect("the card says what happened");
+        assert!(!message.error, "{}", message.text);
+        assert_eq!(
+            std::fs::read_dir(dir.path().join("backups")).unwrap().count(),
+            1,
+            "one verified copy sits beside the archive"
         );
     }
 

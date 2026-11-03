@@ -573,8 +573,19 @@ fn run(cli: Cli) -> Result<(), CliError> {
                     .unwrap_or_else(|| PathBuf::from("backups"))
             });
 
-            let report =
-                store::backup::backup(session.database(), &key_store, &directory, &store::now_rfc3339(), keep)?;
+            let mut chain_progress = progress_reporter("audit chain");
+            let report = store::backup::backup_with_progress(
+                session.database(),
+                &key_store,
+                &directory,
+                &store::now_rfc3339(),
+                keep,
+                &mut |stage| match stage {
+                    store::backup::BackupStage::Copying => eprintln!("copying the archive…"),
+                    store::backup::BackupStage::VerifyingStructure => eprintln!("verifying the copy…"),
+                    store::backup::BackupStage::VerifyingChain { done, total } => chain_progress(done, total),
+                },
+            )?;
             println!("backup: {} ({} bytes, verified)", report.path.display(), report.bytes);
             for removed in &report.removed {
                 println!("pruned: {}", removed.display());

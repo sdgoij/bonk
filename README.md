@@ -280,7 +280,10 @@ customer **Import…** and **Export…** buttons use.
 
 Settings holds appearance (System, Light, Dark), archive health, verified
 backups, and credentials. Labels are not selectable; values — amounts, names,
-hashes, paths — are. Light and dark share one layout. The folder watcher's folder
+hashes, paths — are. Light and dark share one layout. **Back up now** copies the
+whole archive and verifies the copy, so it runs on a worker thread rather than on
+the frame: a spinner while the copy is written, then the audit chain link by
+link, and the button is disabled until it finishes. The folder watcher's folder
 and its on/off switch are a per-device preference, kept in the window's own
 storage rather than in the archive, so they survive a restart and a lock; the
 first poll after reopening primes the folder, so a restored watch still never

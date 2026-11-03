@@ -31,6 +31,21 @@ pub struct BackupReport {
     pub removed: Vec<PathBuf>,
 }
 
+/// How far a backup has got.
+///
+/// Two of the three steps are a single SQLite call that cannot report progress:
+/// `VACUUM INTO` and the page scan. The chain can, so a caller with a user in
+/// front of it can show real movement for part of the wait.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum BackupStage {
+    /// The copy is being written.
+    Copying,
+    /// The copy's own page structure is being checked.
+    VerifyingStructure,
+    /// The copy's audit chain is being recomputed, link by link.
+    VerifyingChain { done: usize, total: usize },
+}
+
 /// Writes a verified backup of `database` into `directory`, then prunes old ones.
 ///
 /// The destination must not exist; `stamp` is turned into a sortable file name,
@@ -43,7 +58,19 @@ pub fn backup(
     stamp: &str,
     keep: usize,
 ) -> Result<BackupReport, StoreError> {
-    backup_with_key(database, keystore.dek(), directory, stamp, keep)
+    backup_with_progress(database, keystore, directory, stamp, keep, &mut |_| {})
+}
+
+/// The same backup, reporting [`BackupStage`] as it goes.
+pub fn backup_with_progress(
+    database: &Database,
+    keystore: &KeyStore,
+    directory: impl AsRef<Path>,
+    stamp: &str,
+    keep: usize,
+    progress: &mut dyn FnMut(BackupStage),
+) -> Result<BackupReport, StoreError> {
+    backup_with_key_progress(database, keystore.dek(), directory, stamp, keep, progress)
 }
 
 /// Writes a verified backup using a raw data key.
@@ -58,15 +85,28 @@ pub fn backup_with_key(
     stamp: &str,
     keep: usize,
 ) -> Result<BackupReport, StoreError> {
+    backup_with_key_progress(database, dek, directory, stamp, keep, &mut |_| {})
+}
+
+/// The same backup, reporting [`BackupStage`] as it goes.
+pub fn backup_with_key_progress(
+    database: &Database,
+    dek: &[u8; 32],
+    directory: impl AsRef<Path>,
+    stamp: &str,
+    keep: usize,
+    progress: &mut dyn FnMut(BackupStage),
+) -> Result<BackupReport, StoreError> {
     let directory = directory.as_ref();
     permissions::private_directory(directory)?;
 
+    progress(BackupStage::Copying);
     let path = directory.join(file_name(stamp)?);
     database.backup_to(&path)?;
     // A copy holds the whole archive; it must not be readable by more accounts
     // than the original.
     permissions::restrict_quietly(&path);
-    verify(&path, dek)?;
+    verify_with_progress(&path, dek, progress)?;
     let bytes = std::fs::metadata(&path)?.len();
 
     let removed = prune(directory, keep.max(1))?;
@@ -88,11 +128,27 @@ pub struct BackupSummary {
 ///
 /// Read-only on purpose: verifying a backup must not be able to change it.
 pub fn verify(path: impl AsRef<Path>, dek: &[u8; 32]) -> Result<usize, StoreError> {
-    Ok(inspect(path, dek)?.events)
+    verify_with_progress(path, dek, &mut |_| {})
+}
+
+fn verify_with_progress(
+    path: impl AsRef<Path>,
+    dek: &[u8; 32],
+    progress: &mut dyn FnMut(BackupStage),
+) -> Result<usize, StoreError> {
+    Ok(inspect_with_progress(path, dek, progress)?.events)
 }
 
 /// Verifies a copy and reports what it holds, for comparing two archives.
 pub fn inspect(path: impl AsRef<Path>, dek: &[u8; 32]) -> Result<BackupSummary, StoreError> {
+    inspect_with_progress(path, dek, &mut |_| {})
+}
+
+fn inspect_with_progress(
+    path: impl AsRef<Path>,
+    dek: &[u8; 32],
+    progress: &mut dyn FnMut(BackupStage),
+) -> Result<BackupSummary, StoreError> {
     let path = path.as_ref();
     if !path.exists() {
         return Err(StoreError::Io(io::Error::new(
@@ -106,12 +162,15 @@ pub fn inspect(path: impl AsRef<Path>, dek: &[u8; 32]) -> Result<BackupSummary, 
     // Exercise the key before the checks: a wrong key must not look like damage.
     let _: i64 = conn.query_row("SELECT count(*) FROM sqlite_master", [], |row| row.get(0))?;
 
+    progress(BackupStage::VerifyingStructure);
     let integrity: String = conn.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
     if integrity != "ok" {
         return Err(StoreError::Integrity(integrity));
     }
 
-    let events = audit::verify_chain(&conn)?;
+    let events = audit::verify_chain_with_progress(&conn, &mut |done, total| {
+        progress(BackupStage::VerifyingChain { done, total });
+    })?;
     let schema_version: Option<i64> =
         conn.query_row("SELECT max(version) FROM schema_migration", [], |row| row.get(0))?;
 

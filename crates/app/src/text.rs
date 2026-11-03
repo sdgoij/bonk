@@ -915,6 +915,42 @@ pub mod settings {
         )
     }
 
+    /// A backup is writing its copy.
+    pub fn backing_up_copying(language: Language) -> &'static str {
+        sentence!(
+            language,
+            "Backing up: copying the archive…",
+            "Back-up maken: archief kopiëren…"
+        )
+    }
+
+    /// A backup is checking its copy.
+    pub fn backing_up_verifying(language: Language) -> &'static str {
+        sentence!(
+            language,
+            "Backing up: verifying the copy…",
+            "Back-up maken: kopie controleren…"
+        )
+    }
+
+    /// How far the chain check of a fresh copy has got.
+    pub fn backing_up_chain(language: Language, done: usize, total: usize) -> String {
+        sentence!(
+            language,
+            format!("audit chain {done}/{total}"),
+            format!("auditketen {done}/{total}")
+        )
+    }
+
+    /// The backup worker stopped without answering.
+    pub fn backup_stopped(language: Language) -> &'static str {
+        sentence!(
+            language,
+            "The backup stopped unexpectedly.",
+            "De back-up stopte onverwacht."
+        )
+    }
+
     /// The watcher card.
     pub fn watching(language: Language) -> &'static str {
         sentence!(language, "Watching a folder", "Een map volgen")

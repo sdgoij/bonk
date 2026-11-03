@@ -819,6 +819,14 @@ directory `backups` beside the database, `--keep` for retention) and
 encryption, rotation, refusal before pruning, damage detection, and a restore on
 a fresh path.
 
+**A backup is a background job (2026-11-03).** Copying the 20 000-document bench
+archive and verifying the copy takes about 14 seconds, which froze the window. The
+window now runs it on a worker with its own connection, like the archive check:
+`store::backup::backup_with_progress` reports `Copying`, `VerifyingStructure`, and
+the chain walk link by link, the card shows a spinner for the two SQLite calls
+that cannot report progress and a bar for the chain, and the button is disabled
+until the job answers. `bonk backup` prints the same stages to stderr.
+
 **The key has a copy of its own (2026-11-03).** A database copy cannot be opened
 without the keystore: the archive is encrypted with a random data key, and the
 passphrase only unwraps that key from `keystore.bin`, so a recovery key is inert
