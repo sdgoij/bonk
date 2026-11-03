@@ -1,0 +1,39 @@
+[package]
+name = "bonk-fuzz"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.98"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+syntax = { path = "../crates/syntax" }
+import = { path = "../crates/import", default-features = false, features = ["plain"] }
+
+# A separate workspace, so the fuzz targets do not join the library build (they
+# need nightly, and the shipped binary must never carry a fuzz harness).
+[workspace]
+
+[[bin]]
+name = "ubl"
+path = "fuzz_targets/ubl.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "cii"
+path = "fuzz_targets/cii.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "pdf"
+path = "fuzz_targets/pdf.rs"
+test = false
+doc = false
+bench = false

@@ -480,9 +480,18 @@ M3.7's invariant is now enforced in the suite rather than only in a fuzz run:
 property tests feed arbitrary bytes and structured token soup to both XML
 readers and to the PDF extractor, a mutated real container and a truncation sweep
 cover the container path, and a compressed stream that claims to inflate past the
-limit must be refused. The parsers answer or refuse, never panic. libFuzzer
-targets are not wired yet because they need nightly plus `cargo-fuzz` on the CI
-runner; the property tests are the gate until that exists.
+limit must be refused. The parsers answer or refuse, never panic.
+
+**The libFuzzer targets are in (2026-11-03).** `fuzz/` holds one harness per
+parser — `ubl` (`syntax::read::read_invoice`), `cii` (`syntax::read::read_document`),
+and `pdf` (`import::extract_invoice`) — as a separate Cargo workspace so the
+shipped binary never carries a fuzz harness. Each corpus is seeded with one real
+document of its format, `just fuzz <target> <seconds>` runs one for a bounded
+time on nightly, and `just fuzz-all` runs all three. A first run of a minute
+across the three targets executed about 340 000 cases with no panic, hang, or
+crash. The property tests stay the offline gate, because the fuzz targets need
+nightly and `cargo-fuzz`, which the CI runner does not have; the targets are the
+periodic, deeper run (threat model O4).
 
 M3.5 is in as well. `bonk received` lists inbound documents with supplier, dates,
 amount, and status; `bonk approve` and `bonk mark-paid` move a document forward.

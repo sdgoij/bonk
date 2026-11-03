@@ -204,12 +204,14 @@ it off deletes the entry and appends `device_forgotten` to the chain.
 | A wrong recovery key changes nothing | `a_wrong_recovery_key_leaves_the_archive_alone` |
 | A remembered device opens the archive without the passphrase | `a_remembered_device_opens_the_archive_without_the_passphrase` |
 | Forgetting the device removes the route | `forgetting_the_device_removes_the_route` |
-| Parsers survive hostile bytes | `arbitrary_bytes_never_panic`, `a_mutated_container_never_panics`, `a_stream_that_inflates_past_the_limit_is_refused` |
+| Parsers survive hostile bytes | `arbitrary_bytes_never_panic`, `a_mutated_container_never_panics`, `a_stream_that_inflates_past_the_limit_is_refused`; deeper, bounded runs are `just fuzz-all` (fuzz/ubl, fuzz/cii, fuzz/pdf) |
 
 ## 8. Open items
 
-- **O4** libFuzzer targets once the runner has nightly and `cargo-fuzz`; the
-  property tests are the gate until then.
+O4 is closed (2026-11-03): `fuzz/` holds one libFuzzer target per parser, seeded
+with a real document of each format, and `just fuzz <target> <seconds>` runs one
+on a nightly toolchain. The CI runner still has no nightly, so the property tests
+remain the offline gate and the fuzz targets are the periodic deeper run.
 
 Changes to a decision recorded here need an ADR, like any other.
 

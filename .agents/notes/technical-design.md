@@ -1609,7 +1609,7 @@ fail CI.
 | Golden | `insta` | UBL/CII bytes, PDF structure, findings output |
 | Conformance | vendored corpus + `xtask conformance` | EN 16931 rules, Peppol profile, Factur-X profiles |
 | Differential | Java oracle in CI (Docker) | Our findings vs Mustang/KoSIT on the corpus |
-| Fuzz | `cargo fuzz` | XML parsers, PDF extraction, import sniffing |
+| Fuzz | `cargo fuzz` (nightly, `just fuzz` / `just fuzz-all`) | `fuzz/ubl` (UBL reader), `fuzz/cii` (CII reader), `fuzz/pdf` (Factur-X extractor) |
 | PDF | veraPDF in CI | PDF/A-3 validity for every template × profile |
 | Storage | Fixture DBs from every release | Migrations, FTS integrity, trigger enforcement |
 | E2E | `assert_cmd` on `cli` | Issue → export → verify → evidence bundle |
