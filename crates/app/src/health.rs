@@ -63,6 +63,8 @@ pub enum CheckPhase {
     Chain,
     /// Re-hashing stored payloads.
     Payloads,
+    /// Matching payloads against the artefacts and imports that refer to them.
+    References,
 }
 
 /// Re-hashes every stored payload and recomputes the chain, on the calling
@@ -102,8 +104,12 @@ pub fn audit_archive_with_progress(
             };
         }
     };
-    match integrity::audit_with_progress(database.connection(), &mut |done, total| {
-        progress(CheckPhase::Payloads, done, total);
+    match integrity::audit_with_progress(database.connection(), &mut |phase, done, total| {
+        let phase = match phase {
+            integrity::AuditPhase::Payloads => CheckPhase::Payloads,
+            integrity::AuditPhase::References => CheckPhase::References,
+        };
+        progress(phase, done, total);
     }) {
         Ok(report) => CheckOutcome {
             report: Some(report),
@@ -213,7 +219,7 @@ mod tests {
         let (dir, session) = session();
         let health = Health::snapshot(session.database(), session.database_path()).unwrap();
 
-        assert_eq!(health.schema_version, 8);
+        assert_eq!(health.schema_version, 10);
         assert_eq!(health.encryption, store::encryption_label());
         assert!(health.database_bytes > 0);
         assert!(health.chain.is_none(), "nothing has happened yet");

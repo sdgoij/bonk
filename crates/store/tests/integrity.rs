@@ -120,21 +120,25 @@ fn a_clean_archive_verifies() {
 }
 
 /// A caller with a user in front of it needs to show movement; the callback has
-/// to reach every payload and end on the final count.
+/// to reach every payload, in both passes, and end on the final count.
 #[test]
 fn the_audit_reports_how_far_it_has_got() {
     let (_dir, database, _document_id) = seeded();
-    let mut seen: Vec<(usize, usize)> = Vec::new();
-    let report = store::integrity::audit_with_progress(database.connection(), &mut |done, total| {
-        seen.push((done, total));
+    let mut hashed: Vec<(usize, usize)> = Vec::new();
+    let mut swept: Vec<(usize, usize)> = Vec::new();
+    let report = store::integrity::audit_with_progress(database.connection(), &mut |phase, done, total| match phase {
+        store::integrity::AuditPhase::Payloads => hashed.push((done, total)),
+        store::integrity::AuditPhase::References => swept.push((done, total)),
     })
     .unwrap();
 
-    assert_eq!(seen.len(), report.blobs, "one report per payload");
-    assert_eq!(seen.last(), Some(&(report.blobs, report.blobs)));
+    assert_eq!(hashed.len(), report.blobs, "one report per payload hashed");
+    assert_eq!(swept.len(), report.blobs, "and one per payload swept");
+    assert_eq!(hashed.last(), Some(&(report.blobs, report.blobs)));
+    assert_eq!(swept.last(), Some(&(report.blobs, report.blobs)));
     assert!(
-        seen.windows(2).all(|pair| pair[0].0 < pair[1].0),
-        "the count only grows: {seen:?}"
+        hashed.windows(2).all(|pair| pair[0].0 < pair[1].0) && swept.windows(2).all(|pair| pair[0].0 < pair[1].0),
+        "both counts only grow: {hashed:?} {swept:?}"
     );
 }
 

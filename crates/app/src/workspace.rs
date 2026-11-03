@@ -487,6 +487,8 @@ enum HealthStage {
     Chain { done: usize, total: usize },
     /// `done` of `total` payloads re-hashed.
     Payloads { done: usize, total: usize },
+    /// `done` of `total` payloads matched against the references to them.
+    References { done: usize, total: usize },
 }
 
 /// One armed folder watcher, and what it has done so far.
@@ -2208,6 +2210,14 @@ impl Workspace {
                     *total,
                 );
             }
+            Some(HealthStage::References { done, total }) => {
+                staged_progress(
+                    ui,
+                    text::health::references_progress(language, *done, *total),
+                    *done,
+                    *total,
+                );
+            }
             None => {}
         }
         ui.add_enabled(
@@ -2255,6 +2265,7 @@ impl Workspace {
                                 let stage = match phase {
                                     CheckPhase::Chain => HealthStage::Chain { done, total },
                                     CheckPhase::Payloads => HealthStage::Payloads { done, total },
+                                    CheckPhase::References => HealthStage::References { done, total },
                                 };
                                 let _ = sender.send(HealthUpdate::Stage(stage));
                             }

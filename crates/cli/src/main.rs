@@ -707,7 +707,14 @@ fn run(cli: Cli) -> Result<(), CliError> {
             let audit_events =
                 store::audit::verify_chain_with_progress(session.database().connection(), &mut chain_progress)?;
             let mut payload_progress = progress_reporter("payloads");
-            let report = store::integrity::audit_with_progress(session.database().connection(), &mut payload_progress)?;
+            let mut reference_progress = progress_reporter("references");
+            let report =
+                store::integrity::audit_with_progress(session.database().connection(), &mut |phase, done, total| {
+                    match phase {
+                        store::integrity::AuditPhase::Payloads => payload_progress(done, total),
+                        store::integrity::AuditPhase::References => reference_progress(done, total),
+                    }
+                })?;
 
             println!("ok:       integrity check passed");
             println!("schema:   {}", summary.schema_version);

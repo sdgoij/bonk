@@ -76,6 +76,18 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("../migrations/0008_draft_template.sql"),
         down: Some(include_str!("../migrations/0008_draft_template_down.sql")),
     },
+    Migration {
+        version: 9,
+        name: "0009_artefact_blob_index",
+        sql: include_str!("../migrations/0009_artefact_blob_index.sql"),
+        down: Some(include_str!("../migrations/0009_artefact_blob_index_down.sql")),
+    },
+    Migration {
+        version: 10,
+        name: "0010_blob_sha256_index",
+        sql: include_str!("../migrations/0010_blob_sha256_index.sql"),
+        down: Some(include_str!("../migrations/0010_blob_sha256_index_down.sql")),
+    },
 ];
 
 /// SHA-256 of the migration source, hex encoded.
@@ -215,15 +227,19 @@ mod tests {
     fn rollback_is_preflighted_and_refuses_irreversible_migrations() {
         let mut conn = Connection::open_in_memory().unwrap();
         apply(&mut conn).unwrap();
-        assert_eq!(current_version(&conn), 8);
+        assert_eq!(current_version(&conn), 10);
 
         assert!(rollback_to(&mut conn, 1).is_err());
-        assert_eq!(current_version(&conn), 8, "a refused rollback must not partially apply");
+        assert_eq!(
+            current_version(&conn),
+            10,
+            "a refused rollback must not partially apply"
+        );
 
         assert_eq!(
             rollback_to(&mut conn, 2).unwrap(),
-            6,
-            "0008, 0007, 0006, 0005, 0004, and 0003 all declare a down"
+            8,
+            "0010, 0009, 0008, 0007, 0006, 0005, 0004, and 0003 all declare a down"
         );
         assert_eq!(current_version(&conn), 2);
     }

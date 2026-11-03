@@ -28,6 +28,15 @@ pub struct IntegrityReport {
     pub orphaned_blobs: usize,
 }
 
+/// Which pass a long audit is on.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum AuditPhase {
+    /// Payload bytes re-hashed against their recorded digests.
+    Payloads,
+    /// Payloads matched against the artefacts and imports that refer to them.
+    References,
+}
+
 /// Checks the whole archive and returns what it counted.
 ///
 /// Fails on foreign-key violations, a payload whose bytes no longer hash to its
@@ -35,17 +44,19 @@ pub struct IntegrityReport {
 /// whose payload is gone. The first problem found is named; a damaged archive
 /// stops the audit rather than listing every consequence of one break.
 pub fn audit(conn: &Connection) -> Result<IntegrityReport, StoreError> {
-    audit_with_progress(conn, &mut |_, _| {})
+    audit_with_progress(conn, &mut |_, _, _| {})
 }
 
-/// The same audit, reporting `(done, total)` payloads as it goes.
+/// The same audit, reporting `(phase, done, total)` as it goes.
 ///
 /// Re-hashing a large archive takes minutes, and a caller with a user in front of
-/// it needs to show that something is happening. The callback runs once per
-/// payload; a caller that prints should throttle.
+/// it needs to show that something is happening. Both passes report; the
+/// reference sweep is separate because it is a second walk over every payload and
+/// a bar that sits at 100 % while work continues is a lie.
+///
 pub fn audit_with_progress(
     conn: &Connection,
-    progress: &mut dyn FnMut(usize, usize),
+    progress: &mut dyn FnMut(AuditPhase, usize, usize),
 ) -> Result<IntegrityReport, StoreError> {
     check_foreign_keys(conn)?;
 
@@ -66,28 +77,57 @@ pub fn audit_with_progress(
             )));
         }
         blobs += 1;
-        progress(blobs, total);
+        progress(AuditPhase::Payloads, blobs, total);
     }
 
-    check_artefacts(conn)?;
-    let artefacts: i64 = conn.query_row("SELECT count(*) FROM artefact", [], |row| row.get(0))?;
+    // One pass over the payloads again, this time asking what points at each of
+    // them: the artefact hashes have to match, and a payload nothing refers to
+    // is wasted space. Walking the payloads and probing the small indexes is
+    // sequential where a join from the artefact side re-reads a payload page per
+    // artefact, which on an encrypted archive is the whole cost — and it gives
+    // this second pass a progress figure to report.
+    let mut orphaned_blobs = 0_usize;
+    let mut swept = 0_usize;
+    let mut statement = conn.prepare("SELECT id, sha256 FROM blob")?;
+    let mut artefact_lookup = conn.prepare("SELECT id, bytes_hash FROM artefact WHERE blob_id = ?1")?;
+    let mut import_lookup = conn.prepare("SELECT 1 FROM import_record WHERE payload_hash = ?1 LIMIT 1")?;
+    let mut rows = statement.query([])?;
+    while let Some(row) = rows.next()? {
+        let blob_id: String = row.get(0)?;
+        let sha256: String = row.get(1)?;
 
+        let mut referenced = false;
+        let mut artefacts = artefact_lookup.query([&blob_id])?;
+        while let Some(artefact) = artefacts.next()? {
+            let artefact_id: String = artefact.get(0)?;
+            let bytes_hash: String = artefact.get(1)?;
+            if bytes_hash != sha256 {
+                return Err(StoreError::Integrity(format!(
+                    "artefact {artefact_id} does not match the payload it points at"
+                )));
+            }
+            referenced = true;
+        }
+        if !referenced {
+            referenced = import_lookup.query_row([&sha256], |_| Ok(())).optional()?.is_some();
+        }
+        if !referenced {
+            orphaned_blobs += 1;
+        }
+
+        swept += 1;
+        progress(AuditPhase::References, swept, total);
+    }
+
+    let artefacts: i64 = conn.query_row("SELECT count(*) FROM artefact", [], |row| row.get(0))?;
     check_imports(conn)?;
     let imports: i64 = conn.query_row("SELECT count(*) FROM import_record", [], |row| row.get(0))?;
-
-    let orphaned_blobs: i64 = conn.query_row(
-        "SELECT count(*) FROM blob b
-         WHERE NOT EXISTS (SELECT 1 FROM artefact a WHERE a.blob_id = b.id)
-           AND NOT EXISTS (SELECT 1 FROM import_record i WHERE i.payload_hash = b.sha256)",
-        [],
-        |row| row.get(0),
-    )?;
 
     Ok(IntegrityReport {
         blobs,
         artefacts: usize::try_from(artefacts).unwrap_or(usize::MAX),
         imports: usize::try_from(imports).unwrap_or(usize::MAX),
-        orphaned_blobs: usize::try_from(orphaned_blobs).unwrap_or(usize::MAX),
+        orphaned_blobs,
     })
 }
 
@@ -103,25 +143,6 @@ fn check_foreign_keys(conn: &Connection) -> Result<(), StoreError> {
         )));
     }
     Ok(())
-}
-
-fn check_artefacts(conn: &Connection) -> Result<(), StoreError> {
-    let mismatch: Option<String> = conn
-        .query_row(
-            "SELECT a.id FROM artefact a
-             JOIN blob b ON b.id = a.blob_id
-             WHERE a.bytes_hash <> b.sha256
-             LIMIT 1",
-            [],
-            |row| row.get(0),
-        )
-        .optional()?;
-    match mismatch {
-        Some(id) => Err(StoreError::Integrity(format!(
-            "artefact {id} does not match the payload it points at"
-        ))),
-        None => Ok(()),
-    }
 }
 
 fn check_imports(conn: &Connection) -> Result<(), StoreError> {
