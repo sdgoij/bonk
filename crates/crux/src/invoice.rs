@@ -210,6 +210,14 @@ pub struct InvoiceDraft {
     pub note: Option<String>,
     /// The invoice this credit note corrects (BG-3).
     pub preceding_invoice: Option<PrecedingInvoice>,
+    /// The layout the printed document is drawn with, by template file name.
+    ///
+    /// `None` means the archive's default layout, so a draft stays drawn by the
+    /// default even if the user adds or removes one later. It is a name rather
+    /// than a digest because the file may be edited between draft and issue, and
+    /// what the artefact records is the digest of the bytes that actually drew
+    /// it.
+    pub template: Option<String>,
     /// Lines (BG-25).
     pub lines: Vec<DraftLine>,
 }
@@ -230,6 +238,7 @@ impl InvoiceDraft {
             order_reference: None,
             note: None,
             preceding_invoice: None,
+            template: None,
             lines: Vec::new(),
         }
     }

@@ -1,0 +1,12 @@
+-- Which layout a draft asks for.
+--
+-- An archive may hold several templates beside it (`templates/*.json`), and the
+-- one a document is printed with is a per-document choice, not an archive-wide
+-- setting. It belongs to the draft so reopening the composer shows what was
+-- chosen and issuing honours it, and it is a file name rather than a digest
+-- because the file may be edited between draft and issue: the digest recorded on
+-- the artefact is the one of the bytes that actually drew the PDF.
+--
+-- Null means "the archive's default", so a draft written before this column
+-- existed, and one written where nobody chose, both keep the behaviour they had.
+ALTER TABLE invoice_draft ADD COLUMN template_name TEXT;

@@ -1217,6 +1217,23 @@ pub mod editor {
         sentence!(language, "Document language", "Taal van het document")
     }
 
+    /// The layout this document is printed with.
+    pub fn layout_label(language: Language) -> &'static str {
+        sentence!(language, "Template", "Sjabloon")
+    }
+
+    /// No particular layout, so the archive's default draws.
+    pub fn layout_default(language: Language) -> &'static str {
+        sentence!(language, "Archive default", "Standaard van het archief")
+    }
+
+    /// The chosen layout when its file is no longer in the archive: the draft
+    /// still names it, and the picker says so rather than silently showing the
+    /// default that will actually draw.
+    pub fn layout_missing(language: Language, name: &str) -> String {
+        sentence!(language, format!("{name} (removed)"), format!("{name} (verwijderd)"))
+    }
+
     /// Label beside the currency picker.
     pub fn currency_label(language: Language) -> &'static str {
         sentence!(language, "Currency", "Valuta")

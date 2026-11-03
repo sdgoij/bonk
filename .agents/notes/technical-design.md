@@ -744,6 +744,7 @@ CREATE TABLE invoice_draft (
     notes_json         TEXT,
     payment_terms_days INTEGER,
     raw_input_json     TEXT,               -- free-form fields before normalisation
+    template_name      TEXT,               -- templates/<name>.json; null is the archive default
     revision           INTEGER NOT NULL,
     hlc                TEXT NOT NULL,
     created_at         TEXT NOT NULL,
@@ -1290,12 +1291,28 @@ flowchart TB
 
 ### 10.3 Template model
 
-Ship 2–3 built-in templates (minimal, classic, modern) expressed as Typst
-sources with a typed parameter block: logo, accent colour, address block layout,
-footer text, payment instructions, QR (EPC/Girocode) optional. User templates compile against a restricted `World` implementation that exposes
-no filesystem, no package registry, and no network, so a shared template cannot
-read local files or exfiltrate data. Template changes are hashed into the
-template artefact record.
+A template is declarative JSON beside the archive (`templates/<name>.json`):
+page, type, rules, section order, table columns, label overrides, and a footer.
+Nothing in it computes or reads a file, so a shared template cannot exfiltrate
+data. Every file in the directory is a layout the archive can draw with; the one
+named `default` is what a document gets when it asks for none. The choice is per
+document (`invoice_draft.template_name`), because two invoices can leave the same
+books looking different, and the artefact records the digest of the template file
+that actually drew the PDF so the record survives an edit to that file.
+
+A file that does not parse is reported and skipped: it is left out of the list
+rather than taking the archive's other layouts down with it. A document that
+names a layout which is no longer there falls through to the default — the window
+says so beside the picker and the CLI warns — because the legal act of issuing
+comes before the appearance of the page, and the digest on the artefact still
+tells the truth about what drew it.
+
+The built-in layout is the same model with no file behind it. It carries no
+digest, because nothing in the archive can change it: `renderer_version` names the
+engine that drew the page. A logo, an accent colour, payment instructions, and an
+EPC/Girocode QR are fields of the same model, so a layout is chosen by data
+rather than by code, and a template can never compute, read a file, or reach the
+network.
 
 ---
 

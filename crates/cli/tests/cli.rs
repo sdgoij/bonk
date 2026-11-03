@@ -401,7 +401,7 @@ fn a_support_bundle_can_be_written_and_previewed() {
         said.contains(&format!("version:    {}", env!("CARGO_PKG_VERSION"))),
         "the bundle must name the version it came from: {said}"
     );
-    assert!(said.contains("schema:     7"), "{said}");
+    assert!(said.contains("schema:     8"), "{said}");
     assert!(said.contains("No names, amounts"), "{said}");
     assert!(bundle.join("summary.txt").exists());
     assert!(bundle.join("summary.json").exists());
@@ -432,7 +432,7 @@ fn init_then_verify() {
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("integrity check passed"), "stdout: {stdout}");
-    assert!(stdout.contains("schema:   7"), "stdout: {stdout}");
+    assert!(stdout.contains("schema:   8"), "stdout: {stdout}");
     if cfg!(feature = "cipher") {
         assert!(stdout.contains("encryption: sqlcipher"), "stdout: {stdout}");
     } else {
@@ -462,7 +462,7 @@ fn migrate_down_is_guarded_and_respects_irreversible_migrations() {
     let mut args = vec!["migrate-down", "--to", "2", "--yes"];
     args.extend(common);
     let output = bonk_ok(&args);
-    assert!(output.contains("rolled back: 5 migration(s)"), "{output}");
+    assert!(output.contains("rolled back: 6 migration(s)"), "{output}");
     assert!(output.contains("schema:   2"), "{output}");
 
     // 0002 creates the document tables; it has no safe inverse.
@@ -474,7 +474,7 @@ fn migrate_down_is_guarded_and_respects_irreversible_migrations() {
 
     let mut args = vec!["verify"];
     args.extend(common);
-    assert!(bonk_ok(&args).contains("schema:   7"), "opening migrates forward again");
+    assert!(bonk_ok(&args).contains("schema:   8"), "opening migrates forward again");
 }
 
 #[test]
@@ -573,6 +573,21 @@ fn full_slice_through_the_cli() {
     args.extend(common);
     let customer = field(&bonk_ok(&args), "customer:");
 
+    // Templates beside the archive are the layouts a document can be drawn with,
+    // and a draft names the one it wants. They exist before the draft does, so
+    // the name is checked against the archive rather than taken on trust.
+    std::fs::create_dir_all(dir.path().join("templates")).expect("templates dir");
+    std::fs::write(
+        dir.path().join("templates").join("default.json"),
+        r#"{"name": "Eigen"}"#,
+    )
+    .expect("template");
+    std::fs::write(
+        dir.path().join("templates").join("compact.json"),
+        r#"{"name": "Compact"}"#,
+    )
+    .expect("template");
+
     let mut args = vec![
         "draft-new",
         "--seller",
@@ -587,20 +602,13 @@ fn full_slice_through_the_cli() {
         "PO-1",
         "--line",
         "Consulting|2|50.00|21",
+        "--template",
+        "compact",
     ];
     args.extend(common);
     let draft_output = bonk_ok(&args);
     let draft = field(&draft_output, "draft:");
     assert!(draft_output.contains("gross: 121.00"), "{draft_output}");
-
-    // A template beside the archive is the layout the filed PDF is drawn with,
-    // and its digest is what the artefact records.
-    std::fs::create_dir_all(dir.path().join("templates")).expect("templates dir");
-    std::fs::write(
-        dir.path().join("templates").join("default.json"),
-        r#"{"name": "Eigen"}"#,
-    )
-    .expect("template");
 
     let mut args = vec!["issue", &draft, "--out", out];
     args.extend(common);
@@ -620,9 +628,29 @@ fn full_slice_through_the_cli() {
     assert!(pdf.starts_with(b"%PDF-"), "not a PDF");
     assert!(issued_output.contains("pdf:"), "{issued_output}");
     assert!(
-        issued_output.contains("layout: Eigen ("),
-        "the issue says which layout drew the PDF: {issued_output}"
+        issued_output.contains("layout: Compact ("),
+        "the draft's own layout drew the PDF: {issued_output}"
     );
+
+    // A name that matches no file is refused where it is typed, not traded for
+    // another layout later.
+    let mut args = vec![
+        "draft-new",
+        "--seller",
+        &seller,
+        "--customer",
+        &customer,
+        "--line",
+        "Consulting|1|50.00|21",
+        "--template",
+        "no-such-layout",
+    ];
+    args.extend(common);
+    let output = bonk().args(&args).output().expect("binary runs");
+    assert!(!output.status.success());
+    let said = String::from_utf8_lossy(&output.stderr);
+    assert!(said.contains("no template named no-such-layout"), "{said}");
+    assert!(said.contains("compact"), "the message names what there is: {said}");
 
     // Evidence for the invoice we just issued, taken while the number still
     // points at one document; the check needs no keystore at all.

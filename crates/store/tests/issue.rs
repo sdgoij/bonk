@@ -102,6 +102,28 @@ fn parties_and_drafts_round_trip() {
     assert_eq!(loaded.lines[0].treatment.rate, VatRate::STANDARD_NL);
     assert_eq!(loaded.due_date, draft.due_date);
     assert_eq!(loaded.delivery_date, draft.delivery_date);
+    assert_eq!(loaded.template, None, "no choice means the archive default");
+}
+
+/// The layout a draft asks for is part of the draft: reopening the composer has
+/// to show the choice, and issuing has to honour it.
+#[test]
+fn a_draft_remembers_the_layout_it_asks_for() {
+    let (_dir, database, seller_id, customer_id) = seeded();
+    let mut draft = draft_for(seller_id, customer_id);
+    draft.template = Some("compact".to_owned());
+    insert_draft(database.connection(), &draft, NOW).unwrap();
+
+    let loaded = load_draft(database.connection(), draft.id).unwrap().unwrap();
+    assert_eq!(loaded.template.as_deref(), Some("compact"));
+
+    // Saving again with no choice clears it, so the draft follows the archive
+    // default once more rather than being stuck on a layout nobody asked for.
+    let mut cleared = loaded;
+    cleared.template = None;
+    store::save_draft(database.connection(), &cleared, NOW).unwrap();
+    let reloaded = load_draft(database.connection(), draft.id).unwrap().unwrap();
+    assert_eq!(reloaded.template, None);
 }
 
 #[test]

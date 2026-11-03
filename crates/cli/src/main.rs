@@ -269,6 +269,10 @@ enum Command {
         buyer_ref: Option<String>,
         #[arg(long)]
         order_ref: Option<String>,
+        /// Layout the PDF is drawn with, by template file name: `--template compact`
+        /// means `templates/compact.json`. Omit for the archive default.
+        #[arg(long)]
+        template: Option<String>,
     },
     /// Create a credit note (381) that copies an issued invoice.
     #[command(name = "credit-note")]
@@ -827,12 +831,33 @@ fn run(cli: Cli) -> Result<(), CliError> {
             note,
             buyer_ref,
             order_ref,
+            template,
         }) => {
             let session = access.session(&database, &keystore)?;
             let seller_id = SellerId::parse_str(&seller)?;
             let customer_id = CustomerId::parse_str(&customer)?;
             let seller_record = load_seller(session.database().connection(), seller_id)?;
             let customer_record = load_customer(session.database().connection(), customer_id)?;
+
+            // A name that matches no file is refused here rather than drawn with
+            // something else: the point of naming a layout is that it is used.
+            if let Some(name) = template.as_deref() {
+                let (templates, _) = app::load_templates(session.database_path());
+                if !templates.iter().any(|template| template.name == name) {
+                    return Err(CliError::Input(format!(
+                        "no template named {name}; the archive holds {}",
+                        if templates.is_empty() {
+                            "none".to_owned()
+                        } else {
+                            templates
+                                .iter()
+                                .map(|template| template.name.as_str())
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        }
+                    )));
+                }
+            }
 
             let issue_date = match date {
                 Some(value) => LocalDate::parse_iso(&value)?,
@@ -844,6 +869,7 @@ fn run(cli: Cli) -> Result<(), CliError> {
             draft.note = note;
             draft.buyer_reference = buyer_ref;
             draft.order_reference = order_ref;
+            draft.template = template;
             for (index, spec) in lines.iter().enumerate() {
                 let position = u32::try_from(index + 1).map_err(|_| CliError::Input("too many lines".to_owned()))?;
                 draft.lines.push(parse_line(spec, draft.currency, position)?);
@@ -1238,14 +1264,25 @@ fn run(cli: Cli) -> Result<(), CliError> {
             println!("sha256: {}", issued.ubl_sha256);
             println!("audit:  {}", issued.audit_head);
 
-            // The same layout the window would use: a template in the archive is
-            // part of the archive, not a property of the front end.
-            let template = match app::load_template(session.database_path()) {
-                Ok(template) => template,
-                Err(error) => {
-                    eprintln!("template ignored: {error}");
-                    None
+            // The draft names the layout it was written for. A name the archive no
+            // longer holds falls through to the default, and the artefact records
+            // the digest of whichever layout really drew it.
+            let (templates, problems) = app::load_templates(session.database_path());
+            for problem in &problems {
+                eprintln!("template ignored: {problem}");
+            }
+            let template = match loaded.template.as_deref() {
+                Some(name) => {
+                    let named = templates.iter().find(|template| template.name == name);
+                    if named.is_none() {
+                        // Issuing is the legal act; a layout file that moved must
+                        // not block it. The artefact records the digest of the
+                        // layout that really drew the PDF.
+                        eprintln!("warning: template {name} is not in this archive; the default draws instead");
+                    }
+                    named.or_else(|| app::default_template(&templates))
                 }
+                None => app::default_template(&templates),
             };
 
             match app::invoice_pdf(
@@ -1267,12 +1304,12 @@ fn run(cli: Cli) -> Result<(), CliError> {
                         "pdf",
                         &pdf,
                         render::RENDERER_VERSION,
-                        template.as_ref().map(|template| template.sha256.as_str()),
+                        template.map(|template| template.sha256.as_str()),
                         &now,
                     ) {
                         Ok(hash) => {
                             println!("pdf:    {} ({hash})", pdf_path.display());
-                            if let Some(template) = &template {
+                            if let Some(template) = template {
                                 println!("layout: {} ({})", template.template.name, template.sha256);
                             }
                         }

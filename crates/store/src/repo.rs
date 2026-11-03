@@ -290,9 +290,9 @@ pub fn save_draft(conn: &Connection, draft: &InvoiceDraft, now: &str) -> Result<
               due_date_local, delivery_date_local, buyer_reference, order_reference,
               project_reference, notes_json, payment_terms_days, raw_input_json,
               revision, hlc, created_at, updated_at,
-              preceding_invoice_id, preceding_number, preceding_issue_date)
+              preceding_invoice_id, preceding_number, preceding_issue_date, template_name)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, NULL, ?11, NULL, NULL, 0, '', ?12, ?12,
-                 ?13, ?14, ?15)
+                 ?13, ?14, ?15, ?16)
          ON CONFLICT(id) DO UPDATE SET
              owner_id = excluded.owner_id,
              counterparty_id = excluded.counterparty_id,
@@ -307,6 +307,7 @@ pub fn save_draft(conn: &Connection, draft: &InvoiceDraft, now: &str) -> Result<
              preceding_invoice_id = excluded.preceding_invoice_id,
              preceding_number = excluded.preceding_number,
              preceding_issue_date = excluded.preceding_issue_date,
+             template_name = excluded.template_name,
              updated_at = excluded.updated_at,
              revision = invoice_draft.revision + 1",
         params![
@@ -325,6 +326,7 @@ pub fn save_draft(conn: &Connection, draft: &InvoiceDraft, now: &str) -> Result<
             preceding.map(|preceding| preceding.id.to_string()),
             preceding.map(|preceding| preceding.number.as_str()),
             preceding.map(|preceding| preceding.issue_date.to_iso_string()),
+            draft.template,
         ],
     )?;
 
@@ -473,7 +475,7 @@ pub fn load_draft(conn: &Connection, id: DocumentId) -> Result<Option<InvoiceDra
         .query_row(
             "SELECT owner_id, counterparty_id, doc_type, currency, issue_date_local,
                     due_date_local, delivery_date_local, buyer_reference, order_reference, notes_json,
-                    preceding_invoice_id, preceding_number, preceding_issue_date
+                    preceding_invoice_id, preceding_number, preceding_issue_date, template_name
              FROM invoice_draft WHERE id = ?1",
             [&key],
             |row| {
@@ -491,6 +493,7 @@ pub fn load_draft(conn: &Connection, id: DocumentId) -> Result<Option<InvoiceDra
                     row.get::<_, Option<String>>(10)?,
                     row.get::<_, Option<String>>(11)?,
                     row.get::<_, Option<String>>(12)?,
+                    row.get::<_, Option<String>>(13)?,
                 ))
             },
         )
@@ -510,6 +513,7 @@ pub fn load_draft(conn: &Connection, id: DocumentId) -> Result<Option<InvoiceDra
         preceding_id,
         preceding_number,
         preceding_issue_date,
+        template,
     )) = header
     else {
         return Ok(None);
@@ -534,6 +538,7 @@ pub fn load_draft(conn: &Connection, id: DocumentId) -> Result<Option<InvoiceDra
         order_reference,
         note,
         preceding_invoice: None,
+        template,
         lines: Vec::new(),
     };
 

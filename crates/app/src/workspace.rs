@@ -88,10 +88,11 @@ pub struct Workspace {
     match_target: Option<CustomerId>,
     /// The preview of the composer's invoice, once one has been asked for.
     preview: Option<Preview>,
-    /// The layout from `<archive>/templates/default.json`, when the user supplied
-    /// one. Everything that lays a document out goes through this, so the preview
-    /// and the filed PDF cannot be drawn by different templates.
-    template: Option<crate::ArchiveTemplate>,
+    /// Every layout in `<archive>/templates`, sorted by file name. A document
+    /// names the one it wants; the archive default is the one named `default`.
+    /// Everything that lays a document out resolves through this list, so the
+    /// preview and the filed PDF cannot be drawn by different templates.
+    templates: Vec<crate::ArchiveTemplate>,
     /// Whether this device keeps the archive key, as read when the workspace
     /// opened and kept in step with the credentials panel. Asking the operating
     /// system every frame would be a syscall per repaint.
@@ -595,6 +596,11 @@ struct Editor {
     currency: Currency,
     /// The language the printed document speaks, chosen per document.
     document_language: render::Language,
+    /// The layout this document is printed with, by template file name.
+    ///
+    /// `None` is the archive default, so the choice is what the user made rather
+    /// than whatever file happened to be named `default` when the draft opened.
+    template: Option<String>,
     lines: Vec<LineForm>,
     date_popup: Option<DatePopup>,
     /// True when this composer reopened a draft that is already stored, which is
@@ -621,6 +627,7 @@ impl Clone for Editor {
             order_reference: self.order_reference.clone(),
             currency: self.currency,
             document_language: self.document_language,
+            template: self.template.clone(),
             lines: self.lines.clone(),
             date_popup: self.date_popup,
             saved: self.saved,
@@ -645,6 +652,7 @@ impl Editor {
             && self.order_reference == other.order_reference
             && self.currency == other.currency
             && self.document_language == other.document_language
+            && self.template == other.template
             && self.lines == other.lines
     }
 
@@ -662,6 +670,7 @@ impl Editor {
             order_reference: String::new(),
             currency,
             document_language,
+            template: None,
             lines: vec![LineForm::default()],
             date_popup: None,
             saved: false,
@@ -684,6 +693,7 @@ impl Editor {
         editor.order_reference = draft.order_reference.clone().unwrap_or_default();
         editor.note = draft.note.clone().unwrap_or_default();
         editor.currency = draft.currency;
+        editor.template = draft.template.clone();
         editor.lines = draft
             .lines
             .iter()
@@ -762,15 +772,24 @@ impl Drop for Workspace {
 }
 
 impl Workspace {
+    /// The layout a document is drawn with.
+    ///
+    /// A document names one; without a name the archive's `default` answers; with
+    /// neither the built-in engine does. A name that is no longer in the archive
+    /// falls through to the default rather than blocking the issue — and the
+    /// digest recorded on the artefact names the layout that really drew it.
+    fn layout(&self, name: Option<&str>) -> Option<&crate::ArchiveTemplate> {
+        name.and_then(|name| self.templates.iter().find(|template| template.name == name))
+            .or_else(|| crate::default_template(&self.templates))
+    }
+
     /// Loads the seller and customer list for a freshly unlocked session.
     pub fn new(session: &Session) -> Result<Self, StoreError> {
         let connection = session.database().connection();
-        // A template that will not parse is reported, not swallowed: the built-in
-        // one is drawn instead, and the message says why the file was ignored.
-        let (template, template_error) = match crate::load_template(session.database_path()) {
-            Ok(template) => (template, None),
-            Err(error) => (None, Some(error)),
-        };
+        // A template that will not parse is reported, not swallowed: it is left
+        // out of the list and the message says which file was ignored. The rest
+        // still work, so one typo does not take the archive's layouts away.
+        let (templates, template_problems) = crate::load_templates(session.database_path());
         let mut workspace = Self {
             seller: first_seller(connection)?,
             customers: list_customers(connection)?,
@@ -791,7 +810,7 @@ impl Workspace {
             pdf: None,
             match_target: None,
             preview: None,
-            template,
+            templates,
             device_remembered: Session::device_ready(session.keystore_path(), &store::device::Keychain),
             conformance_findings: Vec::new(),
             suppressions: Vec::new(),
@@ -807,8 +826,8 @@ impl Workspace {
         if let Some(seller) = workspace.seller.as_ref().map(|seller| seller.id) {
             workspace.search.reload_saved(session.database(), seller);
         }
-        if let Some(error) = template_error {
-            workspace.message = Some(Message::error(error));
+        if let Some(error) = template_problems.first() {
+            workspace.message = Some(Message::error(error.clone()));
         }
         Ok(workspace)
     }
@@ -1603,7 +1622,7 @@ impl Workspace {
                     ui.weak(text::settings::layout(language));
                     theme::value(
                         ui,
-                        match &self.template {
+                        match self.layout(None) {
                             Some(template) => {
                                 format!("{} ({})", template.template.name, template.short_sha256())
                             }
@@ -2237,7 +2256,8 @@ impl Workspace {
             &totals,
             editor.document_language,
         );
-        match crate::renderer_for(self.template.as_ref().map(|template| &template.template)).layout(&data) {
+        let renderer = crate::renderer_for(self.layout(editor.template.as_deref()).map(|layout| &layout.template));
+        match renderer.layout(&data) {
             Ok(document) => self.preview = Some(Preview { document }),
             Err(error) => {
                 self.message = Some(Message::error(text::editor::preview_failed(
@@ -2413,9 +2433,17 @@ impl Workspace {
             return;
         };
         let customers = self.customers.clone();
+        // Names first: the combo box borrows the form while it lists what the
+        // archive holds, and the archive is not the form.
+        let layouts: Vec<(String, String)> = self
+            .templates
+            .iter()
+            .map(|template| (template.name.clone(), template.label()))
+            .collect();
         let save;
         let issue;
         let mut preview_toggle = None;
+        let mut layout_changed = false;
         let mut remove_line = None;
 
         {
@@ -2508,6 +2536,28 @@ impl Workspace {
                     .show_ui(ui, |ui| {
                         ui.selectable_value(&mut editor.document_language, render::Language::English, "English");
                         ui.selectable_value(&mut editor.document_language, render::Language::Dutch, "Nederlands");
+                    });
+                ui.end_row();
+
+                // The layout is the draft's, not the archive's: two invoices can
+                // leave the same books looking different, and the artefact
+                // records which one drew it.
+                ui.label(text::editor::layout_label(language));
+                let chosen = editor.template.as_deref().map(|name| {
+                    layouts.iter().find(|(stem, _)| stem == name).map_or_else(
+                        || text::editor::layout_missing(language, name),
+                        |(_, label)| label.clone(),
+                    )
+                });
+                egui::ComboBox::from_id_salt("editor.template")
+                    .selected_text(chosen.unwrap_or_else(|| text::editor::layout_default(language).to_owned()))
+                    .show_ui(ui, |ui| {
+                        let before = editor.template.clone();
+                        ui.selectable_value(&mut editor.template, None, text::editor::layout_default(language));
+                        for (stem, label) in &layouts {
+                            ui.selectable_value(&mut editor.template, Some(stem.clone()), label);
+                        }
+                        layout_changed = editor.template != before;
                     });
                 ui.end_row();
             });
@@ -2649,6 +2699,11 @@ impl Workspace {
 
         if let Some(showing) = preview_toggle {
             self.set_preview(showing);
+        } else if layout_changed && self.preview.is_some() {
+            // A different layout is a different page, so the preview has to show
+            // it; otherwise the composer would display a document the issue will
+            // not file.
+            self.render_preview();
         }
 
         let mut finding_action = None;
@@ -2928,10 +2983,13 @@ impl Workspace {
         match result {
             Ok(issued) => {
                 let mut attach_error = None;
-                let template = self.template.as_ref().map(|template| &template.template);
+                // The draft names the layout, and issuing resolves it exactly as the
+                // preview did, so what was seen is what is filed.
+                let layout = self.layout(draft.template.as_deref()).cloned();
+                let template = layout.as_ref().map(|layout| &layout.template);
                 // The digest is recorded on the artefact; the template file is not
                 // part of the archive and may be edited before anyone looks again.
-                let template_digest = self.template.as_ref().map(|template| template.sha256.clone());
+                let template_digest = layout.as_ref().map(|layout| layout.sha256.clone());
                 match crate::invoice_pdf(
                     &issued.number,
                     &draft,
@@ -3404,6 +3462,7 @@ fn build_draft(editor: &Editor, seller: &SellerRecord) -> Result<InvoiceDraft, D
     draft.note = nonempty(&editor.note);
     draft.buyer_reference = nonempty(&editor.buyer_reference);
     draft.order_reference = nonempty(&editor.order_reference);
+    draft.template = editor.template.clone();
 
     for (index, line) in editor.lines.iter().enumerate() {
         let position = u32::try_from(index + 1).map_err(|_| DraftError::TooManyLines)?;
@@ -4246,6 +4305,55 @@ mod tests {
         assert_eq!(hits[0].issue_date.to_iso_string(), "2026-10-02");
     }
 
+    /// A document names its layout; with no name the archive's `default` draws,
+    /// and a name whose file is gone falls through rather than blocking the
+    /// issue — the artefact records whichever layout really drew it.
+    #[test]
+    fn a_document_draws_with_the_layout_it_names() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let session = Session::create(
+            dir.path().join("bonk.db"),
+            dir.path().join("keystore.bin"),
+            "passphrase",
+        )
+        .unwrap();
+        let mut workspace = Workspace::new(&session).unwrap();
+        workspace.templates = vec![
+            crate::ArchiveTemplate {
+                name: "compact".to_owned(),
+                template: render::Template::default(),
+                sha256: "cc".repeat(32),
+            },
+            crate::ArchiveTemplate {
+                name: "default".to_owned(),
+                template: render::Template::default(),
+                sha256: "dd".repeat(32),
+            },
+        ];
+
+        assert_eq!(
+            workspace.layout(Some("compact")).map(|layout| layout.name.as_str()),
+            Some("compact"),
+            "a named layout is the one that draws"
+        );
+        assert_eq!(
+            workspace.layout(None).map(|layout| layout.name.as_str()),
+            Some("default"),
+            "no choice means the archive default"
+        );
+        assert_eq!(
+            workspace.layout(Some("gone")).map(|layout| layout.name.as_str()),
+            Some("default"),
+            "a layout whose file was removed falls through"
+        );
+
+        workspace.templates.clear();
+        assert!(
+            workspace.layout(Some("compact")).is_none(),
+            "no templates at all means the built-in layout"
+        );
+    }
+
     #[test]
     fn every_tab_draws_without_panicking() {
         let dir = tempfile::TempDir::new().unwrap();
@@ -4567,6 +4675,7 @@ mod tests {
         form.customer = Some(customer.id);
         form.note = "Concept".to_owned();
         form.due_date = "2026-11-30".to_owned();
+        form.template = Some("compact".to_owned());
         let draft = build_draft(&form, &seller).unwrap();
         insert_draft(database.connection(), &draft, NOW).unwrap();
 
@@ -4577,6 +4686,11 @@ mod tests {
         assert_eq!(reopened.due_date, "2026-11-30");
         assert_eq!(reopened.note, "Concept");
         assert_eq!(reopened.document_language, render::Language::Dutch);
+        assert_eq!(
+            reopened.template.as_deref(),
+            Some("compact"),
+            "the layout chosen for this document reopens with it"
+        );
         assert_eq!(reopened.lines.len(), 1);
         assert_eq!(reopened.lines[0].name, "Consulting");
         assert_eq!(reopened.lines[0].unit_price, "50");
@@ -4587,6 +4701,7 @@ mod tests {
         assert_eq!(rebuilt.id, draft.id);
         assert_eq!(rebuilt.note, draft.note);
         assert_eq!(rebuilt.due_date, draft.due_date);
+        assert_eq!(rebuilt.template, draft.template);
         drop(dir);
     }
 
