@@ -83,6 +83,11 @@ pub mod shell {
         sentence!(language, "Keystore", "Sleutelkluis")
     }
 
+    /// Opens the file picker for a path field.
+    pub fn browse_action(language: Language) -> &'static str {
+        sentence!(language, "Choose…", "Kiezen…")
+    }
+
     /// Label above the passphrase field.
     pub fn passphrase_label(language: Language) -> &'static str {
         sentence!(language, "Passphrase", "Wachtwoordzin")
@@ -2056,6 +2061,7 @@ mod tests {
             shell::tagline(language),
             shell::database_label(language),
             shell::keystore_label(language),
+            shell::browse_action(language),
             shell::passphrase_label(language),
             shell::unlock_action(language),
             shell::create_database_action(language),

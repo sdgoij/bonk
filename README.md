@@ -235,6 +235,11 @@ on it.
 
 ### The window
 
+Before the shell, the window shows a lock screen: the archive path, the keystore
+path, the passphrase, and the recovery route. Both paths have the platform's file
+picker beside a field that stays editable. `bonk gui --db … --keystore …` starts
+the window on that archive; without the flags it uses the platform data directory.
+
 The window is a three-tab shell: a thin icon rail on the left switches **Search**,
 **Customers**, and **Settings**, with the content inset from the rail so tables do
 not start against it. Search is a continuous table over the archive; typing or

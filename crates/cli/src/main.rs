@@ -438,7 +438,7 @@ fn run(cli: Cli) -> Result<(), CliError> {
         device: cli.device,
     };
     match cli.command {
-        None | Some(Command::Gui) => app::run().map_err(|error| CliError::Gui(error.to_string())),
+        None | Some(Command::Gui) => app::run(database, keystore).map_err(|error| CliError::Gui(error.to_string())),
         Some(Command::Remember) => {
             if !store::device::available() {
                 return Err(CliError::Input(

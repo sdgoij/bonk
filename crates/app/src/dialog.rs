@@ -16,6 +16,15 @@ pub(crate) fn open(description: &str, extensions: &[&str]) -> Option<PathBuf> {
         .pick_file()
 }
 
+/// Picks any existing file, with no type filter.
+///
+/// The lock screen chooses an archive and its keystore. Neither has an extension
+/// the picker can rely on — `bonk.db` is the default, but the file may have been
+/// named anything — so a filter would hide the file the user came to pick.
+pub(crate) fn open_any(description: &str) -> Option<PathBuf> {
+    rfd::FileDialog::new().set_title(description).pick_file()
+}
+
 /// Picks where a file of `extension` should be written, suggesting `file_name`.
 pub(crate) fn save(description: &str, file_name: &str, extension: &str) -> Option<PathBuf> {
     rfd::FileDialog::new()

@@ -654,6 +654,8 @@ enum Action {
     CancelReset,
     FinishReset,
     Lock,
+    ChooseDatabase,
+    ChooseKeystore,
 }
 
 impl BonkApp {
@@ -662,10 +664,26 @@ impl BonkApp {
         Self::default()
     }
 
-    /// Creates the app, installs the theme, and restores the appearance choice.
-    fn new_with_context(context: &eframe::CreationContext<'_>) -> Self {
-        theme::install(&context.egui_ctx);
+    /// Creates the app pointed at a specific archive.
+    ///
+    /// `--db` and `--keystore` reach the window through here. Without it the lock
+    /// screen shows the platform default even when the command named another
+    /// archive, which is exactly the mistake that looks like the flag was
+    /// ignored.
+    pub fn with_paths(database: impl Into<PathBuf>, keystore: impl Into<PathBuf>) -> Self {
+        let database = database.into();
+        let keystore = keystore.into();
         let mut app = Self::default();
+        app.database_path = database.display().to_string();
+        app.keystore_path = keystore.display().to_string();
+        app.device_ready = Self::device_ready_for(&app.keystore_path);
+        app
+    }
+
+    /// Creates the app, installs the theme, and restores the appearance choice.
+    fn new_with_context(context: &eframe::CreationContext<'_>, database: PathBuf, keystore: PathBuf) -> Self {
+        theme::install(&context.egui_ctx);
+        let mut app = Self::with_paths(database, keystore);
         if let Some(storage) = context.storage {
             if let Some(name) = storage.get_string(theme::STORAGE_KEY) {
                 app.appearance = theme::from_name(&name).unwrap_or_default();
@@ -963,6 +981,20 @@ impl BonkApp {
                 *error = None;
             }
             Action::FinishReset => self.finish_reset(),
+            Action::ChooseDatabase => {
+                if let Some(path) = dialog::open_any(text::shell::database_label(self.language)) {
+                    self.database_path = path.display().to_string();
+                    // The archive changed, so the remembered-device route may
+                    // or may not apply to this keystore.
+                    self.device_ready = Self::device_ready_for(&self.keystore_path);
+                }
+            }
+            Action::ChooseKeystore => {
+                if let Some(path) = dialog::open_any(text::shell::keystore_label(self.language)) {
+                    self.keystore_path = path.display().to_string();
+                    self.device_ready = Self::device_ready_for(&self.keystore_path);
+                }
+            }
             Action::Lock => {
                 self.state = UiState::Locked {
                     form: LockForm::Unlock {
@@ -1026,6 +1058,23 @@ pub(crate) fn strength_row(ui: &mut egui::Ui, language: text::Language, passphra
         ui.label(text::strength::reason(language, assessment.reason))
             .on_hover_text(text::strength::detail(language, assessment.bits));
     });
+}
+
+/// Draws a path field with a picker button on its right edge.
+///
+/// Returns true when the button was pressed. The field keeps the remaining width
+/// so a long path is readable, and stays editable: the path can also be typed.
+fn path_field(ui: &mut egui::Ui, path: &mut String, browse: &str) -> bool {
+    ui.horizontal(|ui| {
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let clicked = ui.button(browse).clicked();
+            let width = ui.available_width();
+            ui.add_sized([width, ui.spacing().interact_size.y], egui::TextEdit::singleline(path));
+            clicked
+        })
+        .inner
+    })
+    .inner
 }
 
 impl eframe::App for BonkApp {
@@ -1095,9 +1144,13 @@ impl eframe::App for BonkApp {
                             ui.add_space(12.0);
 
                             ui.label(text::shell::database_label(language));
-                            ui.text_edit_singleline(&mut self.database_path);
+                            if path_field(ui, &mut self.database_path, text::shell::browse_action(language)) {
+                                action = Some(Action::ChooseDatabase);
+                            }
                             ui.label(text::shell::keystore_label(language));
-                            ui.text_edit_singleline(&mut self.keystore_path);
+                            if path_field(ui, &mut self.keystore_path, text::shell::browse_action(language)) {
+                                action = Some(Action::ChooseKeystore);
+                            }
                             ui.add_space(8.0);
 
                             ui.label(text::shell::passphrase_label(language));
@@ -1194,8 +1247,10 @@ impl eframe::App for BonkApp {
     }
 }
 
-/// Launches the desktop window.
-pub fn run() -> eframe::Result {
+/// Launches the desktop window against `database` and `keystore`.
+pub fn run(database: impl Into<PathBuf>, keystore: impl Into<PathBuf>) -> eframe::Result {
+    let database = database.into();
+    let keystore = keystore.into();
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1280.0, 820.0])
@@ -1205,7 +1260,7 @@ pub fn run() -> eframe::Result {
     eframe::run_native(
         "Bonk",
         options,
-        Box::new(|context| Ok(Box::new(BonkApp::new_with_context(context)))),
+        Box::new(move |context| Ok(Box::new(BonkApp::new_with_context(context, database, keystore)))),
     )
 }
 
@@ -1660,6 +1715,17 @@ mod tests {
         assert_eq!(database.parent(), keystore.parent());
         assert_eq!(database.file_name().unwrap(), "bonk.db");
         assert_eq!(keystore.file_name().unwrap(), "keystore.bin");
+    }
+
+    /// `--db` and `--keystore` have to reach the lock screen: the window used to
+    /// open the platform default no matter what the command named.
+    #[test]
+    fn the_window_starts_at_the_paths_it_was_given() {
+        let database = PathBuf::from("elsewhere").join("archive.db");
+        let keystore = PathBuf::from("elsewhere").join("other-key.bin");
+        let app = BonkApp::with_paths(database.clone(), keystore.clone());
+        assert_eq!(app.database_path, database.display().to_string());
+        assert_eq!(app.keystore_path, keystore.display().to_string());
     }
 
     /// A template beside the archive is one a document can be drawn with, and the
