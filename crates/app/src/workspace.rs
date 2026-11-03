@@ -8,6 +8,7 @@
 #![allow(clippy::float_arithmetic)]
 
 use std::path::{Path, PathBuf};
+use std::sync::mpsc;
 use std::time::{Duration, Instant, SystemTime};
 
 use crux::{
@@ -21,12 +22,12 @@ use store::{
     credit_note_for, first_seller, insert_customer, insert_seller, issue_draft, list_customers, list_suppressions,
     save_draft, save_suppression, set_supplier_match,
 };
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::Session;
 use crate::customers;
 use crate::dialog;
-use crate::health::Health;
+use crate::health::{CheckOutcome, Health, audit_archive_with_progress};
 use crate::table::{Cell, Table};
 use crate::text::editor::Field;
 use crate::text::find::Fact;
@@ -100,6 +101,8 @@ pub struct Workspace {
     preview: Option<Preview>,
     /// The folder watcher, and what it last did.
     watch: Watch,
+    /// The payload audit, while one is running on a worker thread.
+    health_check: Option<HealthCheck>,
     /// Every layout in `<archive>/templates`, sorted by file name. A document
     /// names the one it wants; the archive default is the one named `default`.
     /// Everything that lays a document out resolves through this list, so the
@@ -454,6 +457,36 @@ struct Watch {
     recent: Vec<String>,
     /// Why the last poll failed; a failed poll stops the watch.
     error: Option<String>,
+}
+
+/// What the health worker reports while it runs.
+enum HealthUpdate {
+    /// SQLite is walking the file's pages; there is no fraction to show.
+    Structure,
+    /// Payload `done` of `total` re-hashed.
+    Payloads { done: usize, total: usize },
+    /// The answer, stamped with when the check started.
+    Finished(String, CheckOutcome),
+}
+
+/// A payload audit running off the UI thread.
+///
+/// The worker opens its own connection with the same key — SQLite allows a
+/// reader alongside the window's writer — and reports how far it has got. The
+/// window adopts the answer when it arrives. Nothing here blocks a frame.
+struct HealthCheck {
+    updates: mpsc::Receiver<HealthUpdate>,
+    /// The last thing the worker said it was doing.
+    stage: HealthStage,
+}
+
+/// The panel's view of a running check.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum HealthStage {
+    /// SQLite's own page scan, which has no progress to report.
+    Structure,
+    /// Payload `done` of `total` re-hashed.
+    Payloads { done: usize, total: usize },
 }
 
 /// One armed folder watcher, and what it has done so far.
@@ -850,6 +883,7 @@ impl Workspace {
             match_target: None,
             preview: None,
             watch: Watch::default(),
+            health_check: None,
             templates,
             device_remembered: Session::device_ready(session.keystore_path(), &store::device::Keychain),
             conformance_findings: Vec::new(),
@@ -883,6 +917,12 @@ impl Workspace {
         // The app owns the choice, so it survives a lock; the workspace keeps a
         // copy for the frame it is drawing.
         self.language = *language;
+        // A finished health check is adopted here, whatever tab is open, and a
+        // running one keeps the frames coming so its answer shows promptly.
+        self.poll_health_check();
+        if self.health_check.is_some() {
+            ui.ctx().request_repaint_after(Duration::from_millis(200));
+        }
         let mut lock = false;
         let mut focus = self.focus_request.take();
         let mut requested = None;
@@ -2146,19 +2186,129 @@ impl Workspace {
             }
         }
 
-        ui.button(text::health::check_action(language)).clicked()
+        let running = self.health_check.as_ref().map(|job| &job.stage);
+        match running {
+            Some(HealthStage::Structure) => {
+                ui.horizontal(|ui| {
+                    ui.add(egui::Spinner::new().size(14.0));
+                    ui.weak(text::health::checking_structure(language));
+                });
+            }
+            Some(HealthStage::Payloads { done, total }) => {
+                let fraction = if *total == 0 { 0.0 } else { *done as f32 / *total as f32 };
+                ui.add(egui::ProgressBar::new(fraction).text(text::health::payloads_progress(language, *done, *total)));
+            }
+            None => {}
+        }
+        ui.add_enabled(
+            running.is_none(),
+            egui::Button::new(text::health::check_action(language)),
+        )
+        .clicked()
     }
 
+    /// Starts the payload audit on a worker thread.
+    ///
+    /// The check re-hashes every blob and walks the archive; on a large file it
+    /// takes long enough for the window to look hung, so it never runs on the
+    /// frame. The worker opens its own connection with the same key, and the
+    /// answer is adopted on a later frame.
     fn run_health_check(&mut self, session: &Session) {
-        let now = store::now_rfc3339();
-        match &mut self.health {
-            Some(health) => health.check(session.database(), &now),
-            None => {
-                if let Ok(health) = Health::snapshot(session.database(), session.database_path()) {
-                    self.health = Some(health);
-                    if let Some(health) = &mut self.health {
-                        health.check(session.database(), &now);
+        if self.health_check.is_some() {
+            return; // one pass at a time
+        }
+        if self.health.is_none() {
+            self.health = Health::snapshot(session.database(), session.database_path()).ok();
+        }
+
+        let path = session.database_path().to_path_buf();
+        let dek = Zeroizing::new(*session.dek());
+        let started = store::now_rfc3339();
+        let (sender, updates) = mpsc::channel();
+        let worker = std::thread::Builder::new()
+            .name("bonk-health-check".to_owned())
+            .spawn(move || {
+                // The page scan is opaque, so it gets its own indeterminate
+                // stage rather than a bar that never leaves zero.
+                let _ = sender.send(HealthUpdate::Structure);
+                // The connection is closed before the answer is sent, so no lock
+                // outlives the check.
+                let outcome = match store::Database::open_with_key(&path, &dek) {
+                    Ok(database) => {
+                        let mut last: Option<Instant> = None;
+                        audit_archive_with_progress(&database, &mut |done, total| {
+                            // A large archive would otherwise wake the window
+                            // once per payload.
+                            let due = done == total || last.is_none_or(|at| at.elapsed() >= Duration::from_millis(100));
+                            if due {
+                                last = Some(Instant::now());
+                                let _ = sender.send(HealthUpdate::Payloads { done, total });
+                            }
+                        })
                     }
+                    Err(error) => CheckOutcome {
+                        report: None,
+                        error: Some(error.to_string()),
+                    },
+                };
+                // A locked or closed window drops the receiver; the answer has
+                // nowhere to go, which is not a failure.
+                let _ = sender.send(HealthUpdate::Finished(started, outcome));
+            });
+        match worker {
+            Ok(_) => {
+                self.health_check = Some(HealthCheck {
+                    updates,
+                    stage: HealthStage::Structure,
+                });
+            }
+            Err(error) => {
+                self.message = Some(Message::error(format!("could not start the archive check: {error}")));
+            }
+        }
+    }
+
+    /// Adopts the worker's progress and, when it is done, its answer.
+    fn poll_health_check(&mut self) {
+        loop {
+            let update = match &self.health_check {
+                Some(job) => job.updates.try_recv(),
+                None => return,
+            };
+            match update {
+                Ok(HealthUpdate::Structure) => {
+                    if let Some(job) = &mut self.health_check {
+                        job.stage = HealthStage::Structure;
+                    }
+                }
+                Ok(HealthUpdate::Payloads { done, total }) => {
+                    if let Some(job) = &mut self.health_check {
+                        job.stage = HealthStage::Payloads { done, total };
+                    }
+                }
+                Ok(HealthUpdate::Finished(started, outcome)) => {
+                    self.health_check = None;
+                    if let Some(health) = &mut self.health {
+                        health.apply(&started, outcome);
+                    }
+                    return;
+                }
+                Err(mpsc::TryRecvError::Empty) => return,
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    // The worker died without answering, so the panel must not
+                    // wait forever for a result that is not coming.
+                    self.health_check = None;
+                    let language = self.language;
+                    if let Some(health) = &mut self.health {
+                        health.apply(
+                            &store::now_rfc3339(),
+                            CheckOutcome {
+                                report: None,
+                                error: Some(text::health::check_stopped(language).to_owned()),
+                            },
+                        );
+                    }
+                    return;
                 }
             }
         }
@@ -4941,6 +5091,33 @@ mod tests {
     /// Received documents, as the register lists them.
     fn received(session: &Session, owner: SellerId) -> Vec<store::ReceivedSummary> {
         store::list_received(session.database().connection(), owner).unwrap()
+    }
+
+    /// The archive check re-hashes everything, so it must not run on the frame:
+    /// the request returns with a job pending and the panel adopts the answer
+    /// when the worker is done.
+    #[test]
+    fn the_archive_check_runs_off_the_ui_thread() {
+        let (_dir, session, _seller) = session_with_one_issued();
+        let mut workspace = Workspace::new(&session).unwrap();
+
+        workspace.run_health_check(&session);
+        assert!(workspace.health_check.is_some(), "the check is a job, not a call");
+        assert!(
+            workspace.health.as_ref().unwrap().checked_at.is_none(),
+            "the frame did not wait for the answer"
+        );
+
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while workspace.health_check.is_some() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+            workspace.poll_health_check();
+        }
+
+        assert!(workspace.health_check.is_none(), "the worker answered");
+        let health = workspace.health.as_ref().unwrap();
+        assert!(health.is_clean(), "{:?}", health.error);
+        assert!(health.checked_at.is_some());
     }
 
     /// The folder and switch are a per-device preference, so unlocking the

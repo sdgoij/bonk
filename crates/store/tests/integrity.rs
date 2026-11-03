@@ -119,6 +119,25 @@ fn a_clean_archive_verifies() {
     assert_eq!(report.orphaned_blobs, 0);
 }
 
+/// A caller with a user in front of it needs to show movement; the callback has
+/// to reach every payload and end on the final count.
+#[test]
+fn the_audit_reports_how_far_it_has_got() {
+    let (_dir, database, _document_id) = seeded();
+    let mut seen: Vec<(usize, usize)> = Vec::new();
+    let report = store::integrity::audit_with_progress(database.connection(), &mut |done, total| {
+        seen.push((done, total));
+    })
+    .unwrap();
+
+    assert_eq!(seen.len(), report.blobs, "one report per payload");
+    assert_eq!(seen.last(), Some(&(report.blobs, report.blobs)));
+    assert!(
+        seen.windows(2).all(|pair| pair[0].0 < pair[1].0),
+        "the count only grows: {seen:?}"
+    );
+}
+
 #[test]
 fn a_payload_that_no_longer_hashes_to_its_record_is_caught() {
     let (_dir, database, _document_id) = seeded();

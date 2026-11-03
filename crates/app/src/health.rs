@@ -40,6 +40,49 @@ pub struct Health {
     pub checked_at: Option<String>,
 }
 
+/// What a payload audit found, before a panel adopts it.
+///
+/// Separate from [`Health`] so the audit can run on a worker thread that owns its
+/// own database connection, and the window can adopt the answer when it arrives.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct CheckOutcome {
+    /// Counts from a clean pass, or `None` when something failed.
+    pub report: Option<IntegrityReport>,
+    /// What failed, in the order the checks ran.
+    pub error: Option<String>,
+}
+
+/// Re-hashes every stored payload, on the calling thread.
+///
+/// The window calls this on a worker with its own connection: on a large archive
+/// the pass is long enough for the window to look hung, and the UI thread must
+/// keep drawing. This is a free function so both the worker and the tests run the
+/// same code.
+pub fn audit_archive(database: &Database) -> CheckOutcome {
+    audit_archive_with_progress(database, &mut |_, _| {})
+}
+
+/// The same audit, reporting `(done, total)` payloads as it goes.
+///
+pub fn audit_archive_with_progress(database: &Database, progress: &mut dyn FnMut(usize, usize)) -> CheckOutcome {
+    if let Err(error) = database.integrity_check() {
+        return CheckOutcome {
+            report: None,
+            error: Some(error.to_string()),
+        };
+    }
+    match integrity::audit_with_progress(database.connection(), progress) {
+        Ok(report) => CheckOutcome {
+            report: Some(report),
+            error: None,
+        },
+        Err(error) => CheckOutcome {
+            report: None,
+            error: Some(error.to_string()),
+        },
+    }
+}
+
 impl Health {
     /// Collects the facts that cost nothing: no payload is re-hashed.
     pub fn snapshot(database: &Database, database_path: &Path) -> Result<Self, StoreError> {
@@ -58,28 +101,21 @@ impl Health {
         })
     }
 
-    /// Re-hashes every stored payload. Returns whether the archive is intact.
+    /// Re-hashes every stored payload on this thread.
     ///
     /// Runs SQLite's own integrity check first: a structurally damaged file is a
     /// different problem from a payload that no longer matches its record, and
     /// the panel should name the right one.
     pub fn check(&mut self, database: &Database, now: &str) {
+        self.apply(now, audit_archive(database));
+    }
+
+    /// Adopts the result of a check that ran elsewhere, stamped with the time it
+    /// was started rather than the time it finished.
+    pub fn apply(&mut self, now: &str, outcome: CheckOutcome) {
         self.checked_at = Some(now.to_owned());
-        if let Err(error) = database.integrity_check() {
-            self.report = None;
-            self.error = Some(error.to_string());
-            return;
-        }
-        match integrity::audit(database.connection()) {
-            Ok(report) => {
-                self.report = Some(report);
-                self.error = None;
-            }
-            Err(error) => {
-                self.report = None;
-                self.error = Some(error.to_string());
-            }
-        }
+        self.report = outcome.report;
+        self.error = outcome.error;
     }
 
     /// True when a payload audit has run and found nothing wrong.

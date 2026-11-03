@@ -225,6 +225,16 @@ impl Session {
         self.database.integrity_check()
     }
 
+    /// The data key, for a second connection that must run off the UI thread.
+    ///
+    /// The health check re-hashes the whole archive and cannot do that on the
+    /// frame; SQLite allows a reader beside the window's writer, so the worker
+    /// opens its own connection behind the same key. Callers copy it into a
+    /// `Zeroizing` buffer that is wiped when the worker is done.
+    pub(crate) fn dek(&self) -> &[u8; 32] {
+        &self.dek
+    }
+
     /// The open database, for application-level commands.
     pub fn database(&self) -> &Database {
         &self.database

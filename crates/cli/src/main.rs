@@ -1,6 +1,7 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 //! The `bonk` executable: GUI by default, headless subcommands for support and CI.
 
+use std::io::IsTerminal as _;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -700,10 +701,14 @@ fn run(cli: Cli) -> Result<(), CliError> {
         ),
         Some(Command::Verify { anchor }) => {
             let session = access.session(&database, &keystore)?;
+            eprintln!("checking the file structure…");
             session.integrity_check()?;
             let summary = session.summary()?;
-            let audit_events = store::audit::verify_chain(session.database().connection())?;
-            let report = store::integrity::audit(session.database().connection())?;
+            let mut chain_progress = progress_reporter("audit chain");
+            let audit_events =
+                store::audit::verify_chain_with_progress(session.database().connection(), &mut chain_progress)?;
+            let mut payload_progress = progress_reporter("payloads");
+            let report = store::integrity::audit_with_progress(session.database().connection(), &mut payload_progress)?;
 
             println!("ok:       integrity check passed");
             println!("schema:   {}", summary.schema_version);
@@ -1426,6 +1431,40 @@ fn remove_archive(database: &Path, keystore: &Path) -> Result<(), CliError> {
         }
     }
     Ok(())
+}
+
+/// Reports a long audit's progress on stderr.
+///
+/// `stdout` carries the report, so progress must never go there: a caller piping
+/// `verify` into a file should get only the report. On a terminal the line is
+/// rewritten in place; in a log one line is printed per 5 % step, which keeps a
+/// minutes-long pass to a couple of dozen lines instead of thousands.
+fn progress_reporter(label: &'static str) -> impl FnMut(usize, usize) {
+    let terminal = std::io::stderr().is_terminal();
+    let mut reported: Option<usize> = None;
+    move |done: usize, total: usize| {
+        if total == 0 {
+            return;
+        }
+        let percent = done.saturating_mul(100) / total;
+        let finished = done >= total;
+        let due = match reported {
+            Some(last) => percent >= last.saturating_add(5) || finished,
+            None => true,
+        };
+        if !due {
+            return;
+        }
+        reported = Some(percent);
+        if terminal {
+            eprint!("\r{label}: {done}/{total} ({percent}%)");
+            if finished {
+                eprintln!();
+            }
+        } else {
+            eprintln!("{label}: {done}/{total} ({percent}%)");
+        }
+    }
 }
 
 fn paths(cli: &Cli) -> (PathBuf, PathBuf) {

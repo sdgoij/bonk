@@ -344,7 +344,10 @@ file, then run `bonk verify`.
 
 `verify` prints the audit chain head — sequence number, hash, and time. Two
 copies of the same archive must agree on that triple; `verify-backup` prints the
-same line for a copy, so the comparison is a diff rather than a guess.
+same line for a copy, so the comparison is a diff rather than a guess. A full pass
+over a large archive takes minutes, so `verify` reports where it is on **stderr**
+— the phase, then one line per five percent — while stdout carries only the
+report, so piping it to a file stays clean.
 
 `anchor heads.txt` writes that head to a plain-text file of checkpoints, one line
 of `timestamp sequence hash` per run, and does nothing when the head has not
@@ -515,7 +518,9 @@ hash), and the newest backup beside the archive. **Check integrity now** runs
 SQLite's integrity check and re-hashes every stored payload, counting unreferenced
 blobs as wasted space rather than corruption. It waits to be asked because the
 audit is a full pass over the archive, and a screen that freezes on open is one
-people learn to avoid.
+people learn to avoid. The check runs on a worker thread with its own connection,
+so the window keeps drawing: a spinner while SQLite scans the file — that part has
+no progress to report — and then a progress bar over the payloads.
 
 The workspace **locks itself after 15 minutes without input** — any pointer or key
 event resets the clock — and the unlock screen asks for the passphrase again.

@@ -211,6 +211,19 @@ pub(crate) fn verify_one(event: &Event<'_>, expected_previous: &str) -> Result<S
 
 /// Recomputes the whole chain. Returns the number of events verified.
 pub fn verify_chain(conn: &Connection) -> Result<usize, StoreError> {
+    verify_chain_with_progress(conn, &mut |_, _| {})
+}
+
+/// The same verification, reporting `(done, total)` links as it goes.
+///
+/// The callback runs once per link; a caller that prints should throttle.
+pub fn verify_chain_with_progress(
+    conn: &Connection,
+    progress: &mut dyn FnMut(usize, usize),
+) -> Result<usize, StoreError> {
+    let total: i64 = conn.query_row("SELECT count(*) FROM audit_event", [], |row| row.get(0))?;
+    let total = usize::try_from(total).unwrap_or(usize::MAX);
+
     let mut statement = conn.prepare(
         "SELECT id, at, actor, kind, subject_kind, subject_id, payload_json, prev_hash, hash
          FROM audit_event ORDER BY seq",
@@ -245,6 +258,7 @@ pub fn verify_chain(conn: &Connection) -> Result<usize, StoreError> {
         };
         expected_previous = verify_one(&event, &expected_previous)?;
         count += 1;
+        progress(count, total);
     }
 
     Ok(count)

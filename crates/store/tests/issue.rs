@@ -105,6 +105,25 @@ fn parties_and_drafts_round_trip() {
     assert_eq!(loaded.template, None, "no choice means the archive default");
 }
 
+/// Verifying a long chain is one of the passes the CLI reports progress for.
+#[test]
+fn the_chain_verifier_reports_how_far_it_has_got() {
+    let (_dir, database, _seller, _customer) = seeded();
+    for _ in 0..3 {
+        store::audit::record_passphrase_change(database.connection(), NOW, "test", "keystore.bin").unwrap();
+    }
+
+    let mut seen: Vec<(usize, usize)> = Vec::new();
+    let verified = store::audit::verify_chain_with_progress(database.connection(), &mut |done, total| {
+        seen.push((done, total));
+    })
+    .unwrap();
+
+    assert_eq!(verified, 3);
+    assert_eq!(seen.len(), verified, "one report per link");
+    assert_eq!(seen.last(), Some(&(verified, verified)));
+}
+
 /// The layout a draft asks for is part of the draft: reopening the composer has
 /// to show the choice, and issuing has to honour it.
 #[test]

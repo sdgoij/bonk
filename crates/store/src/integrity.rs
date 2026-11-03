@@ -35,7 +35,22 @@ pub struct IntegrityReport {
 /// whose payload is gone. The first problem found is named; a damaged archive
 /// stops the audit rather than listing every consequence of one break.
 pub fn audit(conn: &Connection) -> Result<IntegrityReport, StoreError> {
+    audit_with_progress(conn, &mut |_, _| {})
+}
+
+/// The same audit, reporting `(done, total)` payloads as it goes.
+///
+/// Re-hashing a large archive takes minutes, and a caller with a user in front of
+/// it needs to show that something is happening. The callback runs once per
+/// payload; a caller that prints should throttle.
+pub fn audit_with_progress(
+    conn: &Connection,
+    progress: &mut dyn FnMut(usize, usize),
+) -> Result<IntegrityReport, StoreError> {
     check_foreign_keys(conn)?;
+
+    let total: i64 = conn.query_row("SELECT count(*) FROM blob", [], |row| row.get(0))?;
+    let total = usize::try_from(total).unwrap_or(usize::MAX);
 
     let mut blobs = 0_usize;
     let mut statement = conn.prepare("SELECT id, sha256, payload FROM blob")?;
@@ -51,6 +66,7 @@ pub fn audit(conn: &Connection) -> Result<IntegrityReport, StoreError> {
             )));
         }
         blobs += 1;
+        progress(blobs, total);
     }
 
     check_artefacts(conn)?;

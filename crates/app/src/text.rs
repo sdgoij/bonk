@@ -1590,6 +1590,33 @@ pub mod health {
         sentence!(language, format!("integrity: {error}"), format!("integriteit: {error}"))
     }
 
+    /// A payload audit is walking the file's pages.
+    pub fn checking_structure(language: Language) -> &'static str {
+        sentence!(
+            language,
+            "integrity: checking the file structure…",
+            "integriteit: bestandsstructuur controleren…"
+        )
+    }
+
+    /// How far the payload pass has got.
+    pub fn payloads_progress(language: Language, done: usize, total: usize) -> String {
+        sentence!(
+            language,
+            format!("payloads {done}/{total}"),
+            format!("payloads {done}/{total}")
+        )
+    }
+
+    /// The worker stopped without answering.
+    pub fn check_stopped(language: Language) -> &'static str {
+        sentence!(
+            language,
+            "integrity: the check stopped unexpectedly",
+            "integriteit: de controle stopte onverwacht"
+        )
+    }
+
     /// Every payload verified.
     pub fn integrity_ok(language: Language, payloads: usize) -> String {
         sentence!(
@@ -2119,6 +2146,9 @@ mod tests {
         assert!(health::chain(language, 7).contains('7'));
         assert!(health::integrity_with_orphans(language, 4, 1).contains('1'));
         assert!(health::last_backup(language, "2026-10.db", 12).contains("2026-10.db"));
+        assert!(health::payloads_progress(language, 3, 9).contains("3/9"));
+        assert!(!health::checking_structure(language).is_empty());
+        assert!(!health::check_stopped(language).is_empty());
         assert!(!security::note(language).is_empty());
         assert!(!security::passphrase_changed(language).is_empty());
         assert!(!health::panel_title(language).is_empty());
