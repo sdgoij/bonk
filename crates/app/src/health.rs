@@ -3,8 +3,8 @@
 //! The workspace shows this on demand rather than at unlock: re-hashing every
 //! stored payload costs a pass over the whole archive, and a screen that freezes
 //! on open is a screen people learn to avoid. The cheap facts — schema, size,
-//! chain head, last backup — are collected immediately; the payload audit waits
-//! for the user to ask.
+//! chain head, last backup — are collected immediately; the full audit waits for
+//! the user to ask, and runs off the UI thread.
 
 use std::path::{Path, PathBuf};
 
@@ -34,9 +34,11 @@ pub struct Health {
     pub last_backup: Option<BackupFile>,
     /// Result of the last payload audit, if one has run.
     pub report: Option<IntegrityReport>,
-    /// Why the last payload audit failed, if it did.
+    /// Audit links verified by the last check, if one has run.
+    pub links: Option<usize>,
+    /// Why the last check failed, if it did.
     pub error: Option<String>,
-    /// When the payload audit last ran.
+    /// When the check last ran.
     pub checked_at: Option<String>,
 }
 
@@ -46,38 +48,71 @@ pub struct Health {
 /// own database connection, and the window can adopt the answer when it arrives.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct CheckOutcome {
-    /// Counts from a clean pass, or `None` when something failed.
+    /// Counts from a clean payload pass, or `None` when something failed.
     pub report: Option<IntegrityReport>,
+    /// Audit links verified, or `None` when the chain pass did not finish.
+    pub links: Option<usize>,
     /// What failed, in the order the checks ran.
     pub error: Option<String>,
 }
 
-/// Re-hashes every stored payload, on the calling thread.
+/// Which pass a running check is on.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum CheckPhase {
+    /// Recomputing the audit chain.
+    Chain,
+    /// Re-hashing stored payloads.
+    Payloads,
+}
+
+/// Re-hashes every stored payload and recomputes the chain, on the calling
+/// thread.
 ///
 /// The window calls this on a worker with its own connection: on a large archive
 /// the pass is long enough for the window to look hung, and the UI thread must
 /// keep drawing. This is a free function so both the worker and the tests run the
 /// same code.
 pub fn audit_archive(database: &Database) -> CheckOutcome {
-    audit_archive_with_progress(database, &mut |_, _| {})
+    audit_archive_with_progress(database, &mut |_, _, _| {})
 }
 
-/// The same audit, reporting `(done, total)` payloads as it goes.
-///
-pub fn audit_archive_with_progress(database: &Database, progress: &mut dyn FnMut(usize, usize)) -> CheckOutcome {
+/// The same audit, reporting `(phase, done, total)` as it goes.
+pub fn audit_archive_with_progress(
+    database: &Database,
+    progress: &mut dyn FnMut(CheckPhase, usize, usize),
+) -> CheckOutcome {
     if let Err(error) = database.integrity_check() {
         return CheckOutcome {
             report: None,
+            links: None,
             error: Some(error.to_string()),
         };
     }
-    match integrity::audit_with_progress(database.connection(), progress) {
+    // The chain first: a broken chain is evidence that no longer means anything,
+    // and there is no point hashing payloads behind a story that does not hold.
+    let links = match audit::verify_chain_with_progress(database.connection(), &mut |done, total| {
+        progress(CheckPhase::Chain, done, total);
+    }) {
+        Ok(links) => links,
+        Err(error) => {
+            return CheckOutcome {
+                report: None,
+                links: None,
+                error: Some(error.to_string()),
+            };
+        }
+    };
+    match integrity::audit_with_progress(database.connection(), &mut |done, total| {
+        progress(CheckPhase::Payloads, done, total);
+    }) {
         Ok(report) => CheckOutcome {
             report: Some(report),
+            links: Some(links),
             error: None,
         },
         Err(error) => CheckOutcome {
             report: None,
+            links: None,
             error: Some(error.to_string()),
         },
     }
@@ -96,16 +131,19 @@ impl Health {
             chain: audit::head(connection)?,
             last_backup: last_backup(database_path),
             report: None,
+            links: None,
             error: None,
             checked_at: None,
         })
     }
 
-    /// Re-hashes every stored payload on this thread.
+    /// Runs the whole check on this thread: SQLite's integrity check, the audit
+    /// chain, and every stored payload.
     ///
-    /// Runs SQLite's own integrity check first: a structurally damaged file is a
+    /// The integrity check comes first: a structurally damaged file is a
     /// different problem from a payload that no longer matches its record, and
-    /// the panel should name the right one.
+    /// the panel should name the right one. The chain comes before the payloads
+    /// because a story that no longer links up makes the evidence behind it moot.
     pub fn check(&mut self, database: &Database, now: &str) {
         self.apply(now, audit_archive(database));
     }
@@ -115,6 +153,7 @@ impl Health {
     pub fn apply(&mut self, now: &str, outcome: CheckOutcome) {
         self.checked_at = Some(now.to_owned());
         self.report = outcome.report;
+        self.links = outcome.links;
         self.error = outcome.error;
     }
 
@@ -189,6 +228,7 @@ mod tests {
         let mut health = Health::snapshot(session.database(), session.database_path()).unwrap();
         health.check(session.database(), "2026-10-28T12:00:00Z");
         assert!(health.is_clean(), "{:?}", health.error);
+        assert_eq!(health.links, Some(0), "an empty chain verifies");
 
         // A blob whose record does not match its bytes is corruption, and the
         // panel must say so rather than showing a green tick.
@@ -206,6 +246,45 @@ mod tests {
         assert!(!health.is_clean());
         assert!(health.report.is_none());
         assert!(health.error.as_deref().unwrap_or_default().contains("does not hash"));
+    }
+
+    /// The window's check covers the chain too, so evidence that no longer links
+    /// up fails the panel and not only the CLI's `verify`.
+    #[test]
+    fn checking_verifies_the_audit_chain() {
+        let (_dir, session) = session();
+        for _ in 0..2 {
+            store::audit::record_passphrase_change(
+                session.database().connection(),
+                "2026-10-28T12:00:00Z",
+                "test",
+                "keystore.bin",
+            )
+            .unwrap();
+        }
+
+        let mut health = Health::snapshot(session.database(), session.database_path()).unwrap();
+        health.check(session.database(), "2026-10-28T12:01:00Z");
+        assert!(health.is_clean(), "{:?}", health.error);
+        assert_eq!(health.links, Some(2), "both links verified");
+
+        session
+            .database()
+            .connection()
+            .execute(
+                "UPDATE audit_event SET payload_json = '{\"tampered\":true}' WHERE seq = 1",
+                [],
+            )
+            .unwrap();
+
+        health.check(session.database(), "2026-10-28T12:02:00Z");
+        assert!(!health.is_clean());
+        assert!(health.links.is_none(), "a broken chain has no verified count");
+        assert!(
+            health.error.as_deref().unwrap_or_default().contains("altered"),
+            "{:?}",
+            health.error
+        );
     }
 
     #[test]

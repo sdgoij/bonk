@@ -1,7 +1,6 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 //! The `bonk` executable: GUI by default, headless subcommands for support and CI.
 
-use std::io::IsTerminal as _;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -1436,11 +1435,11 @@ fn remove_archive(database: &Path, keystore: &Path) -> Result<(), CliError> {
 /// Reports a long audit's progress on stderr.
 ///
 /// `stdout` carries the report, so progress must never go there: a caller piping
-/// `verify` into a file should get only the report. On a terminal the line is
-/// rewritten in place; in a log one line is printed per 5 % step, which keeps a
-/// minutes-long pass to a couple of dozen lines instead of thousands.
+/// `verify` into a file should get only the report. One line is printed per 5 %
+/// step, which keeps a minutes-long pass to a couple of dozen lines instead of
+/// thousands. Lines rather than a rewritten status line, because the output is
+/// just as often copied out of a terminal or collected by a log as it is watched.
 fn progress_reporter(label: &'static str) -> impl FnMut(usize, usize) {
-    let terminal = std::io::stderr().is_terminal();
     let mut reported: Option<usize> = None;
     move |done: usize, total: usize| {
         if total == 0 {
@@ -1456,14 +1455,7 @@ fn progress_reporter(label: &'static str) -> impl FnMut(usize, usize) {
             return;
         }
         reported = Some(percent);
-        if terminal {
-            eprint!("\r{label}: {done}/{total} ({percent}%)");
-            if finished {
-                eprintln!();
-            }
-        } else {
-            eprintln!("{label}: {done}/{total} ({percent}%)");
-        }
+        eprintln!("{label}: {done}/{total} ({percent}%)");
     }
 }
 

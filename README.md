@@ -515,12 +515,13 @@ renaming a customer next month cannot change what last month's invoice says.
 An **Archive health** panel sits at the bottom, collapsed. It shows the schema,
 the encryption state, the archive size, the audit chain head (hover for the full
 hash), and the newest backup beside the archive. **Check integrity now** runs
-SQLite's integrity check and re-hashes every stored payload, counting unreferenced
-blobs as wasted space rather than corruption. It waits to be asked because the
-audit is a full pass over the archive, and a screen that freezes on open is one
-people learn to avoid. The check runs on a worker thread with its own connection,
-so the window keeps drawing: a spinner while SQLite scans the file — that part has
-no progress to report — and then a progress bar over the payloads.
+SQLite's integrity check, recomputes the audit chain, and re-hashes every stored
+payload, counting unreferenced blobs as wasted space rather than corruption. It
+waits to be asked because the audit is a full pass over the archive, and a screen
+that freezes on open is one people learn to avoid. The check runs on a worker
+thread with its own connection, so the window keeps drawing: a spinner while
+SQLite scans the file — that part has no progress to report — and then a progress
+bar for the chain and the payloads.
 
 The workspace **locks itself after 15 minutes without input** — any pointer or key
 event resets the clock — and the unlock screen asks for the passphrase again.

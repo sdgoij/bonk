@@ -1599,12 +1599,30 @@ pub mod health {
         )
     }
 
+    /// How far the chain pass has got.
+    pub fn chain_progress(language: Language, done: usize, total: usize) -> String {
+        sentence!(
+            language,
+            format!("audit chain {done}/{total}"),
+            format!("auditketen {done}/{total}")
+        )
+    }
+
     /// How far the payload pass has got.
     pub fn payloads_progress(language: Language, done: usize, total: usize) -> String {
         sentence!(
             language,
             format!("payloads {done}/{total}"),
             format!("payloads {done}/{total}")
+        )
+    }
+
+    /// The chain pass finished.
+    pub fn chain_verified(language: Language, links: usize) -> String {
+        sentence!(
+            language,
+            format!("chain: {links} links verified"),
+            format!("keten: {links} schakels gecontroleerd")
         )
     }
 
@@ -2147,6 +2165,8 @@ mod tests {
         assert!(health::integrity_with_orphans(language, 4, 1).contains('1'));
         assert!(health::last_backup(language, "2026-10.db", 12).contains("2026-10.db"));
         assert!(health::payloads_progress(language, 3, 9).contains("3/9"));
+        assert!(health::chain_progress(language, 2, 8).contains("2/8"));
+        assert!(health::chain_verified(language, 5).contains('5'));
         assert!(!health::checking_structure(language).is_empty());
         assert!(!health::check_stopped(language).is_empty());
         assert!(!security::note(language).is_empty());

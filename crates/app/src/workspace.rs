@@ -27,7 +27,7 @@ use zeroize::{Zeroize, Zeroizing};
 use crate::Session;
 use crate::customers;
 use crate::dialog;
-use crate::health::{CheckOutcome, Health, audit_archive_with_progress};
+use crate::health::{CheckOutcome, CheckPhase, Health, audit_archive_with_progress};
 use crate::table::{Cell, Table};
 use crate::text::editor::Field;
 use crate::text::find::Fact;
@@ -461,10 +461,8 @@ struct Watch {
 
 /// What the health worker reports while it runs.
 enum HealthUpdate {
-    /// SQLite is walking the file's pages; there is no fraction to show.
-    Structure,
-    /// Payload `done` of `total` re-hashed.
-    Payloads { done: usize, total: usize },
+    /// What it is doing, and how far.
+    Stage(HealthStage),
     /// The answer, stamped with when the check started.
     Finished(String, CheckOutcome),
 }
@@ -485,7 +483,9 @@ struct HealthCheck {
 enum HealthStage {
     /// SQLite's own page scan, which has no progress to report.
     Structure,
-    /// Payload `done` of `total` re-hashed.
+    /// `done` of `total` audit links recomputed.
+    Chain { done: usize, total: usize },
+    /// `done` of `total` payloads re-hashed.
     Payloads { done: usize, total: usize },
 }
 
@@ -2173,6 +2173,9 @@ impl Workspace {
         if let Some(checked) = &health.checked_at {
             ui.weak(text::health::checked(language, checked));
         }
+        if let Some(links) = health.links {
+            ui.weak(text::health::chain_verified(language, links));
+        }
 
         match &health.last_backup {
             Some(backup) => {
@@ -2194,9 +2197,16 @@ impl Workspace {
                     ui.weak(text::health::checking_structure(language));
                 });
             }
+            Some(HealthStage::Chain { done, total }) => {
+                staged_progress(ui, text::health::chain_progress(language, *done, *total), *done, *total);
+            }
             Some(HealthStage::Payloads { done, total }) => {
-                let fraction = if *total == 0 { 0.0 } else { *done as f32 / *total as f32 };
-                ui.add(egui::ProgressBar::new(fraction).text(text::health::payloads_progress(language, *done, *total)));
+                staged_progress(
+                    ui,
+                    text::health::payloads_progress(language, *done, *total),
+                    *done,
+                    *total,
+                );
             }
             None => {}
         }
@@ -2230,24 +2240,29 @@ impl Workspace {
             .spawn(move || {
                 // The page scan is opaque, so it gets its own indeterminate
                 // stage rather than a bar that never leaves zero.
-                let _ = sender.send(HealthUpdate::Structure);
+                let _ = sender.send(HealthUpdate::Stage(HealthStage::Structure));
                 // The connection is closed before the answer is sent, so no lock
                 // outlives the check.
                 let outcome = match store::Database::open_with_key(&path, &dek) {
                     Ok(database) => {
                         let mut last: Option<Instant> = None;
-                        audit_archive_with_progress(&database, &mut |done, total| {
+                        audit_archive_with_progress(&database, &mut |phase, done, total| {
                             // A large archive would otherwise wake the window
                             // once per payload.
                             let due = done == total || last.is_none_or(|at| at.elapsed() >= Duration::from_millis(100));
                             if due {
                                 last = Some(Instant::now());
-                                let _ = sender.send(HealthUpdate::Payloads { done, total });
+                                let stage = match phase {
+                                    CheckPhase::Chain => HealthStage::Chain { done, total },
+                                    CheckPhase::Payloads => HealthStage::Payloads { done, total },
+                                };
+                                let _ = sender.send(HealthUpdate::Stage(stage));
                             }
                         })
                     }
                     Err(error) => CheckOutcome {
                         report: None,
+                        links: None,
                         error: Some(error.to_string()),
                     },
                 };
@@ -2276,14 +2291,9 @@ impl Workspace {
                 None => return,
             };
             match update {
-                Ok(HealthUpdate::Structure) => {
+                Ok(HealthUpdate::Stage(stage)) => {
                     if let Some(job) = &mut self.health_check {
-                        job.stage = HealthStage::Structure;
-                    }
-                }
-                Ok(HealthUpdate::Payloads { done, total }) => {
-                    if let Some(job) = &mut self.health_check {
-                        job.stage = HealthStage::Payloads { done, total };
+                        job.stage = stage;
                     }
                 }
                 Ok(HealthUpdate::Finished(started, outcome)) => {
@@ -2304,6 +2314,7 @@ impl Workspace {
                             &store::now_rfc3339(),
                             CheckOutcome {
                                 report: None,
+                                links: None,
                                 error: Some(text::health::check_stopped(language).to_owned()),
                             },
                         );
@@ -3637,6 +3648,12 @@ fn fit_scale(page_width: f32, width: f32) -> f32 {
 }
 
 /// Where the window keeps its backups.
+/// A determinate bar for a pass that knows its total.
+fn staged_progress(ui: &mut egui::Ui, label: String, done: usize, total: usize) {
+    let fraction = if total == 0 { 0.0 } else { done as f32 / total as f32 };
+    ui.add(egui::ProgressBar::new(fraction).text(label));
+}
+
 fn backup_directory(session: &Session) -> PathBuf {
     session
         .database_path()
@@ -5118,6 +5135,11 @@ mod tests {
         let health = workspace.health.as_ref().unwrap();
         assert!(health.is_clean(), "{:?}", health.error);
         assert!(health.checked_at.is_some());
+        assert!(
+            health.links.is_some_and(|links| links > 0),
+            "the check covers the chain as well: {:?}",
+            health.links
+        );
     }
 
     /// The folder and switch are a per-device preference, so unlocking the
