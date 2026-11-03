@@ -563,6 +563,34 @@ pub fn default_paths() -> (PathBuf, PathBuf) {
     (base.join("bonk.db"), base.join("keystore.bin"))
 }
 
+/// Where the folder watcher's settings are kept in the window's storage.
+///
+/// They are a per-device choice, not archive data: the same archive can be
+/// watched from a folder on one machine and not on another, so they do not
+/// belong in the database or in an export.
+const WATCH_FOLDER_KEY: &str = "watch-folder";
+const WATCH_ENABLED_KEY: &str = "watch-enabled";
+
+/// Reads the remembered folder watcher settings.
+fn load_watch(storage: &dyn eframe::Storage) -> (Option<PathBuf>, bool) {
+    let folder = storage
+        .get_string(WATCH_FOLDER_KEY)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from);
+    let enabled = storage.get_string(WATCH_ENABLED_KEY).as_deref() == Some("1");
+    (folder, enabled)
+}
+
+/// Writes them back. No folder removes the key rather than storing an empty
+/// path, so "nothing chosen" stays distinguishable from a path.
+fn store_watch(storage: &mut dyn eframe::Storage, folder: Option<&std::path::Path>, enabled: bool) {
+    match folder {
+        Some(folder) => storage.set_string(WATCH_FOLDER_KEY, folder.display().to_string()),
+        None => storage.remove_string(WATCH_FOLDER_KEY),
+    }
+    storage.set_string(WATCH_ENABLED_KEY, if enabled { "1" } else { "0" }.to_owned());
+}
+
 fn data_dir() -> PathBuf {
     if let Ok(appdata) = std::env::var("APPDATA") {
         return PathBuf::from(appdata);
@@ -618,6 +646,11 @@ pub struct BonkApp {
     device_ready: bool,
     /// The chosen appearance, kept so `save` can write it down.
     appearance: egui::ThemePreference,
+    /// Folder watcher settings, copied out of the workspace every frame so a
+    /// lock screen (which has no workspace) still knows them and `save` can
+    /// write them down.
+    watch_folder: Option<PathBuf>,
+    watch_enabled: bool,
 }
 
 impl Default for BonkApp {
@@ -636,6 +669,8 @@ impl Default for BonkApp {
             language: text::Language::default(),
             device_ready: Self::device_ready_for(&keystore.display().to_string()),
             appearance: egui::ThemePreference::System,
+            watch_folder: None,
+            watch_enabled: false,
         }
     }
 }
@@ -691,6 +726,7 @@ impl BonkApp {
             if let Some(name) = storage.get_string(text::STORAGE_KEY) {
                 app.language = text::Language::from_name(&name).unwrap_or_default();
             }
+            (app.watch_folder, app.watch_enabled) = load_watch(storage);
         }
         theme::set(&context.egui_ctx, app.appearance);
         app
@@ -839,7 +875,11 @@ impl BonkApp {
                 // can be corrected without retyping.
                 self.wipe_passphrase_buffer();
                 match Workspace::new(&session) {
-                    Ok(workspace) => {
+                    Ok(mut workspace) => {
+                        // The watcher is a per-device preference, so unlocking
+                        // puts it back the way the last window left it. Arming
+                        // it only primes the folder; nothing old is imported.
+                        workspace.restore_watch(self.watch_folder.clone(), self.watch_enabled);
                         // A fresh unlock starts the idle clock, whatever
                         // happened before it.
                         self.idle.touch(std::time::Instant::now());
@@ -1232,6 +1272,11 @@ impl eframe::App for BonkApp {
                     if workspace.ui(ui, session, &mut self.appearance, &mut self.language) == WorkspaceAction::Lock {
                         action = Some(Action::Lock);
                     }
+                    // Keep the window's copy current: the workspace is dropped on
+                    // lock, and `save` cannot reach through the state machine.
+                    let (folder, enabled) = workspace.watch_settings();
+                    self.watch_folder = folder.cloned();
+                    self.watch_enabled = enabled;
                 }
             }
 
@@ -1244,6 +1289,7 @@ impl eframe::App for BonkApp {
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         storage.set_string(theme::STORAGE_KEY, self.appearance.name().to_owned());
         storage.set_string(text::STORAGE_KEY, self.language.name().to_owned());
+        store_watch(storage, self.watch_folder.as_deref(), self.watch_enabled);
     }
 }
 
@@ -1726,6 +1772,44 @@ mod tests {
         let app = BonkApp::with_paths(database.clone(), keystore.clone());
         assert_eq!(app.database_path, database.display().to_string());
         assert_eq!(app.keystore_path, keystore.display().to_string());
+    }
+
+    /// The folder watcher's folder and switch are remembered through the window's
+    /// storage, so a restart does not forget them.
+    #[test]
+    fn the_watch_settings_round_trip_through_window_storage() {
+        use eframe::Storage as _;
+        #[derive(Default)]
+        struct Memory(std::collections::BTreeMap<String, String>);
+
+        impl eframe::Storage for Memory {
+            fn get_string(&self, key: &str) -> Option<String> {
+                self.0.get(key).cloned()
+            }
+            fn set_string(&mut self, key: &str, value: String) {
+                self.0.insert(key.to_owned(), value);
+            }
+            fn remove_string(&mut self, key: &str) {
+                self.0.remove(key);
+            }
+            fn flush(&mut self) {}
+        }
+
+        let mut storage = Memory::default();
+        assert_eq!(load_watch(&storage), (None, false), "a fresh window remembers nothing");
+
+        let folder = PathBuf::from("elsewhere").join("drops");
+        store_watch(&mut storage, Some(&folder), true);
+        assert_eq!(load_watch(&storage), (Some(folder.clone()), true));
+
+        // Stopping keeps the folder and turns the switch off.
+        store_watch(&mut storage, Some(&folder), false);
+        assert_eq!(load_watch(&storage), (Some(folder), false));
+
+        // Clearing the folder removes the key rather than storing an empty path.
+        store_watch(&mut storage, None, false);
+        assert_eq!(storage.get_string(WATCH_FOLDER_KEY), None);
+        assert_eq!(load_watch(&storage), (None, false));
     }
 
     /// A template beside the archive is one a document can be drawn with, and the

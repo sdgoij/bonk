@@ -1809,6 +1809,27 @@ impl Workspace {
         }
     }
 
+    /// Puts the folder watcher back the way the last window left it.
+    ///
+    /// The folder is restored whether or not the watch was running, so stopping
+    /// it does not lose the choice. Arming it only primes the folder: the first
+    /// poll records what is there, so reopening the window cannot import a back
+    /// catalogue.
+    pub fn restore_watch(&mut self, folder: Option<PathBuf>, enabled: bool) {
+        self.watch.folder = folder;
+        self.watch.running = None;
+        self.watch.error = None;
+        if enabled {
+            self.start_watch();
+        }
+    }
+
+    /// The watcher as the window should remember it: the chosen folder and
+    /// whether it is running.
+    pub fn watch_settings(&self) -> (Option<&PathBuf>, bool) {
+        (self.watch.folder.as_ref(), self.watch.running.is_some())
+    }
+
     /// Arms the watcher on the chosen folder.
     ///
     /// Nothing is imported yet: the first poll records what is already there,
@@ -4920,6 +4941,42 @@ mod tests {
     /// Received documents, as the register lists them.
     fn received(session: &Session, owner: SellerId) -> Vec<store::ReceivedSummary> {
         store::list_received(session.database().connection(), owner).unwrap()
+    }
+
+    /// The folder and switch are a per-device preference, so unlocking the
+    /// window again restores them — and priming must not import a backlog.
+    #[test]
+    fn a_remembered_watch_comes_back_without_importing_the_backlog() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let session = Session::create(
+            dir.path().join("bonk.db"),
+            dir.path().join("keystore.bin"),
+            "passphrase",
+        )
+        .unwrap();
+        let seller = seller();
+        insert_seller(session.database().connection(), &seller, NOW).unwrap();
+
+        let drop_folder = dir.path().join("drop");
+        std::fs::create_dir_all(&drop_folder).unwrap();
+        // A file that was in the folder before the window opened.
+        std::fs::write(drop_folder.join("old.xml"), dropped_invoice("SUP-OLD")).unwrap();
+
+        let mut workspace = Workspace::new(&session).unwrap();
+        assert_eq!(workspace.watch_settings(), (None, false), "nothing remembered yet");
+
+        workspace.restore_watch(Some(drop_folder.clone()), true);
+        let (folder, enabled) = workspace.watch_settings();
+        assert_eq!(folder, Some(&drop_folder));
+        assert!(enabled, "the switch comes back on");
+
+        // The first poll records the history and imports none of it.
+        workspace.poll_watch(&session);
+        assert_eq!(received(&session, seller.id).len(), 0);
+
+        // Stopping keeps the folder and remembers the switch as off.
+        workspace.restore_watch(Some(drop_folder.clone()), false);
+        assert_eq!(workspace.watch_settings(), (Some(&drop_folder), false));
     }
 
     #[test]

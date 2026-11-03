@@ -280,7 +280,11 @@ customer **Import…** and **Export…** buttons use.
 
 Settings holds appearance (System, Light, Dark), archive health, verified
 backups, and credentials. Labels are not selectable; values — amounts, names,
-hashes, paths — are. Light and dark share one layout.
+hashes, paths — are. Light and dark share one layout. The folder watcher's folder
+and its on/off switch are a per-device preference, kept in the window's own
+storage rather than in the archive, so they survive a restart and a lock; the
+first poll after reopening primes the folder, so a restored watch still never
+imports its history.
 
 Peppol BIS 3.0 requires an endpoint identifier for both parties and a buyer or
 order reference, and a Dutch seller also needs a street, a post code, and a KvK
