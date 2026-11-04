@@ -506,9 +506,15 @@ time on nightly, and `just fuzz-all` runs all three. A first run of a minute
 across the three targets executed about 340 000 cases with no panic, hang, or
 crash. The property tests stay the offline gate, because the fuzz targets need
 nightly and `cargo-fuzz`, which the CI runner does not have; the targets are the
-periodic, deeper run (threat model O4). The one-hour run the M3 exit criterion
-asks for is scheduled and not yet recorded; `just fuzz-all 3600` is the command
-that will produce it.
+periodic, deeper run (threat model O4).
+
+**The one-hour run is recorded (2026-11-04).** `just fuzz-all 3600` ran each
+harness for an hour: 36 090 001 executions for `ubl`, 21 592 052 for `cii`, and
+5 696 111 for `pdf` — 63.4 million in all — with no crash, timeout,
+out-of-memory report, or leak, and `fuzz/artifacts/` empty. That closes the M3
+exit criterion. The working corpus is ignored (a run writes thousands of inputs);
+the hand-picked starting points live in `fuzz/seeds/<target>/`, and `just fuzz`
+copies them in.
 
 M3.5 is in as well. `bonk received` lists inbound documents with supplier, dates,
 amount, and status; `bonk approve` and `bonk mark-paid` move a document forward.
