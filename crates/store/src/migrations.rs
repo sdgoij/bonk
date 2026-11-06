@@ -88,6 +88,14 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("../migrations/0010_blob_sha256_index.sql"),
         down: Some(include_str!("../migrations/0010_blob_sha256_index_down.sql")),
     },
+    Migration {
+        version: 11,
+        name: "0011_ledger",
+        // Reversible only while the ledger is empty; the down migration refuses
+        // to drop postings, because a posting is evidence for a filed return.
+        sql: include_str!("../migrations/0011_ledger.sql"),
+        down: Some(include_str!("../migrations/0011_ledger_down.sql")),
+    },
 ];
 
 /// SHA-256 of the migration source, hex encoded.
@@ -227,21 +235,52 @@ mod tests {
     fn rollback_is_preflighted_and_refuses_irreversible_migrations() {
         let mut conn = Connection::open_in_memory().unwrap();
         apply(&mut conn).unwrap();
-        assert_eq!(current_version(&conn), 10);
+        assert_eq!(current_version(&conn), 11);
 
         assert!(rollback_to(&mut conn, 1).is_err());
         assert_eq!(
             current_version(&conn),
-            10,
+            11,
             "a refused rollback must not partially apply"
         );
 
         assert_eq!(
             rollback_to(&mut conn, 2).unwrap(),
-            8,
-            "0010, 0009, 0008, 0007, 0006, 0005, 0004, and 0003 all declare a down"
+            9,
+            "0011 through 0003 all declare a down"
         );
         assert_eq!(current_version(&conn), 2);
+    }
+
+    #[test]
+    fn the_ledger_refuses_to_roll_back_once_it_holds_postings() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        apply(&mut conn).unwrap();
+
+        conn.execute_batch(
+            "INSERT INTO seller (id, legal_name, default_currency, created_at, updated_at)
+                 VALUES ('s1', 'Seller', 'EUR', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');
+             INSERT INTO fiscal_period (id, seller_id, year, period_no, starts_on, ends_on, status)
+                 VALUES ('p1', 's1', 2026, 1, '2026-01-01', '2026-01-31', 'open');
+             INSERT INTO account (code, name, kind, updated_at)
+                 VALUES ('1300', 'Debiteuren', 'asset', '2026-01-01T00:00:00Z');
+             INSERT INTO journal_entry
+                 (id, journal_code, period_id, number, entry_date_local, description,
+                  source_kind, posting_profile_id, rule_version, currency,
+                  created_at, created_by, content_hash)
+                 VALUES ('e1', 'MEM', 'p1', '2026-0001', '2026-01-01', 'Manual',
+                         'manual', 'test', '1', 'EUR', '2026-01-01T00:00:00Z', 'test', 'x');",
+        )
+        .unwrap();
+
+        let error = rollback_to(&mut conn, 2).unwrap_err();
+        let text = error.to_string();
+        assert!(text.contains("no_postings"), "unexpected error: {text}");
+        assert_eq!(
+            current_version(&conn),
+            11,
+            "nothing may be dropped before the guard trips"
+        );
     }
 
     fn current_version(conn: &Connection) -> i64 {

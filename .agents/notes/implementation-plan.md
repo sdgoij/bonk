@@ -1074,6 +1074,22 @@ Prerequisite acknowledged: this milestone assumes the v1.0 hooks from
 technical-design §1.5 (explicit tax codes, party snapshots, business dates,
 `posting_profile_id`). If they were skipped, add a week.
 
+**Status, 2026-11-06.** Started with the two layers that everything else sits on.
+`crux::ledger` holds the shape of an entry — accounts, the seven journals,
+debit and credit sides, one currency, and the balance invariant — and mirroring
+an entry into its reversal, so a correction is arithmetic rather than an edit.
+Migration 0011 and `store::ledger` persist the chart of accounts, fiscal periods
+and their lock events, and the append-only posting tables the next slice fills;
+periods are created on demand for the month a fact falls into, and a locked
+period refuses a posting in a trigger as well as in the module. The starter chart
+ships eighteen Dutch SME accounts carrying the codes the posting rules name.
+Open decision recorded here because it deviates from §3.2's "~60-account starter
+chart, pre-mapped": the chart ships **without** RGS codes. The Referentie
+Grootboek Schema is a published, versioned release, and a mapping written without
+checking it against that release would look authoritative and be wrong; it should
+ship as a checked artefact. Still to come in A1: entry numbering, the posting
+rules themselves, and idempotent posting from issued and received documents.
+
 ---
 
 ## 5. First two weeks, concretely

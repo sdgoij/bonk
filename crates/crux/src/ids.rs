@@ -89,6 +89,10 @@ uuid_id!(
     JournalEntryId
 );
 uuid_id!(
+    /// A fiscal period (v1.1 accounting layer).
+    FiscalPeriodId
+);
+uuid_id!(
     /// A named set of find-panel filters.
     SavedSearchId
 );

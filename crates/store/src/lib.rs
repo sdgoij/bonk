@@ -25,6 +25,7 @@ pub mod evidence;
 pub mod integrity;
 pub mod keystore;
 pub mod kit;
+pub mod ledger;
 pub mod migrations;
 pub mod permissions;
 pub mod repo;
@@ -42,6 +43,10 @@ pub use evidence::EvidenceReport;
 pub use integrity::IntegrityReport;
 pub use keystore::{KdfParams, KeyStore, copy_to_directory};
 pub use kit::KitReport;
+pub use ledger::{
+    Account, FiscalPeriod, PeriodStatus, UNCLASSIFIED_ACCOUNT, ensure_period, insert_account, list_accounts,
+    list_periods, load_account, load_period, lock_period, seed_starter_chart, starter_chart, update_account,
+};
 pub use repo::{
     CustomerRecord, Direction, DocumentRecord, DocumentStatus, ImportSource, IssueRequest, IssueView, IssuedReference,
     ReceivedDocument, ReceivedLine, ReceivedSummary, SEARCH_LIMIT, SearchCounts, SearchHit, SearchPage, SearchRequest,
