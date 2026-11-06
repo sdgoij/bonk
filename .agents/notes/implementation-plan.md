@@ -1277,17 +1277,23 @@ path: it had already left a release queued with no machine twice. Still missing
 against the table above: installers, code signing, notarisation, and the signed
 update manifest.
 
-**Status, 2026-11-06.** `v0.1.0-preview.3` is the first release to carry an SBOM
+**Status, 2026-11-06.** `v0.1.0-preview.3` is the first release to carry SBOMs
 and sums: the release page lists `bonk.cdx.json` and `SHA256SUMS` beside the five
 archives, the pipeline ran green end to end in 33 minutes, and the downloaded set
 passes `sha256sum -c SHA256SUMS` for every hashed file. The document is CycloneDX
 1.6 with root `cli 0.1.0` and a timestamp of the commit's own time
 (2026-11-06T11:30:19Z), so it is a function of the tag rather than of the build.
-One limitation remains open: `cargo cyclonedx` resolves for the host target, so
-the published document describes what the Linux binary links (438 components) and
-omits crates only Windows or macOS need. `--target all` covers every supported
-platform in one file, at the cost of listing dependencies a given archive does
-not contain.
+Checking it exposed a flaw worth fixing rather than documenting: `cargo cyclonedx`
+resolves for the host target, so that one document described the Linux archive
+(438 components) and said nothing about what Windows or macOS link, and a user
+asking whether a Windows build carries a vulnerable crate would have got a
+confident wrong answer. The release job now emits one document per supported
+target — `bonk-<target>.cdx.json`, named after its archive — resolved with
+`--target`, and asserts five archives and five SBOMs before it writes the sums so
+a missing target cannot pass as a complete release. Generated from a Windows host
+for the same commit, the five resolve to 438 / 437 / 345 / 352 / 351 components
+for linux-x86_64, linux-aarch64, windows, macos-x86_64, and macos-aarch64, and two
+runs of the set are byte-identical.
 
 ---
 

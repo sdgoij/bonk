@@ -127,11 +127,13 @@ README, and `LICENSE.md`:
 | `x86_64-apple-darwin` | `macos-15-intel` | `bonk-x86_64-apple-darwin.tar.gz` |
 | `x86_64-pc-windows-msvc` | `windows-latest` | `bonk-x86_64-pc-windows-msvc.zip` |
 
-The release also carries `bonk.cdx.json` — a CycloneDX 1.6 SBOM of the shipped
-binary's dependency graph, timestamped from the commit so the same tag produces
-the same document — and `SHA256SUMS` covering every asset, including the SBOM.
-After downloading the files into one directory, `sha256sum -c SHA256SUMS` checks
-them offline.
+The release also carries one CycloneDX 1.6 SBOM per target, named after the
+archive it belongs to (`bonk-<target>.cdx.json`), and `SHA256SUMS` covering every
+asset including those SBOMs. Each document lists the dependencies that archive
+links rather than the union across platforms — the resolver filters by target —
+and is timestamped from the commit, so the same tag produces the same files.
+After downloading them into one directory, `sha256sum -c SHA256SUMS` checks them
+all offline.
 
 Linux and Windows build on a runner of their own architecture and refuse to
 continue if the runner's host triple is not the target they were asked for. Both

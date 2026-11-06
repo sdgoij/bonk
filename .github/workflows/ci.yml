@@ -295,24 +295,37 @@ jobs:
 
       # `cargo cyclonedx` writes one file per workspace member; the CLI is the
       # one that ships, and its components are every dependency it links.
-      - name: SBOM
+      #
+      # One document per supported target. The resolver filters by platform, so
+      # each lists what that archive links; a document from the host target
+      # would speak for one archive and stay silent on the other four.
+      - name: SBOMs
         run: |
           cargo install cargo-cyclonedx --locked --version 0.5.10
-          cargo cyclonedx --manifest-path crates/cli/Cargo.toml \
-            --format json --spec-version 1.6 --override-filename bonk.cdx
           mkdir -p dist
-          cp crates/cli/bonk.cdx.json dist/bonk.cdx.json
+          for target in x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu \
+                        x86_64-pc-windows-msvc \
+                        x86_64-apple-darwin aarch64-apple-darwin; do
+            cargo cyclonedx --manifest-path crates/cli/Cargo.toml \
+              --format json --spec-version 1.6 --target "$target" \
+              --override-filename "bonk-$target.cdx"
+            cp "crates/cli/bonk-$target.cdx.json" dist/
+          done
 
       - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
 
-      # Every asset, including the SBOM, so a download can be checked offline.
+      # Every asset, including the SBOMs, so a download can be checked offline.
+      # The counts are asserted first: a short set means an archive or a target
+      # went missing and the sums would quietly describe an incomplete release.
       - name: Checksums
         run: |
           cd dist
-          sha256sum bonk-*.tar.gz bonk-*.zip bonk.cdx.json > SHA256SUMS
+          test "$(ls bonk-*.tar.gz bonk-*.zip | wc -l)" -eq 5
+          test "$(ls bonk-*.cdx.json | wc -l)" -eq 5
+          sha256sum bonk-*.tar.gz bonk-*.zip bonk-*.cdx.json > SHA256SUMS
           cat SHA256SUMS
 
       - name: List the assets
