@@ -17,6 +17,7 @@ pub mod anchor;
 pub mod archive;
 pub mod audit;
 pub mod backup;
+pub mod bank;
 pub mod db;
 pub mod device;
 mod dto;
@@ -41,6 +42,10 @@ pub use anchor::{Anchor, AnchorCheck, AnchorRecord};
 pub use archive::{ArtefactInfo, DocumentView, StatusEvent, StoredLine, artefact_bytes};
 pub use audit::ChainHead;
 pub use backup::{BackupReport, BackupSummary, RETENTION};
+pub use bank::{
+    BankAccount, BankTransactionRow, ImportReport, ParsedStatement, ParsedTransaction, fingerprint, import_statement,
+    insert_bank_account, list_bank_accounts, list_transactions,
+};
 pub use db::Database;
 pub use device::DeviceStore;
 pub use error::StoreError;

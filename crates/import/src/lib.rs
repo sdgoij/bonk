@@ -8,6 +8,7 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 #![forbid(unsafe_code)]
 
+pub mod camt;
 mod pdf;
 mod pipeline;
 mod watch;

@@ -401,7 +401,7 @@ fn a_support_bundle_can_be_written_and_previewed() {
         said.contains(&format!("version:    {}", env!("CARGO_PKG_VERSION"))),
         "the bundle must name the version it came from: {said}"
     );
-    assert!(said.contains("schema:     13"), "{said}");
+    assert!(said.contains("schema:     14"), "{said}");
     assert!(said.contains("No names, amounts"), "{said}");
     assert!(bundle.join("summary.txt").exists());
     assert!(bundle.join("summary.json").exists());
@@ -432,7 +432,7 @@ fn init_then_verify() {
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("integrity check passed"), "stdout: {stdout}");
-    assert!(stdout.contains("schema:   13"), "stdout: {stdout}");
+    assert!(stdout.contains("schema:   14"), "stdout: {stdout}");
     if cfg!(feature = "cipher") {
         assert!(stdout.contains("encryption: sqlcipher"), "stdout: {stdout}");
     } else {
@@ -462,7 +462,7 @@ fn migrate_down_is_guarded_and_respects_irreversible_migrations() {
     let mut args = vec!["migrate-down", "--to", "2", "--yes"];
     args.extend(common);
     let output = bonk_ok(&args);
-    assert!(output.contains("rolled back: 11 migration(s)"), "{output}");
+    assert!(output.contains("rolled back: 12 migration(s)"), "{output}");
     assert!(output.contains("schema:   2"), "{output}");
 
     // 0002 creates the document tables; it has no safe inverse.
@@ -475,7 +475,7 @@ fn migrate_down_is_guarded_and_respects_irreversible_migrations() {
     let mut args = vec!["verify"];
     args.extend(common);
     assert!(
-        bonk_ok(&args).contains("schema:   13"),
+        bonk_ok(&args).contains("schema:   14"),
         "opening migrates forward again"
     );
 }

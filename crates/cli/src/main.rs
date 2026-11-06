@@ -415,6 +415,43 @@ enum Command {
     Gui,
 }
 
+/// Subcommands of [`LedgerCommand::Bank`].
+#[derive(Debug, Subcommand)]
+enum BankCommand {
+    /// Add a bank account whose statements will be imported.
+    Add {
+        /// What the user calls it.
+        #[arg(long)]
+        name: String,
+        /// IBAN, when there is one.
+        #[arg(long)]
+        iban: Option<String>,
+        /// The ledger account the balance lives on.
+        #[arg(long, default_value = "1100")]
+        ledger: String,
+    },
+    /// List the bank accounts of these books.
+    Accounts,
+    /// Import a CAMT.053 statement file.
+    ///
+    /// A file already imported is a no-op, and a payment that also appears in an
+    /// overlapping statement is stored once; a statement whose own balances do
+    /// not add up is refused whole.
+    Import {
+        /// The statement file.
+        file: PathBuf,
+        /// Bank account id or name; inferred when there is only one.
+        #[arg(long)]
+        account: Option<String>,
+    },
+    /// List imported transactions, newest first.
+    Transactions {
+        /// Only this status: new, matched, partially_matched, posted, or ignored.
+        #[arg(long)]
+        status: Option<String>,
+    },
+}
+
 /// Subcommands of [`Command::Ledger`].
 #[derive(Debug, Subcommand)]
 enum LedgerCommand {
@@ -486,6 +523,11 @@ enum LedgerCommand {
         prepare: bool,
         #[arg(long, default_value = "cli")]
         actor: String,
+    },
+    /// Import bank statements and see what is unmatched.
+    Bank {
+        #[command(subcommand)]
+        command: BankCommand,
     },
     /// List open items, or age them (openstaande posten).
     #[command(name = "open-items")]
@@ -1797,6 +1839,7 @@ fn ledger(access: &Access, database: &Path, keystore: &Path, command: LedgerComm
             println!("mapping      {}", store::vat::MAPPING_VERSION);
             Ok(())
         }
+        LedgerCommand::Bank { command } => bank(session.database(), owner, command, &now),
         LedgerCommand::OpenItems { kind, aging, as_of } => {
             let as_of = parse_date_or(as_of, LocalDate::today_utc())?;
             let kind = match kind.as_deref() {
@@ -1881,6 +1924,126 @@ fn ledger(access: &Access, database: &Path, keystore: &Path, command: LedgerComm
             let posted = store::reverse_entry(connection, id, &reason, date, &actor, &now)?;
             println!("reversed {} as {} {}", entry, posted.journal.code(), posted.number);
             println!("dated {date}");
+            Ok(())
+        }
+    }
+}
+
+/// Runs one bank subcommand.
+fn bank(database: &store::Database, owner: SellerId, command: BankCommand, now: &str) -> Result<(), CliError> {
+    let connection = database.connection();
+    match command {
+        BankCommand::Add { name, iban, ledger } => {
+            let account = store::BankAccount {
+                id: DocumentId::new().to_string(),
+                seller_id: owner,
+                name,
+                iban,
+                currency: store::reporting_currency(connection, owner)?,
+                ledger_account_code: crux::AccountCode::parse(&ledger)
+                    .map_err(|_| CliError::Input(format!("{ledger:?} is not an account code")))?,
+                import_profile: None,
+            };
+            store::insert_bank_account(connection, &account, now)?;
+            println!("bank account: {}", account.id);
+            println!("name:         {}", account.name);
+            println!("ledger:       {}", account.ledger_account_code);
+            Ok(())
+        }
+        BankCommand::Accounts => {
+            let accounts = store::list_bank_accounts(connection, owner)?;
+            if accounts.is_empty() {
+                println!("no bank accounts; add one with `bonk ledger bank add --name <name>`");
+                return Ok(());
+            }
+            for account in accounts {
+                println!(
+                    "{:<38} {:<24} {:<8} {}",
+                    account.id,
+                    account.name,
+                    account.ledger_account_code,
+                    account.iban.unwrap_or_default()
+                );
+            }
+            Ok(())
+        }
+        BankCommand::Import { file, account } => {
+            let accounts = store::list_bank_accounts(connection, owner)?;
+            let account = match (account, accounts.as_slice()) {
+                (Some(needle), _) => accounts
+                    .iter()
+                    .find(|account| account.id == needle || account.name == needle)
+                    .ok_or_else(|| CliError::Input(format!("no bank account matching {needle:?}")))?,
+                (None, [only]) => only,
+                (None, []) => {
+                    return Err(CliError::Input(
+                        "add a bank account first: `bonk ledger bank add --name <name>`".to_owned(),
+                    ));
+                }
+                (None, many) => {
+                    let names: Vec<&str> = many.iter().map(|account| account.name.as_str()).collect();
+                    return Err(CliError::Input(format!(
+                        "more than one bank account ({}); choose one with --account",
+                        names.join(", ")
+                    )));
+                }
+            };
+
+            let bytes = std::fs::read(&file)?;
+            let text = String::from_utf8(bytes.clone())
+                .map_err(|_| CliError::Input(format!("{} is not UTF-8 XML", file.display())))?;
+            let statements = import::camt::read_camt053(&text)
+                .map_err(|error| CliError::Input(format!("{}: {error}", file.display())))?;
+            if statements.is_empty() {
+                return Err(CliError::Input(format!("{} holds no statement", file.display())));
+            }
+
+            let file_hash = store::audit::sha256_hex(&bytes);
+            let mut total = 0_usize;
+            for (index, mut statement) in statements.into_iter().enumerate() {
+                statement.source_name = Some(
+                    file.file_name()
+                        .and_then(|name| name.to_str())
+                        .unwrap_or("statement")
+                        .to_owned(),
+                );
+                // One file can hold several statements; the hash names which one
+                // so importing a file twice stays a no-op for all of them.
+                let payload = store::audit::sha256_hex(format!("{file_hash}:{index}").as_bytes());
+                let report = store::import_statement(connection, &account.id, &statement, &payload, now)?;
+                total += report.imported;
+                if report.created {
+                    println!(
+                        "statement {}: {} imported, {} already known",
+                        report.statement_id, report.imported, report.duplicates
+                    );
+                } else {
+                    println!("already imported: {}", report.statement_id);
+                }
+            }
+            println!("imported: {total}");
+            Ok(())
+        }
+        BankCommand::Transactions { status } => {
+            let rows = store::list_transactions(connection, owner, status.as_deref())?;
+            if rows.is_empty() {
+                println!("no bank transactions");
+                return Ok(());
+            }
+            println!(
+                "{:<12} {:>14} {:<28} {:<10} {:<40}",
+                "date", "amount", "counterparty", "status", "remittance"
+            );
+            for row in &rows {
+                println!(
+                    "{:<12} {:>14} {:<28} {:<10} {:<40}",
+                    row.booking_date.to_iso_string(),
+                    amount_text(row.amount.micros(), row.amount.currency())?,
+                    row.counterparty_name.clone().unwrap_or_default(),
+                    row.status,
+                    row.remittance_info.clone().unwrap_or_default()
+                );
+            }
             Ok(())
         }
     }
