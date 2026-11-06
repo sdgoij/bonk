@@ -1043,6 +1043,12 @@ fn record_content_hash(record: &LedgerRecord) -> Result<String, StoreError> {
             })?;
             ledger_line = ledger_line.tagged(category, rate);
         }
+        if let Some(code) = &line.tax_code_id {
+            let code = crux::TaxCode::parse(code).map_err(|error| {
+                StoreError::Integrity(format!("ledger entry {} has a tax code: {error}", record.number))
+            })?;
+            ledger_line = ledger_line.coded(code);
+        }
         lines.push(ledger_line);
     }
 

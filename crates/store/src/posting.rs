@@ -373,11 +373,15 @@ fn inbound_entry_for(document: &DocumentFacts) -> Result<LedgerEntry, StoreError
                 .map_err(|_| StoreError::Data(format!("document {} has an out-of-range VAT rate", document.number)))?,
         )
         .map_err(domain)?;
-        lines.push(
+        // A chosen code only applies to the rows of its own category: a purchase
+        // can carry both a domestic line and a reverse-charged one.
+        let code = document.tax_code.as_ref().filter(|code| code.category == category);
+        lines.push(coded(
             LedgerLine::debit(account(UNCLASSIFIED_EXPENSE)?, base)
                 .map_err(domain)?
                 .tagged(category, rate),
-        );
+            code,
+        ));
 
         // What may be deducted: what the supplier charged, or — when they charged
         // nothing because the VAT shifted to us — what we owe ourselves.
@@ -392,21 +396,23 @@ fn inbound_entry_for(document: &DocumentFacts) -> Result<LedgerEntry, StoreError
         };
 
         if deductible.is_positive() {
-            lines.push(
+            lines.push(coded(
                 LedgerLine::debit(account(VAT_RECEIVABLE)?, deductible)
                     .map_err(domain)?
                     .tagged(category, rate),
-            );
+                code,
+            ));
         }
         if let Some(amount) = assessed.filter(|amount| amount.is_positive()) {
             // The liability we assessed on the supplier's behalf is tagged with the
             // treatment and the rate we used, which is what puts it in the same box
             // of the return as the deduction it belongs with.
-            lines.push(
+            lines.push(coded(
                 LedgerLine::credit(account(VAT_PAYABLE_OTHER)?, amount)
                     .map_err(domain)?
                     .tagged(category, assessed_rate),
-            );
+                code,
+            ));
         }
     }
 
@@ -444,6 +450,8 @@ struct DocumentFacts {
     issue_date: LocalDate,
     due_date: Option<LocalDate>,
     totals: Value,
+    /// The treatment a person chose for the purchase, when one was chosen.
+    tax_code: Option<crate::tax_code::TaxCodeRecord>,
 }
 
 impl DocumentFacts {
@@ -480,11 +488,20 @@ fn load_document(conn: &Connection, id: DocumentId) -> Result<DocumentFacts, Sto
             .transpose()
             .map_err(domain)?,
         totals: serde_json::from_str(&row.get::<_, String>(8)?)?,
+        tax_code: crate::tax_code::assigned(conn, id)?,
     })
 }
 
 fn account(code: &str) -> Result<AccountCode, StoreError> {
     AccountCode::parse(code).map_err(domain)
+}
+
+/// Stamps the chosen treatment on a line, when one applies to it.
+fn coded(line: LedgerLine, code: Option<&crate::tax_code::TaxCodeRecord>) -> LedgerLine {
+    match code {
+        Some(code) => line.coded(code.code.clone()),
+        None => line,
+    }
 }
 
 fn money(value: &Value, key: &str, currency: Currency) -> Result<Money, StoreError> {

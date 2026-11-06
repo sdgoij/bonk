@@ -93,6 +93,10 @@ pub enum DomainError {
     #[error("invalid journal: {0:?}")]
     InvalidJournal(String),
 
+    /// A tax code was empty, too long, or held a character a code may not.
+    #[error("invalid tax code: {0:?}")]
+    InvalidTaxCode(String),
+
     /// A ledger side was neither `debit` nor `credit`.
     #[error("invalid ledger side: {0:?}")]
     InvalidSide(String),
@@ -150,6 +154,7 @@ impl DomainError {
             Self::InvalidAccountCode(_) => "account-code-invalid",
             Self::InvalidAccountKind(_) => "account-kind-invalid",
             Self::InvalidJournal(_) => "journal-invalid",
+            Self::InvalidTaxCode(_) => "tax-code-invalid",
             Self::InvalidSide(_) => "side-invalid",
             Self::AmountNotPositive(_) => "amount-not-positive",
             Self::EmptyEntry => "entry-empty",
@@ -194,6 +199,7 @@ mod tests {
             DomainError::InvalidAccountCode("x".to_owned()),
             DomainError::InvalidAccountKind("x".to_owned()),
             DomainError::InvalidJournal("x".to_owned()),
+            DomainError::InvalidTaxCode("x".to_owned()),
             DomainError::InvalidSide("x".to_owned()),
             DomainError::AmountNotPositive(-1),
             DomainError::EmptyEntry,

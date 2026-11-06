@@ -477,6 +477,20 @@ rubriek definitions and thresholds change with the annual tax form. The mapping
 table is verified against the current Belastingdienst specification before each
 release, and a golden test asserts the full mapping for the supported years.
 
+**Built without a per-line catalogue.** The `tax_code` table exists from v1.0, but
+nothing in EN 16931 says whether an `AE` supply is goods or services, so the code
+cannot be derived from the document: it is a decision. The decision is made once
+per *received document* (`document_tax_code`, with an author and a time) rather
+than per line; a mixed invoice is recorded as two documents. The catalogue ships
+the three codes that resolve today's ambiguity — `NL-AE-SERVICES` → 4a,
+`NL-AE-GOODS` → 4b, `NL-K-GOODS` → 2a — because a code that only repeated what
+the category and rate already say would be a choice nobody makes. Posting stamps
+the code on the lines of the matching breakdown row and snapshots it in
+`journal_line.tax_code_id`, so a report never re-reads a document's
+classification after it could have changed. Sales carry no code. Changing a code
+after posting is refused: entries are append-only, and a wrong box on a posted
+purchase needs a correction entry, which v1.1 does not offer yet.
+
 ### 6.3 Periods, ICP, and corrections
 
 - Return period configured per seller: monthly or quarterly. The ICP listing

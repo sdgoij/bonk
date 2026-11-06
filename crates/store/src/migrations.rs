@@ -120,6 +120,12 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("../migrations/0015_allocation_sign.sql"),
         down: Some(include_str!("../migrations/0015_allocation_sign_down.sql")),
     },
+    Migration {
+        version: 16,
+        name: "0016_tax_codes",
+        sql: include_str!("../migrations/0016_tax_codes.sql"),
+        down: Some(include_str!("../migrations/0016_tax_codes_down.sql")),
+    },
 ];
 
 /// SHA-256 of the migration source, hex encoded.
@@ -259,19 +265,19 @@ mod tests {
     fn rollback_is_preflighted_and_refuses_irreversible_migrations() {
         let mut conn = Connection::open_in_memory().unwrap();
         apply(&mut conn).unwrap();
-        assert_eq!(current_version(&conn), 15);
+        assert_eq!(current_version(&conn), 16);
 
         assert!(rollback_to(&mut conn, 1).is_err());
         assert_eq!(
             current_version(&conn),
-            15,
+            16,
             "a refused rollback must not partially apply"
         );
 
         assert_eq!(
             rollback_to(&mut conn, 2).unwrap(),
-            13,
-            "0015 through 0003 all declare a down"
+            14,
+            "0016 through 0003 all declare a down"
         );
         assert_eq!(current_version(&conn), 2);
     }
@@ -302,7 +308,7 @@ mod tests {
         assert!(text.contains("no_postings"), "unexpected error: {text}");
         assert_eq!(
             current_version(&conn),
-            15,
+            16,
             "nothing may be dropped before the guard trips"
         );
     }

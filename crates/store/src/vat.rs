@@ -148,6 +148,18 @@ impl Rubriek {
     }
 }
 
+/// The box a tax code puts a purchase line in, when it applies to that line.
+///
+/// A code does not move the deduction: input VAT belongs in 5b whatever the supply
+/// was. It decides the box of the supply and of the VAT we assessed on it, which
+/// is exactly where the category alone could not say.
+fn chosen_rubriek(journal: Journal, account: &AccountCode, code: Option<Rubriek>) -> Option<Rubriek> {
+    if journal != Journal::Purchase || account.as_str() == crate::posting::VAT_RECEIVABLE {
+        return None;
+    }
+    code
+}
+
 /// The rubriek a journal line belongs in, or `None` when it has no VAT meaning.
 ///
 /// The VAT accounts are recognised by code because the rule set routes every
@@ -291,10 +303,11 @@ pub fn compute(conn: &Connection, seller_id: SellerId, year: i32, period_no: u8)
 
     let mut statement = conn.prepare(
         "SELECT e.id, e.journal_code, l.account_code, a.kind, l.vat_category, l.vat_rate_bp,
-                l.side, l.base_amount_micros
+                l.side, l.base_amount_micros, t.rubriek
          FROM journal_line l
          JOIN journal_entry e ON e.id = l.entry_id
          JOIN account a ON a.code = l.account_code
+         LEFT JOIN tax_code t ON t.id = l.tax_code_id
          WHERE e.period_id = ?1
          ORDER BY e.id, l.line_no",
     )?;
@@ -313,6 +326,12 @@ pub fn compute(conn: &Connection, seller_id: SellerId, year: i32, period_no: u8)
         let rate_bp: Option<i64> = row.get(5)?;
         let side_raw: String = row.get(6)?;
         let amount: i64 = row.get(7)?;
+        let code_rubriek: Option<String> = row.get(8)?;
+        let code_rubriek = code_rubriek
+            .map(|code| {
+                Rubriek::parse(&code).ok_or_else(|| StoreError::Data(format!("a tax code names rubriek {code:?}")))
+            })
+            .transpose()?;
 
         let journal = Journal::parse(&journal_raw).map_err(|error| StoreError::Data(error.to_string()))?;
         let account = AccountCode::parse(&account_raw).map_err(|error| StoreError::Data(error.to_string()))?;
@@ -337,7 +356,9 @@ pub fn compute(conn: &Connection, seller_id: SellerId, year: i32, period_no: u8)
                 | crate::posting::VAT_PAYABLE_LOW
                 | crate::posting::VAT_PAYABLE_OTHER
         );
-        let Some(rubriek) = rubriek_for(journal, &account, kind, vat) else {
+        let Some(rubriek) =
+            chosen_rubriek(journal, &account, code_rubriek).or_else(|| rubriek_for(journal, &account, kind, vat))
+        else {
             // A domestic purchase base belongs in no box, so silence is right for
             // it. A revenue line or a VAT account without a box means a number
             // dropped out of the return, which is reported rather than dropped.

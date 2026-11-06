@@ -578,6 +578,28 @@ enum LedgerCommand {
         #[arg(long, default_value = "cli")]
         actor: String,
     },
+    /// List the treatments a purchase can be filed under.
+    #[command(name = "tax-codes")]
+    TaxCodes,
+    /// Show or choose the treatment a received document is filed under.
+    ///
+    /// An EN 16931 category cannot say whether an `AE` purchase is goods or
+    /// services, and the Dutch return asks for those in different boxes. The
+    /// choice has to be made before the document is posted, because the entry
+    /// snapshots it: a posted treatment is not rewritten.
+    #[command(name = "tax-code")]
+    TaxCode {
+        /// The document, by number or identifier.
+        document: String,
+        /// The code to assign; omit it to show what is assigned.
+        #[arg(conflicts_with = "clear")]
+        code: Option<String>,
+        /// Return the document to the treatment its own category implies.
+        #[arg(long)]
+        clear: bool,
+        #[arg(long, default_value = "cli")]
+        actor: String,
+    },
     /// Reverse one entry, naming it `VK:2026-0001` or by identifier.
     Reverse {
         /// Journal and number, or the entry identifier.
@@ -1906,6 +1928,56 @@ fn ledger(access: &Access, database: &Path, keystore: &Path, command: LedgerComm
                     println!("  {number}");
                 }
             }
+            Ok(())
+        }
+        LedgerCommand::TaxCodes => {
+            let codes = store::list_tax_codes(connection)?;
+            if codes.is_empty() {
+                println!("no tax codes");
+                return Ok(());
+            }
+            println!("{:<16} {:<34} {:<4} {:<4} mapping", "code", "name", "cat", "box");
+            for code in codes {
+                println!(
+                    "{:<16} {:<34} {:<4} {:<4} {}",
+                    code.code.as_str(),
+                    code.name,
+                    code.category.code(),
+                    code.rubriek.code(),
+                    code.mapping_version
+                );
+            }
+            Ok(())
+        }
+        LedgerCommand::TaxCode {
+            document,
+            code,
+            clear,
+            actor,
+        } => {
+            let id = resolve_document(connection, owner, &document)?
+                .ok_or_else(|| CliError::Input(format!("no document matching {document:?}")))?;
+            if clear {
+                store::clear_tax_code(connection, id, &actor, &now)?;
+                println!("cleared:   {document}");
+                println!("the document falls back to its own category");
+                return Ok(());
+            }
+            let Some(code) = code else {
+                println!("document:  {document}");
+                match store::assigned_tax_code(connection, id)? {
+                    Some(assigned) => {
+                        println!("tax code:  {} ({})", assigned.code, assigned.name);
+                        println!("box:       {} {}", assigned.rubriek.code(), assigned.rubriek.label());
+                    }
+                    None => println!("tax code:  none; its category alone decides the box"),
+                }
+                return Ok(());
+            };
+            let assigned = store::assign_tax_code(connection, id, &code, &actor, &now)?;
+            println!("assigned:  {} ({})", assigned.code, assigned.name);
+            println!("box:       {} {}", assigned.rubriek.code(), assigned.rubriek.label());
+            println!("the next `bonk ledger post` puts the VAT there");
             Ok(())
         }
         LedgerCommand::OpenItems { kind, aging, as_of } => {

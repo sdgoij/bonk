@@ -47,4 +47,4 @@ pub use phone::PhoneNumber;
 pub use quantity::{Quantity, UnitCode};
 pub use totals::{InvoiceTotals, TaxBreakdown, calculate_totals};
 pub use validation::validate_draft;
-pub use vat::{TaxTreatment, VatCategory, VatRate, validate_treatment};
+pub use vat::{TaxCode, TaxTreatment, VatCategory, VatRate, validate_treatment};

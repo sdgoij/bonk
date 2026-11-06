@@ -386,6 +386,24 @@ fn a_bank_statement_settles_an_invoice_end_to_end() {
 }
 
 #[test]
+fn tax_codes_are_listed_and_a_sale_has_none_to_choose() {
+    let archive = Archive::new();
+
+    let said = archive.run(&["ledger", "tax-codes"]);
+    assert!(said.contains("NL-AE-SERVICES"), "{said}");
+    assert!(said.contains("NL-AE-GOODS"), "{said}");
+    assert!(said.contains("4b"), "the box a code resolves is shown: {said}");
+
+    // Reading what a document carries needs nothing posted and says when none is.
+    let said = archive.run(&["ledger", "tax-code", "2026-0001"]);
+    assert!(said.contains("none"), "{said}");
+
+    // Only received documents take a code: a sale is placed by its own category.
+    let said = archive.fail(&["ledger", "tax-code", "2026-0001", "NL-AE-GOODS"]);
+    assert!(said.contains("received documents"), "{said}");
+}
+
+#[test]
 fn the_subledger_can_be_rebuilt_after_the_fact() {
     let archive = Archive::new();
     archive.run(&["ledger", "setup"]);

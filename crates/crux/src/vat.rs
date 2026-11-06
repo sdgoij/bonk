@@ -89,6 +89,70 @@ impl std::fmt::Display for VatRate {
     }
 }
 
+/// Longest tax code the ledger accepts.
+const MAX_TAX_CODE_LEN: usize = 32;
+
+/// A named treatment the books file a supply under.
+///
+/// An EN 16931 category is not always enough to place the VAT: `AE` covers
+/// reverse-charged goods and services alike, and those belong in different boxes
+/// of a Dutch return. A tax code is the name a business gives that distinction,
+/// and the posting stamps it on every line it affects, so a report never has to
+/// ask a document again after its classification could have changed.
+///
+/// The code is an opaque identifier here; what it maps to is a versioned store
+/// artefact, because the boxes a tax form asks for change with the tax year.
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct TaxCode(String);
+
+impl TaxCode {
+    /// Parses a code, rejecting anything that is not a compact identifier.
+    ///
+    /// Whitespace is rejected rather than trimmed, for the same reason account
+    /// codes reject it: two codes that render alike but differ by a space would be
+    /// two treatments, and every return would be subtly wrong.
+    pub fn parse(value: &str) -> Result<Self, DomainError> {
+        if value.is_empty() || value.len() > MAX_TAX_CODE_LEN {
+            return Err(DomainError::InvalidTaxCode(value.to_owned()));
+        }
+        let mut characters = value.chars();
+        let starts_well = characters
+            .next()
+            .is_some_and(|character| character.is_ascii_uppercase() || character.is_ascii_digit());
+        let rest_is_fine = characters
+            .all(|character| character.is_ascii_uppercase() || character.is_ascii_digit() || character == '-');
+        if !starts_well || !rest_is_fine {
+            return Err(DomainError::InvalidTaxCode(value.to_owned()));
+        }
+        Ok(Self(value.to_owned()))
+    }
+
+    /// The code as it is stored and printed.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for TaxCode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::fmt::Debug for TaxCode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "TaxCode({})", self.0)
+    }
+}
+
+impl std::str::FromStr for TaxCode {
+    type Err = DomainError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::parse(s)
+    }
+}
+
 /// EN 16931 VAT category codes (BT-118 / BT-151).
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum VatCategory {

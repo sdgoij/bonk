@@ -1119,7 +1119,8 @@ second preparation supersedes the first and both stay. 5a is the sum of the boxe
 VAT columns rather than a posting destination, and 5c is 5a minus 5b. The shipped
 mapping is asserted row by row by a golden test. Open limitations, recorded here
 rather than hidden: `AE` covers reverse-charged goods and services alike, so 4b is
-never produced and those purchases land in 4a; 1d (private use) is never produced;
+never produced and those purchases land in 4a (until tax codes, below); 1d
+(private use) is never produced;
 and the control-account check compares 1300 and 1400 against the open items behind
 them, which migration 0013 and `store::open_items` now provide: one item per posted
 document, written inside the posting's transaction, signed (a credit note is a
@@ -1203,6 +1204,34 @@ skipped, since it is exactly what would keep the control account unexplained. A
 run that writes nothing leaves no event; a run that writes items appends
 `open_items_rebuilt` with the counts, because the subledger changed after the
 postings that explain it.
+
+**Status, 2026-11-06 (4b is reachable).** Migration 0016 turns the v1.0 `tax_code`
+hook into the catalogue the mapping needed. The hook had a seller, a label, a rate,
+a reverse-charge flag, and an exemption reason, and no writer: reshaping it was
+cheaper than adding a second table about the same thing. It now holds the three
+treatments that resolve today's one ambiguity — `NL-AE-SERVICES` → 4a,
+`NL-AE-GOODS` → 4b, `NL-K-GOODS` → 2a — with the journal and the box, and the
+rubriek-mapping version. The rate and the reverse-charge flag went because they
+belong to the document: a code that repeated the rate could disagree with the
+invoice, and `AE` already says "reverse charge". Sales carry no code.
+
+Which treatment a purchase is filed under is a decision, so it is stored as one:
+`document_tax_code` names the document, the code, who decided, and when, exactly
+like `supplier_match`. The document itself stays immutable. Assigning is refused
+once the document is posted — the entry snapshots the code in
+`journal_line.tax_code_id`, and the entry is append-only — and refused when the
+document has no line of the code's category, which would otherwise look like it
+had changed something. The posting stamps the code on every line of the matching
+breakdown row, and `vat::compute` lets the code choose the supply's box while
+leaving the deduction in 5b, because input VAT belongs there whatever the supply
+was. The code is part of the entry's content hash when present and absent from the
+hash when not, so entries posted before codes existed hash exactly as they did;
+the evidence bundle already carried the `tax_code_id` column and its verifier
+re-derives the hash with the code, so a coded posting verifies offline.
+
+Known gap, recorded rather than hidden: a wrong code on an already-posted purchase
+cannot be corrected in v1.1. The remedy is a manual correction entry in the
+memorial journal, which the CLI does not offer yet.
 
 ---
 

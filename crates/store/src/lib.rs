@@ -36,6 +36,7 @@ pub mod repo;
 pub mod report;
 pub mod saved;
 pub mod support;
+pub mod tax_code;
 pub mod vat;
 
 pub use anchor::{Anchor, AnchorCheck, AnchorRecord};
@@ -85,6 +86,10 @@ pub use report::{
 };
 pub use saved::SavedSearch;
 pub use support::SupportSummary;
+pub use tax_code::{
+    TaxCodeRecord, assign as assign_tax_code, assigned as assigned_tax_code, clear as clear_tax_code,
+    list as list_tax_codes, load as load_tax_code,
+};
 pub use vat::{
     MAPPING_VERSION, PreparedReturn, ReturnLine, Rubriek, VatReturn, basis_is_intact, compute, prepare, prepared,
 };

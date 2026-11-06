@@ -273,6 +273,7 @@ pub struct LedgerLine {
     side: Side,
     amount: Money,
     vat: Option<VatTag>,
+    tax_code: Option<crate::vat::TaxCode>,
 }
 
 impl LedgerLine {
@@ -286,6 +287,7 @@ impl LedgerLine {
             side,
             amount,
             vat: None,
+            tax_code: None,
         })
     }
 
@@ -298,9 +300,25 @@ impl LedgerLine {
         self
     }
 
+    /// Names the treatment the books file this line under, when one was chosen.
+    ///
+    /// The code resolves what the category alone cannot say — whether an `AE`
+    /// purchase is goods or services — and travels with the line because a report
+    /// re-deriving it from the document later would be reading a fact that can
+    /// still change.
+    pub fn coded(mut self, code: crate::vat::TaxCode) -> Self {
+        self.tax_code = Some(code);
+        self
+    }
+
     /// The treatment, when the line has a VAT meaning.
     pub const fn vat(&self) -> Option<VatTag> {
         self.vat
+    }
+
+    /// The tax code the line was posted under, when one was chosen.
+    pub fn tax_code(&self) -> Option<&crate::vat::TaxCode> {
+        self.tax_code.as_ref()
     }
 
     /// A debit line.
@@ -335,6 +353,7 @@ impl LedgerLine {
             side: self.side.opposite(),
             amount: self.amount,
             vat: self.vat,
+            tax_code: self.tax_code.clone(),
         }
     }
 }

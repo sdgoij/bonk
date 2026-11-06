@@ -2471,6 +2471,11 @@ pub mod problem {
                 format!("{value} is not a journal."),
                 format!("{value} is geen dagboek.")
             ),
+            DomainError::InvalidTaxCode(value) => sentence!(
+                language,
+                format!("{value} is not a tax code."),
+                format!("{value} is geen btw-code.")
+            ),
             DomainError::InvalidSide(value) => sentence!(
                 language,
                 format!("{value} is neither a debit nor a credit side."),

@@ -242,6 +242,9 @@ bonk ledger vat-return --year 2026 --month 3            # preview the aangifte
 bonk ledger vat-return --year 2026 --month 3 --prepare  # store it, with its basis
 bonk ledger open-items                                  # what customers still owe
 bonk ledger rebuild-open-items                          # fill the subledger of an older archive
+bonk ledger tax-codes                                   # the treatments a purchase can be filed under
+bonk ledger tax-code 2026-0042                          # what a document is filed under
+bonk ledger tax-code 2026-0042 NL-AE-GOODS              # put its reverse-charged VAT in 4b
 bonk ledger open-items --kind payable --aging --as-of 2026-03-31
 bonk ledger bank add --name "Zakelijk" --iban NL91ABNA0417164300
 bonk ledger bank import ./statements/feb.camt.xml     # CAMT.053
@@ -268,8 +271,16 @@ overlapping statement adds only what is new. Matching settles an open item and
 posts the payment in one step — the only match that happens without asking is one
 where the remittance names the invoice *and* the amount agrees; anything else is a
 proposal for a person. Unmatching appends its reversal rather than deleting.
-One box is not produced: reverse-charged *goods* (4b) cannot be told apart from
-reverse-charged *services* (4a) in the archive.
+
+One box needs a person to decide it. `AE` says "reverse charge" and nothing more,
+and the form asks reverse-charged goods (4b) and services (4a) separately, so a
+reverse-charged purchase lands in 4a unless someone names the treatment:
+`bonk ledger tax-code <document> NL-AE-GOODS` before posting puts its base and
+VAT in 4b. The choice must be made before the entry is written — the posting
+snapshots the code on the lines it affects, so a report never re-reads a
+document's classification after it could have changed — and the deduction stays
+in 5b either way. Sales need no code: their category and rate already decide the
+box.
 
 ### A demo archive to explore the window
 

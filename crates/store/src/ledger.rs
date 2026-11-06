@@ -12,7 +12,7 @@
 
 use crux::{
     AccountCode, AccountKind, DocumentId, FiscalPeriodId, Journal, JournalEntryId, LedgerEntry, LedgerLine, LocalDate,
-    SellerId, VatCategory, VatRate,
+    SellerId, TaxCode, VatCategory, VatRate,
 };
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::json;
@@ -564,7 +564,7 @@ pub fn post_entry(conn: &Connection, request: PostingRequest<'_>) -> Result<Post
                  (id, entry_id, line_no, account_code, side, amount_micros, currency,
                   fx_rate_micros, base_amount_micros, party_id, tax_code_id, description,
                   vat_category, vat_rate_bp)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL, ?6, NULL, NULL, NULL, ?8, ?9)",
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL, ?6, NULL, ?10, NULL, ?8, ?9)",
             params![
                 JournalEntryId::new().to_string(),
                 id.to_string(),
@@ -575,6 +575,7 @@ pub fn post_entry(conn: &Connection, request: PostingRequest<'_>) -> Result<Post
                 request.entry.currency().as_str(),
                 line.vat().map(|tag| tag.category.code()),
                 line.vat().map(|tag| tag.rate_bp),
+                line.tax_code().map(crux::TaxCode::as_str),
             ],
         )?;
     }
@@ -692,7 +693,7 @@ pub fn load_entry(conn: &Connection, id: JournalEntryId) -> Result<Option<Stored
     let currency = crux::Currency::parse(&currency_raw).map_err(|error| StoreError::Data(error.to_string()))?;
 
     let mut lines_statement = conn.prepare(
-        "SELECT account_code, side, amount_micros, vat_category, vat_rate_bp
+        "SELECT account_code, side, amount_micros, vat_category, vat_rate_bp, tax_code_id
              FROM journal_line WHERE entry_id = ?1 ORDER BY line_no",
     )?;
     let mut line_rows = lines_statement.query([id.to_string()])?;
@@ -703,6 +704,7 @@ pub fn load_entry(conn: &Connection, id: JournalEntryId) -> Result<Option<Stored
         let micros: i64 = row.get(2)?;
         let category: Option<String> = row.get(3)?;
         let rate_bp: Option<i64> = row.get(4)?;
+        let code: Option<String> = row.get(5)?;
         let mut line = LedgerLine::new(
             AccountCode::parse(&account).map_err(|error| StoreError::Data(error.to_string()))?,
             crux::Side::parse(&side).map_err(|error| StoreError::Data(error.to_string()))?,
@@ -716,6 +718,9 @@ pub fn load_entry(conn: &Connection, id: JournalEntryId) -> Result<Option<Stored
             )
             .map_err(|error| StoreError::Data(error.to_string()))?;
             line = line.tagged(category, rate);
+        }
+        if let Some(code) = code {
+            line = line.coded(TaxCode::parse(&code).map_err(|error| StoreError::Data(error.to_string()))?);
         }
         lines.push(line);
     }
@@ -938,7 +943,7 @@ pub fn content_hash(
         .iter()
         .enumerate()
         .map(|(index, line)| {
-            json!({
+            let mut value = json!({
                 "account": line.account().as_str(),
                 "amount_micros": line.amount().micros(),
                 "line_no": index + 1,
@@ -947,7 +952,13 @@ pub fn content_hash(
                     "category": tag.category.code(),
                     "rate_bp": tag.rate_bp,
                 })),
-            })
+            });
+            // Added only when a code was chosen, so an entry posted before tax
+            // codes existed hashes exactly as it did the day it was written.
+            if let Some(code) = line.tax_code() {
+                value["tax_code"] = json!(code.as_str());
+            }
+            value
         })
         .collect();
 
