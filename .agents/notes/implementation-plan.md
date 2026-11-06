@@ -1155,8 +1155,8 @@ is never resolved. A match posts the settlement entry in the same transaction as
 the allocation, keyed by the transaction so matching twice cannot pay twice;
 unmatching appends a reversal and leaves the history intact. The control-account
 check now compares against what is still outstanding. Still missing from A4:
-MT940 and CSV profiles, group matching, rule-based classification, and the
-keyboard-first queue (which is UI).
+CSV profiles, group matching, rule-based classification, and the keyboard-first
+queue (which is UI).
 
 **Status, 2026-11-06 (evidence bundle carries the books).** An exported bundle
 now holds the accountancy behind the document: `ledger.jsonl` with one record per
@@ -1260,6 +1260,33 @@ reads the assignment and whether an entry exists when it opens a document
 (`store::entry_for_document`), so the panel does not query the ledger per frame,
 and the picker writes through the same `assign`/`clear` the CLI uses. A refusal —
 say, a sale — arrives as the window's error banner rather than a silent no-op.
+
+**Status, 2026-11-06 (MT940 joins CAMT).** `import::mt940` reads the flat `:NN:`
+statement format, and `bonk ledger bank import` picks the reader from the file's
+contents rather than its extension (`sniff` gained a `Mt940` case that requires
+`:20:`, `:25:`, or `:60F:` at the start of a line, which is why a document that
+merely mentions one is not mistaken for a statement). The two readers now share
+`import::bank_file`: the size bound and one error type, with `NotCamt` widened to
+`NotAStatement` because MT940 is not CAMT and the message should not claim it is.
+
+The reader keeps three promises. `:86:` is stored whole, its continuation lines
+folded onto one line with a space, and never decoded: bank subfields (`/IBAN/`,
+`/NAME/`, `/REMI/`) differ per bank and decoding the wrong layout invents a
+counterparty, while the invoice number in the text is what the matcher already
+reads. The bank reference after `//` in `:61:` becomes the line's external
+reference; `:20:` is the statement's own reference and repeats on every line, so
+it identifies none of them. `RC`/`RD` are read as reversals (reversing a credit
+debits the account), and any other mark is refused, because the sign of an amount
+is the one thing a reader must not guess. A file with no `:60F:` is refused rather
+than stored without a balance, and the existing balance check still refuses a
+statement whose entries do not add up to the closing balance — an MT940 test
+walks that path so the CAMT behaviour is not the only one covered.
+
+A two-digit year is read as `20xx`. That is documented in the module rather than
+configured: MT940 predates the four-digit year, and a pre-2000 statement is not
+something the ledger should silently accept. Still open in A4: CSV profiles (the
+profile file format needs deciding), group matching, rule-based classification,
+and the keyboard-first queue.
 
 ---
 

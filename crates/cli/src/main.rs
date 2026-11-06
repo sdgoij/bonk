@@ -2185,6 +2185,18 @@ fn ledger(access: &Access, database: &Path, keystore: &Path, command: LedgerComm
     }
 }
 
+/// Reads a statement file, whichever of the two formats it turns out to be.
+///
+/// Detection is on the bytes, not the extension: a bank hands out
+/// `afschrift.xml`, `afschrift.940`, and `afschrift.txt` with equal confidence,
+/// and the extension is never the one that says which format it wrote.
+fn read_statement(bytes: &[u8], text: &str) -> Result<Vec<store::ParsedStatement>, import::bank_file::BankError> {
+    match import::sniff(bytes) {
+        import::SniffedKind::Mt940 => import::mt940::read_mt940(text),
+        _ => import::camt::read_camt053(text),
+    }
+}
+
 /// Runs one bank subcommand.
 fn bank(database: &store::Database, owner: SellerId, command: BankCommand, now: &str) -> Result<(), CliError> {
     let connection = database.connection();
@@ -2246,9 +2258,10 @@ fn bank(database: &store::Database, owner: SellerId, command: BankCommand, now: 
             };
 
             let bytes = std::fs::read(&file)?;
-            let text = String::from_utf8(bytes.clone())
-                .map_err(|_| CliError::Input(format!("{} is not UTF-8 XML", file.display())))?;
-            let statements = import::camt::read_camt053(&text)
+            let text = String::from_utf8(bytes.clone()).map_err(|_| {
+                CliError::Input(format!("{} is not UTF-8; a CAMT or MT940 statement is", file.display()))
+            })?;
+            let statements = read_statement(&bytes, &text)
                 .map_err(|error| CliError::Input(format!("{}: {error}", file.display())))?;
             if statements.is_empty() {
                 return Err(CliError::Input(format!("{} holds no statement", file.display())));

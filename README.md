@@ -249,7 +249,7 @@ bonk ledger post-manual --date 2026-03-01 --description "Bankkosten" --line "710
 bonk ledger reclassify IK:2026-0001 NL-AE-GOODS --reason "verkeerde rubriek"
 bonk ledger open-items --kind payable --aging --as-of 2026-03-31
 bonk ledger bank add --name "Zakelijk" --iban NL91ABNA0417164300
-bonk ledger bank import ./statements/feb.camt.xml     # CAMT.053
+bonk ledger bank import ./statements/feb.camt.xml     # CAMT.053 (or MT940)
 bonk ledger bank auto-match                           # where the payment names the invoice
 bonk ledger bank transactions --status new            # the unmatched queue
 ```
@@ -273,6 +273,17 @@ overlapping statement adds only what is new. Matching settles an open item and
 posts the payment in one step — the only match that happens without asking is one
 where the remittance names the invoice *and* the amount agrees; anything else is a
 proposal for a person. Unmatching appends its reversal rather than deleting.
+
+Both statement formats a European bank hands out are read: CAMT.053 (ISO 20022)
+and MT940 (the flat `:NN:` tag export behind most online banking screens). The
+format is detected from the file's contents, not its extension, and a file that
+is neither is refused with what it looked like instead. MT940 carries no
+counterparty field, and its `:86:` remittance block is stuffed with
+bank-specific subfields (`/IBAN/…`, `/NAME/…`) whose layout differs per bank.
+That text is stored exactly as it arrived — folded onto one line — rather than
+decoded, because decoding the wrong layout invents a counterparty. The invoice
+number in it is what the matcher reads, which is enough to settle a payment;
+the structured subfields are left for a per-bank extension.
 
 One box needs a person to decide it. `AE` says "reverse charge" and nothing more,
 and the form asks reverse-charged goods (4b) and services (4a) separately, so a

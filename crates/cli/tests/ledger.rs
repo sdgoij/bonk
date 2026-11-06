@@ -386,6 +386,85 @@ fn a_bank_statement_settles_an_invoice_end_to_end() {
 }
 
 #[test]
+fn an_mt940_statement_settles_the_same_invoice_by_its_remittance_text() {
+    let archive = Archive::new();
+    archive.run(&["ledger", "setup"]);
+    archive.run(&["ledger", "post"]);
+    archive.run(&[
+        "ledger",
+        "bank",
+        "add",
+        "--name",
+        "Zakelijk",
+        "--iban",
+        "NL91ABNA0417164300",
+    ]);
+
+    // The same payment the CAMT fixture carries, as the bank's own export.
+    // The counterparty is not a field MT940 has; the invoice number arrives in the
+    // `:86:` text, which is where the matcher looks for it.
+    let statement = archive.dir.path().join("feb.940");
+    std::fs::write(
+        &statement,
+        ":20:BONK-2026-02
+:25:NL91ABNA0417164300
+:28C:1/1
+:60F:C260201EUR0,00
+:61:2602200220C121,00NTRFNONREF//BANK-1
+:86:Betaling factuur 2026-0001
+:62F:C260228EUR121,00
+",
+    )
+    .expect("statement");
+
+    let said = archive.run(&["ledger", "bank", "import", statement.to_str().expect("utf-8")]);
+    assert!(said.contains("1 imported"), "{said}");
+    let said = archive.run(&["ledger", "bank", "import", statement.to_str().expect("utf-8")]);
+    assert!(said.contains("already imported"), "{said}");
+
+    let said = archive.run(&["ledger", "bank", "transactions"]);
+    assert!(
+        said.contains("Betaling factuur 2026-0001"),
+        "the :86: text is kept: {said}"
+    );
+
+    let said = archive.run(&["ledger", "bank", "auto-match"]);
+    assert!(said.contains("matched 2026-0001"), "{said}");
+    let said = archive.run(&["ledger", "open-items"]);
+    assert!(said.contains("no open receivable"), "{said}");
+}
+
+#[test]
+fn a_statement_that_does_not_add_up_is_refused_with_the_difference_named() {
+    let archive = Archive::new();
+    archive.run(&["ledger", "setup"]);
+    archive.run(&[
+        "ledger",
+        "bank",
+        "add",
+        "--name",
+        "Zakelijk",
+        "--iban",
+        "NL91ABNA0417164300",
+    ]);
+
+    let statement = archive.dir.path().join("broken.940");
+    std::fs::write(
+        &statement,
+        ":20:BONK-2026-02
+:60F:C260201EUR100,00
+:61:260220C121,00NTRF
+:62F:C260228EUR121,00
+",
+    )
+    .expect("statement");
+
+    let said = archive.fail(&["ledger", "bank", "import", statement.to_str().expect("utf-8")]);
+    assert!(said.contains("does not add up"), "{said}");
+    assert!(said.contains("100000000"), "the difference is named: {said}");
+}
+
+#[test]
 fn a_memorial_entry_is_written_and_must_balance() {
     let archive = Archive::new();
     archive.run(&["ledger", "setup"]);

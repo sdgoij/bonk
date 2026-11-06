@@ -15,34 +15,10 @@ use quick_xml::Reader;
 use quick_xml::events::Event;
 use store::bank::{ParsedStatement, ParsedTransaction};
 
-/// Largest statement a reader accepts.
-pub const MAX_DOCUMENT_BYTES: usize = 16 * 1024 * 1024;
+use crate::bank_file::{BankError, MAX_DOCUMENT_BYTES};
 
 /// Deepest element nesting a reader accepts.
 pub const MAX_DEPTH: usize = 64;
-
-/// Why a statement could not be read.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-pub enum BankError {
-    /// The file is larger than the reader accepts.
-    #[error("the statement is larger than {MAX_DOCUMENT_BYTES} bytes")]
-    TooLarge,
-    /// The file carries a DTD, which is how entity expansion gets in.
-    #[error("the statement carries a DTD, which is not accepted")]
-    Dtd,
-    /// Nesting went past what the reader allows.
-    #[error("the statement is nested deeper than {MAX_DEPTH} elements")]
-    TooDeep,
-    /// The root element is not a CAMT document.
-    #[error("this is not a CAMT statement: the root element is {0:?}")]
-    NotCamt(String),
-    /// The XML itself is broken.
-    #[error("the statement is not valid XML: {0}")]
-    Malformed(String),
-    /// A field the reader needs is missing or unusable.
-    #[error("{0}")]
-    Missing(String),
-}
 
 impl From<quick_xml::Error> for BankError {
     fn from(error: quick_xml::Error) -> Self {
@@ -90,7 +66,7 @@ pub fn read_camt053(input: &str) -> Result<Vec<ParsedStatement>, BankError> {
                 if path.is_empty() {
                     seen_root = true;
                     if !is_camt053(&name) && !name.eq_ignore_ascii_case("Document") {
-                        return Err(BankError::NotCamt(name));
+                        return Err(BankError::NotAStatement(format!("the root element is {name:?}")));
                     }
                 }
                 path.push(name.clone());
@@ -166,7 +142,7 @@ pub fn read_camt053(input: &str) -> Result<Vec<ParsedStatement>, BankError> {
     }
 
     if !seen_root {
-        return Err(BankError::NotCamt(String::new()));
+        return Err(BankError::NotAStatement("the file holds no XML document".to_owned()));
     }
     Ok(statements)
 }
@@ -487,8 +463,8 @@ mod tests {
     #[test]
     fn something_that_is_not_a_statement_is_refused() {
         let error = read_camt053("<Invoice><ID>1</ID></Invoice>").unwrap_err();
-        assert!(matches!(error, BankError::NotCamt(_)), "{error}");
-        assert!(matches!(read_camt053("").unwrap_err(), BankError::NotCamt(_)));
+        assert!(matches!(error, BankError::NotAStatement(_)), "{error}");
+        assert!(matches!(read_camt053("").unwrap_err(), BankError::NotAStatement(_)));
     }
 
     #[test]
