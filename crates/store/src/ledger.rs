@@ -12,7 +12,7 @@
 
 use crux::{
     AccountCode, AccountKind, DocumentId, FiscalPeriodId, Journal, JournalEntryId, LedgerEntry, LedgerLine, LocalDate,
-    SellerId,
+    SellerId, VatCategory, VatRate,
 };
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::json;
@@ -557,8 +557,9 @@ pub fn post_entry(conn: &Connection, request: PostingRequest<'_>) -> Result<Post
         transaction.execute(
             "INSERT INTO journal_line
                  (id, entry_id, line_no, account_code, side, amount_micros, currency,
-                  fx_rate_micros, base_amount_micros, party_id, tax_code_id, description)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL, ?6, NULL, NULL, NULL)",
+                  fx_rate_micros, base_amount_micros, party_id, tax_code_id, description,
+                  vat_category, vat_rate_bp)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL, ?6, NULL, NULL, NULL, ?8, ?9)",
             params![
                 JournalEntryId::new().to_string(),
                 id.to_string(),
@@ -567,6 +568,8 @@ pub fn post_entry(conn: &Connection, request: PostingRequest<'_>) -> Result<Post
                 line.side().as_str(),
                 amount,
                 request.entry.currency().as_str(),
+                line.vat().map(|tag| tag.category.code()),
+                line.vat().map(|tag| tag.rate_bp),
             ],
         )?;
     }
@@ -670,22 +673,33 @@ pub fn load_entry(conn: &Connection, id: JournalEntryId) -> Result<Option<Stored
     let entry_date = LocalDate::parse_iso(&entry_date_raw).map_err(|error| StoreError::Data(error.to_string()))?;
     let currency = crux::Currency::parse(&currency_raw).map_err(|error| StoreError::Data(error.to_string()))?;
 
-    let mut lines_statement = conn
-        .prepare("SELECT account_code, side, amount_micros FROM journal_line WHERE entry_id = ?1 ORDER BY line_no")?;
+    let mut lines_statement = conn.prepare(
+        "SELECT account_code, side, amount_micros, vat_category, vat_rate_bp
+             FROM journal_line WHERE entry_id = ?1 ORDER BY line_no",
+    )?;
     let mut line_rows = lines_statement.query([id.to_string()])?;
     let mut lines = Vec::new();
     while let Some(row) = line_rows.next()? {
         let account: String = row.get(0)?;
         let side: String = row.get(1)?;
         let micros: i64 = row.get(2)?;
-        lines.push(
-            LedgerLine::new(
-                AccountCode::parse(&account).map_err(|error| StoreError::Data(error.to_string()))?,
-                crux::Side::parse(&side).map_err(|error| StoreError::Data(error.to_string()))?,
-                crux::Money::from_micros(micros, currency),
+        let category: Option<String> = row.get(3)?;
+        let rate_bp: Option<i64> = row.get(4)?;
+        let mut line = LedgerLine::new(
+            AccountCode::parse(&account).map_err(|error| StoreError::Data(error.to_string()))?,
+            crux::Side::parse(&side).map_err(|error| StoreError::Data(error.to_string()))?,
+            crux::Money::from_micros(micros, currency),
+        )
+        .map_err(|error| StoreError::Data(error.to_string()))?;
+        if let (Some(category), Some(rate_bp)) = (category, rate_bp) {
+            let category = VatCategory::parse(&category).map_err(|error| StoreError::Data(error.to_string()))?;
+            let rate = VatRate::from_basis_points(
+                u16::try_from(rate_bp).map_err(|_| StoreError::Data(format!("VAT rate {rate_bp} out of range")))?,
             )
-            .map_err(|error| StoreError::Data(error.to_string()))?,
-        );
+            .map_err(|error| StoreError::Data(error.to_string()))?;
+            line = line.tagged(category, rate);
+        }
+        lines.push(line);
     }
 
     let entry = LedgerEntry::new(journal, description, lines)
@@ -909,6 +923,10 @@ pub fn content_hash(
                 "amount_micros": line.amount().micros(),
                 "line_no": index + 1,
                 "side": line.side().as_str(),
+                "vat": line.vat().map(|tag| json!({
+                    "category": tag.category.code(),
+                    "rate_bp": tag.rate_bp,
+                })),
             })
         })
         .collect();

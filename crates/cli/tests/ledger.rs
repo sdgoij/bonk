@@ -281,3 +281,39 @@ fn posting_names_what_it_cannot_find() {
     let _ = &archive.out;
     let _ = &archive.dir;
 }
+
+#[test]
+fn the_vat_return_is_read_from_the_ledger_and_then_prepared() {
+    let archive = Archive::new();
+    archive.run(&["ledger", "setup"]);
+    archive.run(&["ledger", "post"]);
+
+    // A preview writes nothing and says what the boxes hold.
+    let said = archive.run(&["ledger", "vat-return", "--year", "2026", "--month", "2"]);
+    assert!(
+        said.contains("btw-aangifte 2026-02 (2026-02-01 to 2026-02-28)"),
+        "{said}"
+    );
+    assert!(said.contains("1a"), "{said}");
+    assert!(said.contains("100.00"), "{said}");
+    assert!(said.contains("21.00"), "{said}");
+    assert!(said.contains("5a"), "{said}");
+    assert!(said.contains("5b"), "{said}");
+    assert!(said.contains("5c"), "{said}");
+    assert!(said.contains("mapping nl-2026.1"), "{said}");
+    assert!(
+        !said.contains("prepared:"),
+        "a preview must not claim to have written anything: {said}"
+    );
+
+    // Preparing stores it, and preparing again supersedes the first.
+    let said = archive.run(&["ledger", "vat-return", "--year", "2026", "--month", "2", "--prepare"]);
+    assert!(said.contains("prepared:"), "{said}");
+    assert!(said.contains("basis:      1 entries"), "{said}");
+
+    let said = archive.run(&["ledger", "vat-return", "--year", "2026", "--month", "2", "--prepare"]);
+    assert!(said.contains("superseded:"), "{said}");
+
+    let said = archive.fail(&["ledger", "vat-return", "--month", "13"]);
+    assert!(said.contains("not 1-12"), "{said}");
+}

@@ -263,7 +263,11 @@ fn outbound_entry_for(document: &DocumentFacts) -> Result<LedgerEntry, StoreErro
         let tax = money(row, "tax", currency)?;
 
         if !base.is_zero() {
-            lines.push(LedgerLine::credit(revenue_account(category, rate)?, base).map_err(domain)?);
+            lines.push(
+                LedgerLine::credit(revenue_account(category, rate)?, base)
+                    .map_err(domain)?
+                    .tagged(category, rate),
+            );
             credited = true;
         }
         if tax.is_positive() {
@@ -273,7 +277,7 @@ fn outbound_entry_for(document: &DocumentFacts) -> Result<LedgerEntry, StoreErro
                     category.code()
                 ))
             })?;
-            lines.push(LedgerLine::credit(vat, tax).map_err(domain)?);
+            lines.push(LedgerLine::credit(vat, tax).map_err(domain)?.tagged(category, rate));
         }
     }
 
@@ -315,7 +319,6 @@ fn inbound_entry_for(document: &DocumentFacts) -> Result<LedgerEntry, StoreError
         .ok_or_else(|| StoreError::Data(format!("document {} has no tax breakdown", document.number)))?;
 
     let mut lines = Vec::new();
-    let mut self_assessed: Option<Money> = None;
     let mut classified = false;
     for row in breakdown {
         let category = VatCategory::parse(&text(row, "category")?).map_err(domain)?;
@@ -325,26 +328,45 @@ fn inbound_entry_for(document: &DocumentFacts) -> Result<LedgerEntry, StoreError
             continue;
         }
         classified = true;
-        lines.push(LedgerLine::debit(account(UNCLASSIFIED_EXPENSE)?, base).map_err(domain)?);
+        let rate = VatRate::from_basis_points(
+            u16::try_from(integer(row, "rate_bp")?)
+                .map_err(|_| StoreError::Data(format!("document {} has an out-of-range VAT rate", document.number)))?,
+        )
+        .map_err(domain)?;
+        lines.push(
+            LedgerLine::debit(account(UNCLASSIFIED_EXPENSE)?, base)
+                .map_err(domain)?
+                .tagged(category, rate),
+        );
 
         // What may be deducted: what the supplier charged, or — when they charged
         // nothing because the VAT shifted to us — what we owe ourselves.
-        let deductible = if tax.is_positive() {
-            tax
+        let assessed_rate = VatRate::from_basis_points(SELF_ASSESSED_RATE_BP).map_err(domain)?;
+        let (deductible, assessed) = if tax.is_positive() {
+            (tax, None)
         } else if matches!(category, VatCategory::ReverseCharge | VatCategory::IntraCommunity) {
-            let rate = VatRate::from_basis_points(SELF_ASSESSED_RATE_BP).map_err(domain)?;
-            let assessed = crux::tax_amount(base, rate).map_err(domain)?;
-            self_assessed = Some(match self_assessed {
-                Some(previous) => previous.checked_add(assessed).map_err(domain)?,
-                None => assessed,
-            });
-            assessed
+            let amount = crux::tax_amount(base, assessed_rate).map_err(domain)?;
+            (amount, Some(amount))
         } else {
-            crux::Money::zero(currency)
+            (crux::Money::zero(currency), None)
         };
 
         if deductible.is_positive() {
-            lines.push(LedgerLine::debit(account(VAT_RECEIVABLE)?, deductible).map_err(domain)?);
+            lines.push(
+                LedgerLine::debit(account(VAT_RECEIVABLE)?, deductible)
+                    .map_err(domain)?
+                    .tagged(category, rate),
+            );
+        }
+        if let Some(amount) = assessed.filter(|amount| amount.is_positive()) {
+            // The liability we assessed on the supplier's behalf is tagged with the
+            // treatment and the rate we used, which is what puts it in the same box
+            // of the return as the deduction it belongs with.
+            lines.push(
+                LedgerLine::credit(account(VAT_PAYABLE_OTHER)?, amount)
+                    .map_err(domain)?
+                    .tagged(category, assessed_rate),
+            );
         }
     }
 
@@ -355,11 +377,8 @@ fn inbound_entry_for(document: &DocumentFacts) -> Result<LedgerEntry, StoreError
         )));
     }
 
-    // What we owe the supplier, and the VAT we assessed on their behalf.
+    // What we owe the supplier.
     lines.push(LedgerLine::credit(account(CREDITORS)?, gross).map_err(domain)?);
-    if let Some(assessed) = self_assessed.filter(|amount| amount.is_positive()) {
-        lines.push(LedgerLine::credit(account(VAT_PAYABLE_OTHER)?, assessed).map_err(domain)?);
-    }
 
     let description = if document.is_credit_note() {
         format!("Inkoopcreditfactuur {}", document.number)

@@ -33,6 +33,7 @@ pub mod repo;
 pub mod report;
 pub mod saved;
 pub mod support;
+pub mod vat;
 
 pub use anchor::{Anchor, AnchorCheck, AnchorRecord};
 pub use archive::{ArtefactInfo, DocumentView, StatusEvent, StoredLine, artefact_bytes};
@@ -71,6 +72,9 @@ pub use report::{
 };
 pub use saved::SavedSearch;
 pub use support::SupportSummary;
+pub use vat::{
+    MAPPING_VERSION, PreparedReturn, ReturnLine, Rubriek, VatReturn, basis_is_intact, compute, prepare, prepared,
+};
 
 /// True when the database file is actually encrypted.
 ///

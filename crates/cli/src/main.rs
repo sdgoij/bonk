@@ -468,6 +468,25 @@ enum LedgerCommand {
         #[arg(long)]
         as_of: Option<String>,
     },
+    /// Preview or prepare the VAT return (btw-aangifte) for a month.
+    ///
+    /// Without `--prepare` nothing is written: the figures are computed from the
+    /// ledger and printed. With it, the return is stored as prepared together with
+    /// the entries it was computed from, which is what makes it evidence.
+    #[command(name = "vat-return")]
+    VatReturn {
+        /// Year; defaults to the month being reported on.
+        #[arg(long)]
+        year: Option<i32>,
+        /// Month 1-12; defaults to the month before this one.
+        #[arg(long)]
+        month: Option<u8>,
+        /// Store the return instead of only printing it.
+        #[arg(long)]
+        prepare: bool,
+        #[arg(long, default_value = "cli")]
+        actor: String,
+    },
     /// Reverse one entry, naming it `VK:2026-0001` or by identifier.
     Reverse {
         /// Journal and number, or the entry identifier.
@@ -1656,6 +1675,96 @@ fn ledger(access: &Access, database: &Path, keystore: &Path, command: LedgerComm
                     amount_text(sheet.difference_micros(), sheet.currency)?
                 );
             }
+            Ok(())
+        }
+        LedgerCommand::VatReturn {
+            year,
+            month,
+            prepare,
+            actor,
+        } => {
+            let (year, month) = match (year, month) {
+                (Some(year), Some(month)) => (year, month),
+                (year, None) => {
+                    let today = LocalDate::today_utc();
+                    let (default_year, default_month) = if u8::from(today.as_date().month()) == 1 {
+                        (today.as_date().year() - 1, 12)
+                    } else {
+                        (today.as_date().year(), u8::from(today.as_date().month()) - 1)
+                    };
+                    (year.unwrap_or(default_year), default_month)
+                }
+                (None, Some(month)) => (LocalDate::today_utc().as_date().year(), month),
+            };
+            if !(1..=12).contains(&month) {
+                return Err(CliError::Input(format!("month {month} is not 1-12")));
+            }
+            let (starts, ends) = store::vat::period_bounds(year, month)?;
+
+            let report = if prepare {
+                let prepared = store::vat::prepare(connection, owner, year, month, &actor, &now)?;
+                if let Some(supersedes) = &prepared.supersedes {
+                    println!("superseded: {}", supersedes);
+                }
+                println!("prepared:   {} ({})", prepared.id, prepared.prepared_at);
+                println!(
+                    "basis:      {} entries, {}",
+                    prepared.computed.basis.len(),
+                    prepared.basis_hash
+                );
+                prepared.computed
+            } else {
+                store::vat::compute(connection, owner, year, month)?
+            };
+
+            println!(
+                "btw-aangifte {year}-{month:02} ({starts} to {ends}) {}",
+                report.currency
+            );
+            println!("{:<4} {:<52} {:>13} {:>13}", "", "", "omzet", "btw");
+            for line in report
+                .lines
+                .iter()
+                .filter(|line| !line.rubriek.is_total() && line.rubriek != store::vat::Rubriek::VatDeductible)
+            {
+                println!(
+                    "{:<4} {:<52} {:>13} {:>13}",
+                    line.rubriek.code(),
+                    line.rubriek.label(),
+                    column_text(line.base_micros, report.currency)?,
+                    column_text(line.vat_micros, report.currency)?
+                );
+            }
+            println!(
+                "{:<4} {:<52} {:>13} {:>13}",
+                "5a",
+                store::vat::Rubriek::VatDue.label(),
+                "",
+                amount_text(report.vat_due_micros(), report.currency)?
+            );
+            println!(
+                "{:<4} {:<52} {:>13} {:>13}",
+                "5b",
+                store::vat::Rubriek::VatDeductible.label(),
+                "",
+                amount_text(report.vat_deductible_micros(), report.currency)?
+            );
+            println!(
+                "{:<4} {:<52} {:>13} {:>13}",
+                "5c",
+                store::vat::Rubriek::VatPayable.label(),
+                "",
+                amount_text(report.payable_micros(), report.currency)?
+            );
+            if !report.unmapped.is_empty() {
+                println!();
+                println!("not ready to file: {} line(s) have no rubriek", report.unmapped.len());
+                for line in &report.unmapped {
+                    println!("  {line}");
+                }
+            }
+            println!();
+            println!("mapping {}", store::vat::MAPPING_VERSION);
             Ok(())
         }
         LedgerCommand::Reverse {

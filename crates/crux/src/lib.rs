@@ -40,7 +40,7 @@ pub use ids::{CustomerId, DeviceId, DocumentId, FiscalPeriodId, JournalEntryId, 
 pub use invoice::{
     DocType, DraftLine, InvoiceDraft, InvoiceEvent, InvoiceState, PrecedingInvoice, TransitionError, transition,
 };
-pub use ledger::{AccountCode, AccountKind, Journal, LedgerEntry, LedgerLine, MAX_ACCOUNT_CODE_LEN, Side};
+pub use ledger::{AccountCode, AccountKind, Journal, LedgerEntry, LedgerLine, MAX_ACCOUNT_CODE_LEN, Side, VatTag};
 pub use money::{Currency, MAX_SCALE, MICROS_PER_UNIT, Money};
 pub use party::{Address, CountryCode, Party, VatIdCheck, validate_vat_id};
 pub use phone::PhoneNumber;

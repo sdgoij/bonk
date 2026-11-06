@@ -1102,6 +1102,28 @@ rate policy that belongs with the tax-code mapping of A3, so posting one today
 would have to guess. That, opening balances, and the reports that read the
 ledger are what remain of A1/A2.
 
+**Status, 2026-11-06 (continued).** Purchases post too, and the VAT return is in.
+A received invoice debits a costs account with the supplier's gross to 1400 and
+the VAT to 1500; a reverse-charged or intra-community purchase arrives with no VAT
+on it, so the rule set assesses the domestic rate and posts both sides — the
+deduction and the liability it creates — which is why 4a and 2a carry a VAT column
+as well as a base. The treatment travels on the journal line (`vat_category`,
+`vat_rate_bp`, migration 0012) because two purchases can share a costs account and
+still belong in different boxes, and a report re-deriving it from the account
+would be inventing the answer. `store::vat` projects a month's lines into the
+rubrieken of the Dutch form, stores a prepared return with a hash over the
+`(entry, content hash)` list it was computed from, and refuses to overwrite: a
+second preparation supersedes the first and both stay. 5a is the sum of the boxes'
+VAT columns rather than a posting destination, and 5c is 5a minus 5b. The shipped
+mapping is asserted row by row by a golden test. Open limitations, recorded here
+rather than hidden: `AE` covers reverse-charged goods and services alike, so 4b is
+never produced and those purchases land in 4a; 1d (private use) is never produced;
+and the invoice-to-ledger reconciliation and the control-account check of §6.5 are
+not written yet, so "prepared" means "computed and stored", not "checked against
+every document". The CLI exposes the whole path: `ledger setup`, `post`, `chart`,
+`trial-balance`, `profit-and-loss`, `balance-sheet`, `reverse`, and `vat-return`
+with `--prepare`.
+
 ---
 
 ## 5. First two weeks, concretely

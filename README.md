@@ -238,11 +238,20 @@ bonk ledger trial-balance --from 2026-01-01 --to 2026-03-31
 bonk ledger profit-and-loss --from 2026-01-01 --to 2026-03-31
 bonk ledger balance-sheet --as-of 2026-03-31
 bonk ledger reverse VK:2026-0001 --reason "wrong customer" --date 2026-04-02
+bonk ledger vat-return --year 2026 --month 3            # preview the aangifte
+bonk ledger vat-return --year 2026 --month 3 --prepare  # store it, with its basis
 ```
 
 Entry numbers are per journal and year (`VK 2026-0001`), which is why a reversal
 names the journal too. A correction is a new entry that names the one it undoes;
 nothing in the ledger is ever edited.
+
+The VAT return is a projection of the period's journal lines into the rubrieken
+of the Dutch form, not a set of numbers typed in. Preparing one stores the totals
+together with the entries they came from and a hash over both, so a filed figure
+can always be explained; preparing again supersedes the earlier return and keeps
+it. Two boxes are not produced yet: reverse-charged *goods* (4b) cannot be told
+apart from reverse-charged *services* (4a) in the archive.
 
 ### A demo archive to explore the window
 

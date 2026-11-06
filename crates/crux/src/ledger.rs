@@ -248,6 +248,20 @@ impl Journal {
     }
 }
 
+/// The VAT treatment a line carries, when it has one.
+///
+/// It travels with the line rather than being re-derived from the account later:
+/// two purchases can sit on the same costs account and still belong in different
+/// boxes of a VAT return, and a report that guessed from the account would be
+/// inventing the answer.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct VatTag {
+    /// EN 16931 category of the document line that produced this one.
+    pub category: crate::vat::VatCategory,
+    /// Rate in basis points.
+    pub rate_bp: u16,
+}
+
 /// One line of a journal entry.
 ///
 /// The amount is strictly positive and carries the entry's currency; the side
@@ -258,6 +272,7 @@ pub struct LedgerLine {
     account: AccountCode,
     side: Side,
     amount: Money,
+    vat: Option<VatTag>,
 }
 
 impl LedgerLine {
@@ -266,7 +281,26 @@ impl LedgerLine {
         if !amount.is_positive() {
             return Err(DomainError::AmountNotPositive(amount.micros()));
         }
-        Ok(Self { account, side, amount })
+        Ok(Self {
+            account,
+            side,
+            amount,
+            vat: None,
+        })
+    }
+
+    /// Attaches the VAT treatment of the document line behind this one.
+    pub fn tagged(mut self, category: crate::vat::VatCategory, rate: crate::vat::VatRate) -> Self {
+        self.vat = Some(VatTag {
+            category,
+            rate_bp: rate.basis_points(),
+        });
+        self
+    }
+
+    /// The treatment, when the line has a VAT meaning.
+    pub const fn vat(&self) -> Option<VatTag> {
+        self.vat
     }
 
     /// A debit line.
@@ -300,6 +334,7 @@ impl LedgerLine {
             account: self.account.clone(),
             side: self.side.opposite(),
             amount: self.amount,
+            vat: self.vat,
         }
     }
 }

@@ -496,8 +496,8 @@ fn a_reverse_charged_purchase_is_self_assessed() {
         vec![
             "9999 debit 100000".to_owned(),
             "1500 debit 21000".to_owned(),
-            "1400 credit 100000".to_owned(),
             "1620 credit 21000".to_owned(),
+            "1400 credit 100000".to_owned(),
         ]
     );
 }
