@@ -429,10 +429,24 @@ enum BankCommand {
         /// The ledger account the balance lives on.
         #[arg(long, default_value = "1100")]
         ledger: String,
+        /// The CSV profile this account's exports are read through, when the
+        /// file is not recognisably CAMT or MT940.
+        #[arg(long)]
+        profile: Option<String>,
+    },
+    /// Manage the CSV import profiles a bank export is read through.
+    ///
+    /// A CSV states no schema, so reading one needs a mapping: which column is
+    /// the date, which is the amount, whether the decimal separator is a comma.
+    /// A profile is TOML, stored in the archive exactly as it was written, and
+    /// named on the account or on the import.
+    Profile {
+        #[command(subcommand)]
+        command: ProfileCommand,
     },
     /// List the bank accounts of these books.
     Accounts,
-    /// Import a CAMT.053 statement file.
+    /// Import a bank statement: CAMT.053, MT940, or a CSV through a profile.
     ///
     /// A file already imported is a no-op, and a payment that also appears in an
     /// overlapping statement is stored once; a statement whose own balances do
@@ -443,6 +457,11 @@ enum BankCommand {
         /// Bank account id or name; inferred when there is only one.
         #[arg(long)]
         account: Option<String>,
+        /// Read the file as CSV through this profile: a stored name, or a path to
+        /// a TOML file. Without it, `<file>.toml` beside the statement is used if
+        /// it exists, and then the account's profile.
+        #[arg(long)]
+        profile: Option<String>,
     },
     /// List imported transactions, newest first.
     Transactions {
@@ -476,6 +495,46 @@ enum BankCommand {
     Unmatch {
         /// The allocation identifier, as a match reports it.
         allocation: String,
+    },
+}
+
+/// Subcommands of [`BankCommand::Profile`].
+#[derive(Debug, Subcommand)]
+enum ProfileCommand {
+    /// Store a profile, replacing one of the same name.
+    ///
+    /// The file is checked before it is stored, so a profile that names a column
+    /// or a date layout this build cannot read is refused here rather than at
+    /// import time. What is stored is the text itself, comments included.
+    Put {
+        /// The name commands ask for.
+        name: String,
+        /// The TOML file.
+        #[arg(long)]
+        file: PathBuf,
+    },
+    /// List the stored profiles.
+    List,
+    /// Print one profile as it is stored.
+    Show {
+        /// The profile name.
+        name: String,
+    },
+    /// Remove a profile.
+    ///
+    /// An account that still names it keeps the name and reports that it points
+    /// at nothing, rather than silently importing without the mapping it was
+    /// configured for.
+    Rm {
+        /// The profile name.
+        name: String,
+    },
+    /// Point a bank account at a profile, or at `none`.
+    Use {
+        /// The bank account id or name.
+        account: String,
+        /// The profile name, or `none` to stop using one.
+        name: String,
     },
 }
 
@@ -2206,11 +2265,123 @@ fn read_statement(bytes: &[u8], text: &str) -> Result<Vec<store::ParsedStatement
     }
 }
 
+/// Finds the bank account a command names, or the only one there is.
+fn choose_bank_account(
+    database: &store::Database,
+    owner: SellerId,
+    needle: Option<&str>,
+) -> Result<store::BankAccount, CliError> {
+    let accounts = store::list_bank_accounts(database.connection(), owner)?;
+    match (needle, accounts.as_slice()) {
+        (Some(needle), _) => accounts
+            .iter()
+            .find(|account| account.id == needle || account.name == needle)
+            .cloned()
+            .ok_or_else(|| CliError::Input(format!("no bank account matching {needle:?}"))),
+        (None, [only]) => Ok(only.clone()),
+        (None, []) => Err(CliError::Input(
+            "add a bank account first: `bonk ledger bank add --name <name>`".to_owned(),
+        )),
+        (None, many) => {
+            let names: Vec<&str> = many.iter().map(|account| account.name.as_str()).collect();
+            Err(CliError::Input(format!(
+                "more than one bank account ({}); choose one with --account",
+                names.join(", ")
+            )))
+        }
+    }
+}
+
+/// True when the file says what it is, so no profile is needed to read it.
+///
+/// `sniff` knows PDF, UBL, CII, and MT940. A CAMT file is XML that `sniff` leaves
+/// as `Unknown` — it is not an invoice — so the first character decides the rest:
+/// a `<` is markup whatever it holds, and a CSV opens with a header or a date.
+/// The distinction matters because an account may carry a CSV profile: applying it
+/// to a CAMT file would read money through a mapping that was never about it.
+fn is_marked_up(bytes: &[u8]) -> bool {
+    if import::sniff(bytes) != import::SniffedKind::Unknown {
+        return true;
+    }
+    let head = String::from_utf8_lossy(&bytes[..bytes.len().min(512)]);
+    head.trim_start().starts_with('<')
+}
+
+/// The profile a file should be read through, when it should be read as a CSV.
+///
+/// In order: what the command names (a path or a stored name), then a sidecar
+/// beside the statement, then the account's profile — and the last only when the
+/// bytes are not recognisably another format, because content beats an
+/// account-level default. Reading a CAMT file as CSV because the account was
+/// configured for CSV would be a worse failure than saying so.
+fn csv_profile(
+    database: &store::Database,
+    account_id: &str,
+    file: &Path,
+    asked: Option<&str>,
+    bytes: &[u8],
+) -> Result<Option<(String, import::csv::CsvProfile)>, CliError> {
+    let connection = database.connection();
+    let read_file = |path: &Path| -> Result<import::csv::CsvProfile, CliError> {
+        let text = std::fs::read_to_string(path)?;
+        import::csv::CsvProfile::parse(&text).map_err(|error| CliError::Input(format!("{}: {error}", path.display())))
+    };
+
+    if let Some(asked) = asked {
+        let path = Path::new(asked);
+        if path.is_file() {
+            return Ok(Some((asked.to_owned(), read_file(path)?)));
+        }
+        if let Some(text) = store::import_profile::load(connection, asked)? {
+            let profile = import::csv::CsvProfile::parse(&text)
+                .map_err(|error| CliError::Input(format!("stored profile {asked:?}: {error}")))?;
+            return Ok(Some((asked.to_owned(), profile)));
+        }
+        return Err(CliError::Input(format!(
+            "no import profile {asked:?}: it is not a file and it is not stored in the archive"
+        )));
+    }
+
+    let sidecar = file.with_extension("toml");
+    if sidecar.is_file() {
+        let name = sidecar
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("profile.toml")
+            .to_owned();
+        return Ok(Some((name, read_file(&sidecar)?)));
+    }
+
+    if is_marked_up(bytes) {
+        return Ok(None);
+    }
+    match store::import_profile::for_account(connection, account_id)? {
+        Some((name, text)) => {
+            let profile = import::csv::CsvProfile::parse(&text)
+                .map_err(|error| CliError::Input(format!("stored profile {name:?}: {error}")))?;
+            Ok(Some((name, profile)))
+        }
+        None => Ok(None),
+    }
+}
+
 /// Runs one bank subcommand.
 fn bank(database: &store::Database, owner: SellerId, command: BankCommand, now: &str) -> Result<(), CliError> {
     let connection = database.connection();
     match command {
-        BankCommand::Add { name, iban, ledger } => {
+        BankCommand::Add {
+            name,
+            iban,
+            ledger,
+            profile,
+        } => {
+            if let Some(profile) = &profile
+                && store::import_profile::load(connection, profile)?.is_none()
+            {
+                return Err(CliError::Input(format!(
+                    "no import profile {profile:?}; store one with `bonk ledger bank profile put`"
+                )));
+            }
             let account = store::BankAccount {
                 id: DocumentId::new().to_string(),
                 seller_id: owner,
@@ -2219,12 +2390,15 @@ fn bank(database: &store::Database, owner: SellerId, command: BankCommand, now: 
                 currency: store::reporting_currency(connection, owner)?,
                 ledger_account_code: crux::AccountCode::parse(&ledger)
                     .map_err(|_| CliError::Input(format!("{ledger:?} is not an account code")))?,
-                import_profile: None,
+                import_profile: profile,
             };
             store::insert_bank_account(connection, &account, now)?;
             println!("bank account: {}", account.id);
             println!("name:         {}", account.name);
             println!("ledger:       {}", account.ledger_account_code);
+            if let Some(profile) = &account.import_profile {
+                println!("profile:      {profile}");
+            }
             Ok(())
         }
         BankCommand::Accounts => {
@@ -2235,45 +2409,44 @@ fn bank(database: &store::Database, owner: SellerId, command: BankCommand, now: 
             }
             for account in accounts {
                 println!(
-                    "{:<38} {:<24} {:<8} {}",
+                    "{:<38} {:<24} {:<8} {:<24} {}",
                     account.id,
                     account.name,
                     account.ledger_account_code,
+                    account.import_profile.clone().unwrap_or_default(),
                     account.iban.unwrap_or_default()
                 );
             }
             Ok(())
         }
-        BankCommand::Import { file, account } => {
-            let accounts = store::list_bank_accounts(connection, owner)?;
-            let account = match (account, accounts.as_slice()) {
-                (Some(needle), _) => accounts
-                    .iter()
-                    .find(|account| account.id == needle || account.name == needle)
-                    .ok_or_else(|| CliError::Input(format!("no bank account matching {needle:?}")))?,
-                (None, [only]) => only,
-                (None, []) => {
-                    return Err(CliError::Input(
-                        "add a bank account first: `bonk ledger bank add --name <name>`".to_owned(),
-                    ));
-                }
-                (None, many) => {
-                    let names: Vec<&str> = many.iter().map(|account| account.name.as_str()).collect();
-                    return Err(CliError::Input(format!(
-                        "more than one bank account ({}); choose one with --account",
-                        names.join(", ")
-                    )));
-                }
-            };
+        BankCommand::Import { file, account, profile } => {
+            let account = choose_bank_account(database, owner, account.as_deref())?;
 
             let bytes = std::fs::read(&file)?;
-            let text = String::from_utf8(bytes.clone()).map_err(|_| {
-                CliError::Input(format!("{} is not UTF-8; a CAMT or MT940 statement is", file.display()))
-            })?;
-            let statements = read_statement(&bytes, &text)
-                .map_err(|error| CliError::Input(format!("{}: {error}", file.display())))?;
+            let profile = csv_profile(database, &account.id, &file, profile.as_deref(), &bytes)?;
+            let statements = match &profile {
+                Some((_, csv)) => import::csv::read_csv(&bytes, csv)
+                    .map_err(|error| CliError::Input(format!("{}: {error}", file.display())))?,
+                None => {
+                    if !is_marked_up(&bytes) {
+                        return Err(CliError::Input(format!(
+                            "{} is not a CAMT or MT940 statement; a CSV export needs an import profile, named with --profile or written as {}",
+                            file.display(),
+                            file.with_extension("toml").display()
+                        )));
+                    }
+                    let text = String::from_utf8(bytes.clone()).map_err(|_| {
+                        CliError::Input(format!("{} is not UTF-8; a CAMT or MT940 statement is", file.display()))
+                    })?;
+                    read_statement(&bytes, &text)
+                        .map_err(|error| CliError::Input(format!("{}: {error}", file.display())))?
+                }
+            };
             if statements.is_empty() {
                 return Err(CliError::Input(format!("{} holds no statement", file.display())));
+            }
+            if let Some((name, _)) = &profile {
+                println!("profile: {name}");
             }
 
             let file_hash = store::audit::sha256_hex(&bytes);
@@ -2384,6 +2557,55 @@ fn bank(database: &store::Database, owner: SellerId, command: BankCommand, now: 
             println!("the invoice is open again and the reversal is on the record");
             Ok(())
         }
+        BankCommand::Profile { command } => match command {
+            ProfileCommand::Put { name, file } => {
+                let text = std::fs::read_to_string(&file)?;
+                import::csv::CsvProfile::parse(&text)
+                    .map_err(|error| CliError::Input(format!("{}: {error}", file.display())))?;
+                let stored = store::import_profile::put(connection, &name, &text, "cli", now)?;
+                println!("profile:   {}", stored.name);
+                println!("sha256:    {}", stored.sha256);
+                Ok(())
+            }
+            ProfileCommand::List => {
+                let profiles = store::import_profile::list(connection)?;
+                if profiles.is_empty() {
+                    println!("no import profiles; store one with `bonk ledger bank profile put <name> --file <path>`");
+                    return Ok(());
+                }
+                println!("{:<24} {:<14} updated", "name", "sha256");
+                for profile in profiles {
+                    let short = &profile.sha256[..profile.sha256.len().min(12)];
+                    println!("{:<24} {:<14} {}", profile.name, short, profile.updated_at);
+                }
+                Ok(())
+            }
+            ProfileCommand::Show { name } => {
+                let text = store::import_profile::load(connection, &name)?
+                    .ok_or_else(|| CliError::Input(format!("no import profile {name:?}")))?;
+                print!("{text}");
+                Ok(())
+            }
+            ProfileCommand::Rm { name } => {
+                store::import_profile::remove(connection, &name, "cli", now)?;
+                println!("removed import profile {name}");
+                Ok(())
+            }
+            ProfileCommand::Use { account, name } => {
+                let account = choose_bank_account(database, owner, Some(&account))?;
+                let name = if name.eq_ignore_ascii_case("none") {
+                    None
+                } else {
+                    Some(name.as_str())
+                };
+                store::import_profile::set_for_account(connection, &account.id, name, "cli", now)?;
+                match name {
+                    Some(name) => println!("{} reads CSV exports through {name}", account.name),
+                    None => println!("{} no longer uses an import profile", account.name),
+                }
+                Ok(())
+            }
+        },
         BankCommand::Transactions { status } => {
             let rows = store::list_transactions(connection, owner, status.as_deref())?;
             if rows.is_empty() {

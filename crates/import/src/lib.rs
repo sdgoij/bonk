@@ -10,6 +10,7 @@
 
 pub mod bank_file;
 pub mod camt;
+pub mod csv;
 pub mod mt940;
 mod pdf;
 mod pipeline;

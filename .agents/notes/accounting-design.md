@@ -554,6 +554,15 @@ Each import profile is a stored, versioned mapping (bank → column semantics �
 normalisation rules), so a CSV bank cannot corrupt amounts through a locale
 guess. Encoding detection is explicit; failure is an error, not mojibake.
 
+The profile is TOML, because it is written by hand and read by a person debugging
+an import. It lives either beside the statement (`feb.csv` → `feb.toml`) or in the
+`import_profile` table, and `bank_account.import_profile` names the one an account
+uses by default. Nothing about a CSV is inferred: a delimiter, a decimal comma, or
+a date layout is something the profile states, and a file that does not read
+through it is refused with the line number rather than half-imported. A CSV for
+the main Dutch banks carries no opening or closing balance, so the balance check
+that guards CAMT and MT940 cannot apply to it.
+
 ### 7.2 Import pipeline
 
 ```

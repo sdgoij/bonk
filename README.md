@@ -249,7 +249,9 @@ bonk ledger post-manual --date 2026-03-01 --description "Bankkosten" --line "710
 bonk ledger reclassify IK:2026-0001 NL-AE-GOODS --reason "verkeerde rubriek"
 bonk ledger open-items --kind payable --aging --as-of 2026-03-31
 bonk ledger bank add --name "Zakelijk" --iban NL91ABNA0417164300
-bonk ledger bank import ./statements/feb.camt.xml     # CAMT.053 (or MT940)
+bonk ledger bank profile put rabo --file rabo.toml    # how to read this bank's CSV
+bonk ledger bank import ./statements/feb.camt.xml     # CAMT.053, MT940, or CSV
+bonk ledger bank import ./statements/feb.csv          # feb.toml beside it says how
 bonk ledger bank auto-match                           # where the payment names the invoice
 bonk ledger bank propose <transaction>                # what it could settle, groups included
 bonk ledger bank match <transaction> --item <a> --item <b>   # one payment, several invoices
@@ -297,6 +299,20 @@ A payment with money left over stays in the queue as `partly matched` rather tha
 being called done, because the remainder is either another invoice or an account
 it belongs on. Both `bank transactions` and `open-items` print the identifier a
 command takes, since a queue you cannot name an entry from is not a queue.
+
+A CSV export has no schema at all, so it is read through a profile that says what
+the columns mean — which one is the date, which is the amount, whether the decimal
+separator is a comma, whether the bank writes `Af`/`Bij` in a column of its own.
+Nothing is guessed from the file, because a locale guess is how `1.234` becomes
+one euro and change. The profile is TOML and can live in two places: a sidecar
+named after the statement (`feb.csv` is read through `feb.toml`), or in the
+archive, where `bank profile put` stores it under a name and `bank add --profile`
+or `bank profile use` points an account at it. A profile named on the import wins,
+then the sidecar, then the account's — and the account's only when the file is not
+recognisably CAMT or MT940, because the content of a file beats a default chosen
+for the account. A CSV states no opening or closing balance, so the import's "the
+statement does not add up" check cannot run for that format; the payload hash and
+the per-payment fingerprint still make a second import of the same file a no-op.
 
 One box needs a person to decide it. `AE` says "reverse charge" and nothing more,
 and the form asks reverse-charged goods (4b) and services (4a) separately, so a

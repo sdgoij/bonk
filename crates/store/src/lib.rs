@@ -23,6 +23,7 @@ pub mod device;
 mod dto;
 pub mod error;
 pub mod evidence;
+pub mod import_profile;
 pub mod integrity;
 pub mod keystore;
 pub mod kit;

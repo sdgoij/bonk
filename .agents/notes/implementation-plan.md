@@ -1309,8 +1309,39 @@ account it belongs on, and either way it is a person's decision. `bank match` ta
 singles. `open-items` and `bank transactions` now print the identifier their
 commands take; the queue was unactionable without it.
 
-Still open in A4: CSV profiles (the profile file format needs deciding), rule-based
-classification, and the keyboard-first queue.
+Still open in A4: rule-based classification, and the keyboard-first queue.
+
+**Status, 2026-11-06 (a CSV is read through a stated profile).** The third format
+is in, and it is read the only way a CSV can be read honestly: through a mapping a
+person wrote. `import::csv` takes a `CsvProfile` — delimiter, encoding, decimal and
+thousands separators, a closed list of date layouts, an optional `Af`/`Bij` mark
+column or a debit/credit pair — and refuses a file it cannot read through it, with
+the line number. The profile is TOML and is validated in full before use: unknown
+keys are refused rather than ignored, a header name with `has_header = false` is
+refused, and the two separators may not be the same character. That matters more
+than it sounds, because a profile is the only thing standing between a bank's
+export and the amount the ledger records.
+
+The two homes the user asked for both exist. A sidecar named after the statement
+(`feb.csv` is read through `feb.toml`) needs no state at all and travels with the
+file; `--profile` names either a stored profile or a path; and migration 0017 adds
+`import_profile`, so `bank profile put` keeps the text in the archive, comments
+included, with its SHA-256. `bank_account.import_profile`, which 0014 left as an
+unused hook, now names an account's default, and `for_account` reports a name whose
+profile was removed instead of importing without the mapping the account was
+configured for.
+
+Precedence is content first: a CAMT, MT940, or PDF file is read as what it is even
+when the account carries a CSV profile, and only a file that is not markup falls
+through to the account's default. That required a small distinction of its own —
+`sniff` leaves a CAMT document as `Unknown` because it is not an invoice — so the
+import path treats a first character of `<` as markup whatever it holds.
+
+A CSV states no opening or closing balance, so `read_csv` leaves both empty and the
+"does the statement add up" check does not run for this format. It is not
+disingenuous: the statement records `format = 'csv'` and no balances, the payload
+hash still makes a re-import a no-op, and the README says so. Deriving the
+balances from a `Saldo` column is the obvious follow-up and is not in this change.
 
 ---
 

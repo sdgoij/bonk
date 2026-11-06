@@ -561,6 +561,180 @@ fn one_payment_settles_two_invoices_with_one_entry() {
     );
 }
 
+const RABO_PROFILE: &str = r#"
+delimiter = ";"
+decimal_separator = ","
+date_format = "%d-%m-%Y"
+
+[columns]
+date = "Datum"
+amount = "Bedrag"
+counterparty = "Tegenpartij"
+remittance = "Omschrijving"
+"#;
+
+#[test]
+fn a_csv_statement_is_read_through_the_profile_beside_it() {
+    let archive = Archive::new();
+    archive.run(&["ledger", "setup"]);
+    archive.run(&["ledger", "post"]);
+    archive.run(&[
+        "ledger",
+        "bank",
+        "add",
+        "--name",
+        "Zakelijk",
+        "--iban",
+        "NL91ABNA0417164300",
+    ]);
+
+    let statement = archive.dir.path().join("feb.csv");
+    std::fs::write(
+        &statement,
+        "Datum;Bedrag;Tegenpartij;Omschrijving\n20-02-2026;121,00;Klant BV;Betaling factuur 2026-0001\n",
+    )
+    .expect("statement");
+    std::fs::write(archive.dir.path().join("feb.toml"), RABO_PROFILE).expect("profile");
+
+    let said = archive.run(&["ledger", "bank", "import", statement.to_str().expect("utf-8")]);
+    assert!(said.contains("profile: feb.toml"), "{said}");
+    assert!(said.contains("1 imported"), "{said}");
+
+    let said = archive.run(&["ledger", "bank", "auto-match"]);
+    assert!(said.contains("matched 2026-0001"), "{said}");
+    let said = archive.run(&["ledger", "open-items"]);
+    assert!(said.contains("no open receivable"), "{said}");
+}
+
+#[test]
+fn a_stored_profile_is_used_when_the_account_names_it() {
+    let archive = Archive::new();
+    archive.run(&["ledger", "setup"]);
+    archive.run(&[
+        "ledger",
+        "bank",
+        "add",
+        "--name",
+        "Zakelijk",
+        "--iban",
+        "NL91ABNA0417164300",
+    ]);
+
+    let profile = archive.dir.path().join("rabo.toml");
+    std::fs::write(&profile, RABO_PROFILE).expect("profile");
+    let said = archive.run(&[
+        "ledger",
+        "bank",
+        "profile",
+        "put",
+        "rabo",
+        "--file",
+        profile.to_str().expect("utf-8"),
+    ]);
+    assert!(said.contains("profile:   rabo"), "{said}");
+    let said = archive.run(&["ledger", "bank", "profile", "show", "rabo"]);
+    assert!(
+        said.contains("decimal_separator"),
+        "what is stored is what it read: {said}"
+    );
+
+    let said = archive.run(&["ledger", "bank", "profile", "use", "Zakelijk", "rabo"]);
+    assert!(said.contains("rabo"), "{said}");
+
+    // No sidecar and no flag: the account's profile reads the file.
+    let statement = archive.dir.path().join("maart.csv");
+    std::fs::write(
+        &statement,
+        "Datum;Bedrag;Tegenpartij;Omschrijving\n05-03-2026;30,00;Energie BV;Voorschot\n",
+    )
+    .expect("statement");
+    let said = archive.run(&["ledger", "bank", "import", statement.to_str().expect("utf-8")]);
+    assert!(said.contains("profile: rabo"), "{said}");
+    assert!(said.contains("1 imported"), "{said}");
+
+    // The flag names a stored profile just as well, on a second file.
+    let second = archive.dir.path().join("april.csv");
+    std::fs::write(
+        &second,
+        "Datum;Bedrag;Tegenpartij;Omschrijving\n05-04-2026;40,00;Energie BV;Voorschot\n",
+    )
+    .expect("statement");
+    let said = archive.run(&[
+        "ledger",
+        "bank",
+        "import",
+        second.to_str().expect("utf-8"),
+        "--profile",
+        "rabo",
+    ]);
+    assert!(said.contains("profile: rabo"), "{said}");
+    assert!(said.contains("1 imported"), "{said}");
+}
+
+#[test]
+fn a_csv_without_a_profile_is_refused_in_plain_words() {
+    let archive = Archive::new();
+    archive.run(&["ledger", "setup"]);
+    archive.run(&["ledger", "bank", "add", "--name", "Zakelijk"]);
+
+    let statement = archive.dir.path().join("raadsel.csv");
+    std::fs::write(&statement, "Datum;Bedrag\n20-02-2026;121,00\n").expect("statement");
+
+    let said = archive.fail(&["ledger", "bank", "import", statement.to_str().expect("utf-8")]);
+    assert!(said.contains("needs an import profile"), "{said}");
+    assert!(said.contains("raadsel.toml"), "it says where the profile goes: {said}");
+}
+
+#[test]
+fn a_profile_that_cannot_be_read_is_refused_when_it_is_stored() {
+    let archive = Archive::new();
+    let profile = archive.dir.path().join("kapot.toml");
+    std::fs::write(
+        &profile,
+        "date_format = \"%d %B %Y\"\n\n[columns]\ndate = \"Datum\"\namount = \"Bedrag\"\n",
+    )
+    .expect("profile");
+
+    let said = archive.fail(&[
+        "ledger",
+        "bank",
+        "profile",
+        "put",
+        "kapot",
+        "--file",
+        profile.to_str().expect("utf-8"),
+    ]);
+    assert!(said.contains("%d-%m-%Y"), "the layouts it does read are named: {said}");
+
+    let said = archive.run(&["ledger", "bank", "profile", "list"]);
+    assert!(said.contains("no import profiles"), "nothing was stored: {said}");
+}
+
+#[test]
+fn removing_a_profile_leaves_the_account_saying_so() {
+    let archive = Archive::new();
+    archive.run(&["ledger", "setup"]);
+    archive.run(&["ledger", "bank", "add", "--name", "Zakelijk"]);
+    let profile = archive.dir.path().join("rabo.toml");
+    std::fs::write(&profile, RABO_PROFILE).expect("profile");
+    archive.run(&[
+        "ledger",
+        "bank",
+        "profile",
+        "put",
+        "rabo",
+        "--file",
+        profile.to_str().expect("utf-8"),
+    ]);
+    archive.run(&["ledger", "bank", "profile", "use", "Zakelijk", "rabo"]);
+    archive.run(&["ledger", "bank", "profile", "rm", "rabo"]);
+
+    let statement = archive.dir.path().join("mei.csv");
+    std::fs::write(&statement, "Datum;Bedrag\n05-05-2026;10,00\n").expect("statement");
+    let said = archive.fail(&["ledger", "bank", "import", statement.to_str().expect("utf-8")]);
+    assert!(said.contains("no longer exists"), "{said}");
+}
+
 #[test]
 fn a_memorial_entry_is_written_and_must_balance() {
     let archive = Archive::new();

@@ -17,6 +17,9 @@ plain = ["store/plain"]
 crux.workspace = true
 syntax.workspace = true
 store = { path = "../store", default-features = false }
+encoding_rs = "0.8"
+serde.workspace = true
+toml = "0.9"
 thiserror.workspace = true
 lopdf.workspace = true
 quick-xml.workspace = true
