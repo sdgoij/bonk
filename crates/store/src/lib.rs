@@ -27,6 +27,7 @@ pub mod keystore;
 pub mod kit;
 pub mod ledger;
 pub mod migrations;
+pub mod open_items;
 pub mod permissions;
 pub mod posting;
 pub mod reconcile;
@@ -53,6 +54,7 @@ pub use ledger::{
     load_account, load_entry, load_period, lock_period, post_entry, post_opening_balances, reversal_of, reverse_entry,
     seed_starter_chart, starter_chart, update_account,
 };
+pub use open_items::{Aging, OpenItem, OpenItemKind, aging, list as open_items, total as open_item_total};
 pub use posting::{
     DEBTORS, PROFILE_ID, PendingPosting, RULE_VERSION, SELF_ASSESSED_RATE_BP, UNCLASSIFIED_EXPENSE, VAT_RECEIVABLE,
     output_vat_account, pending, post_document, post_inbound_document, post_outbound_document, preview_outbound_entry,

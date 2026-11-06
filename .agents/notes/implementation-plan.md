@@ -1118,8 +1118,15 @@ VAT columns rather than a posting destination, and 5c is 5a minus 5b. The shippe
 mapping is asserted row by row by a golden test. Open limitations, recorded here
 rather than hidden: `AE` covers reverse-charged goods and services alike, so 4b is
 never produced and those purchases land in 4a; 1d (private use) is never produced;
-and the control-account check of §6.5 has nothing to check against: open items do
-not exist, so it reports itself as not checked rather than as passed. The other
+and the control-account check compares 1300 and 1400 against the open items behind
+them, which migration 0013 and `store::open_items` now provide: one item per posted
+document, written inside the posting's transaction, signed (a credit note is a
+negative receivable), with the balance derived rather than stored. Items are aged
+by due date in the usual five buckets, and `bonk ledger open-items` lists or ages
+them. An archive whose documents were posted before 0013 has entries but no open
+items, so its control accounts cannot be reconciled until the subledger is rebuilt
+from the postings — a command that does not exist yet, and the reason the check
+would fail on such an archive rather than quietly pass. The other
 two checks are in `store::reconcile` and block preparation: every document dated in
 the period must be posted, the VAT posted for each document must equal the VAT on
 it (with the self-assessed side added for reverse-charged purchases), and the trial

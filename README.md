@@ -240,6 +240,8 @@ bonk ledger balance-sheet --as-of 2026-03-31
 bonk ledger reverse VK:2026-0001 --reason "wrong customer" --date 2026-04-02
 bonk ledger vat-return --year 2026 --month 3            # preview the aangifte
 bonk ledger vat-return --year 2026 --month 3 --prepare  # store it, with its basis
+bonk ledger open-items                                  # what customers still owe
+bonk ledger open-items --kind payable --aging --as-of 2026-03-31
 ```
 
 Entry numbers are per journal and year (`VK 2026-0001`), which is why a reversal
@@ -252,8 +254,8 @@ together with the entries they came from and a hash over both, so a filed figure
 can always be explained; preparing again supersedes the earlier return and keeps
 it. Preparing is refused while a check is red: every document dated in the period
 has to be posted, the VAT posted per document has to equal the VAT on that
-document, and the trial balance has to net to zero. The control-account check
-prints as *not checked* rather than as passed, because open items do not exist yet.
+document, and the trial balance has to net to zero. The AR and AP control accounts are
+compared against the open items behind them.
 One box is not produced: reverse-charged *goods* (4b) cannot be told apart from
 reverse-charged *services* (4a) in the archive.
 

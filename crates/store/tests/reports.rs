@@ -122,6 +122,7 @@ impl Books {
                 posting_profile_id: "nl-sme",
                 rule_version: "1",
                 reverses: None,
+                open_item: None,
             },
         )
         .unwrap();

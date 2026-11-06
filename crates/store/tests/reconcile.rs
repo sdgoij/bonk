@@ -138,7 +138,7 @@ impl Books {
         store::record_received(
             self.database.connection(),
             self.seller,
-            None,
+            Some(self.customer),
             &received,
             &store::ImportSource {
                 kind: "ubl",
@@ -164,7 +164,7 @@ impl Books {
 }
 
 #[test]
-fn a_fully_posted_period_is_ready_except_for_the_control_accounts() {
+fn a_fully_posted_period_is_ready() {
     let mut books = Books::open();
     let invoice = books.issue(TaxTreatment::standard(VatRate::STANDARD_NL), 1_000, "2026-01-15");
     let note = books.issue(TaxTreatment::standard(VatRate::REDUCED_NL), 500, "2026-01-20");
@@ -187,9 +187,10 @@ fn a_fully_posted_period_is_ready_except_for_the_control_accounts() {
     assert_eq!(ready.balance_sheet, Check::Passed);
     assert_eq!(
         ready.control_accounts,
-        Check::NotChecked("open items are not implemented yet")
+        Check::Passed,
+        "the control accounts agree with their subledger"
     );
-    assert_eq!(ready.unchecked().len(), 1, "the gap is reported, not hidden");
+    assert!(ready.unchecked().is_empty());
 }
 
 #[test]

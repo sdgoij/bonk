@@ -123,6 +123,7 @@ pub fn post_outbound_document(
             posting_profile_id: PROFILE_ID,
             rule_version: RULE_VERSION,
             reverses: None,
+            open_item: open_item_for(&document),
         },
     )
 }
@@ -222,8 +223,35 @@ pub fn post_inbound_document(
             posting_profile_id: PROFILE_ID,
             rule_version: RULE_VERSION,
             reverses: None,
+            open_item: open_item_for(&document),
         },
     )
+}
+
+/// The subledger entry a document creates, if its counterparty is known.
+///
+/// A credit note is negative: it reduces what is owed rather than creating a
+/// second receivable, which is what keeps the control account equal to the sum of
+/// the subledger across a correction.
+fn open_item_for(document: &DocumentFacts) -> Option<crate::open_items::NewOpenItem> {
+    let party_id = document.counterparty_id?;
+    let gross = money(&document.totals, "gross", document.currency).ok()?;
+    let signed = if document.is_credit_note() {
+        gross.checked_neg().ok()?
+    } else {
+        gross
+    };
+    Some(crate::open_items::NewOpenItem {
+        kind: if document.direction == "outbound" {
+            crate::open_items::OpenItemKind::Receivable
+        } else {
+            crate::open_items::OpenItemKind::Payable
+        },
+        party_id,
+        amount: signed,
+        due_date: document.due_date,
+        original_date: document.issue_date,
+    })
 }
 
 /// The entry an outbound document would produce, without writing it.
@@ -399,8 +427,10 @@ struct DocumentFacts {
     doc_type: String,
     number: String,
     seller_id: SellerId,
+    counterparty_id: Option<crux::CustomerId>,
     currency: Currency,
     issue_date: LocalDate,
+    due_date: Option<LocalDate>,
     totals: Value,
 }
 
@@ -412,21 +442,32 @@ impl DocumentFacts {
 
 fn load_document(conn: &Connection, id: DocumentId) -> Result<DocumentFacts, StoreError> {
     let mut statement = conn.prepare(
-        "SELECT direction, doc_type, number, owner_id, currency, issue_date_local, totals_json
+        "SELECT direction, doc_type, number, owner_id, counterparty_id, currency,
+                issue_date_local, due_date_local, totals_json
          FROM document WHERE id = ?1",
     )?;
     let mut rows = statement.query([id.to_string()])?;
     let Some(row) = rows.next()? else {
         return Err(StoreError::NotFound(format!("document {id}")));
     };
+    let counterparty: Option<String> = row.get(4)?;
+    let due_date: Option<String> = row.get(7)?;
     Ok(DocumentFacts {
         direction: row.get(0)?,
         doc_type: row.get(1)?,
         number: row.get(2)?,
         seller_id: SellerId::parse_str(&row.get::<_, String>(3)?).map_err(domain)?,
-        currency: Currency::parse(&row.get::<_, String>(4)?).map_err(domain)?,
-        issue_date: LocalDate::parse_iso(&row.get::<_, String>(5)?).map_err(domain)?,
-        totals: serde_json::from_str(&row.get::<_, String>(6)?)?,
+        counterparty_id: counterparty
+            .map(|value| crux::CustomerId::parse_str(&value))
+            .transpose()
+            .map_err(domain)?,
+        currency: Currency::parse(&row.get::<_, String>(5)?).map_err(domain)?,
+        issue_date: LocalDate::parse_iso(&row.get::<_, String>(6)?).map_err(domain)?,
+        due_date: due_date
+            .map(|value| LocalDate::parse_iso(&value))
+            .transpose()
+            .map_err(domain)?,
+        totals: serde_json::from_str(&row.get::<_, String>(8)?)?,
     })
 }
 

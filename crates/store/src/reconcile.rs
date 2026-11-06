@@ -35,6 +35,14 @@ impl Check {
         !matches!(self, Self::Failed(_))
     }
 
+    /// The reason, when this check could not run.
+    pub const fn not_checked(&self) -> Option<&'static str> {
+        match self {
+            Self::NotChecked(reason) => Some(*reason),
+            Self::Passed | Self::Failed(_) => None,
+        }
+    }
+
     /// The problems found, if any.
     pub fn failures(&self) -> &[String] {
         match self {
@@ -93,12 +101,75 @@ impl Readiness {
             &self.control_accounts,
         ]
         .into_iter()
-        .filter_map(|check| match check {
-            Check::NotChecked(reason) => Some(*reason),
-            _ => None,
-        })
+        .filter_map(Check::not_checked)
         .collect()
     }
+}
+
+/// The control accounts agree with the sum of their open items.
+///
+/// The subledger is cut at the same date as the control account, because an
+/// invoice dated next month belongs to next month's control balance as much as to
+/// next month's return.
+fn control_accounts(
+    conn: &Connection,
+    seller_id: SellerId,
+    year: i32,
+    period_no: u8,
+    currency: Currency,
+) -> Result<Check, StoreError> {
+    let (_, ends) = vat::period_bounds(year, period_no).map_err(|error| StoreError::Data(error.to_string()))?;
+    let beginning = LocalDate::from_ymd(1, 1, 1).map_err(|error| StoreError::Data(error.to_string()))?;
+    let balance = crate::report::trial_balance(conn, seller_id, beginning, ends)?;
+
+    let mut problems = Vec::new();
+    for kind in [
+        crate::open_items::OpenItemKind::Receivable,
+        crate::open_items::OpenItemKind::Payable,
+    ] {
+        let control = kind.control_account();
+        let posted = balance
+            .rows
+            .iter()
+            .find(|row| row.code.as_str() == control)
+            .map_or(0, crate::report::AccountBalance::balance_micros);
+        let subledger: Option<i64> = conn.query_row(
+            "SELECT sum(amount_micros) FROM open_item
+             WHERE seller_id = ?1 AND kind = ?2 AND original_date_local <= ?3",
+            rusqlite::params![seller_id.to_string(), kind.as_str(), ends.to_iso_string()],
+            |row| row.get(0),
+        )?;
+        let subledger = subledger.unwrap_or(0);
+        if posted != subledger {
+            problems.push(format!(
+                "{control} ({}) is {} in the ledger and {} in the subledger",
+                kind.as_str(),
+                money(posted, currency),
+                money(subledger, currency)
+            ));
+            // The usual cause is a document whose counterparty was never matched:
+            // it posted to the control account and cannot appear in the subledger.
+            let unmatched: i64 = conn.query_row(
+                "SELECT count(*) FROM document d
+                 JOIN journal_entry e ON e.source_id = d.id
+                 WHERE d.owner_id = ?1 AND d.counterparty_id IS NULL
+                   AND d.issue_date_local <= ?2",
+                rusqlite::params![seller_id.to_string(), ends.to_iso_string()],
+                |row| row.get(0),
+            )?;
+            if unmatched > 0 {
+                problems.push(format!(
+                    "{unmatched} posted document(s) up to {ends} have no counterparty and cannot appear in the subledger"
+                ));
+            }
+        }
+    }
+
+    Ok(if problems.is_empty() {
+        Check::Passed
+    } else {
+        Check::Failed(problems)
+    })
 }
 
 /// Runs the readiness checks for one month.
@@ -123,7 +194,7 @@ pub fn readiness(conn: &Connection, seller_id: SellerId, year: i32, period_no: u
         ledger_to_return,
         invoice_to_ledger: invoice_to_ledger(conn, seller_id, year, period_no, report.currency)?,
         balance_sheet: balance_sheet(conn, seller_id, year, period_no)?,
-        control_accounts: Check::NotChecked("open items are not implemented yet"),
+        control_accounts: control_accounts(conn, seller_id, year, period_no, report.currency)?,
         report,
     })
 }

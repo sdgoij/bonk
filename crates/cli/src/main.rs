@@ -487,6 +487,19 @@ enum LedgerCommand {
         #[arg(long, default_value = "cli")]
         actor: String,
     },
+    /// List open items, or age them (openstaande posten).
+    #[command(name = "open-items")]
+    OpenItems {
+        /// `receivable` (default) or `payable`.
+        #[arg(long)]
+        kind: Option<String>,
+        /// Show the aging buckets instead of the items.
+        #[arg(long)]
+        aging: bool,
+        /// The date to age at, `YYYY-MM-DD`; defaults to today.
+        #[arg(long)]
+        as_of: Option<String>,
+    },
     /// Reverse one entry, naming it `VK:2026-0001` or by identifier.
     Reverse {
         /// Journal and number, or the entry identifier.
@@ -521,7 +534,19 @@ enum CliError {
 }
 
 fn main() -> ExitCode {
-    let cli = Cli::parse();
+    // Parsing builds the whole subcommand tree as one deeply nested expression,
+    // and an unoptimised build keeps every temporary of it on the stack. With
+    // this many subcommands that no longer fits the 1 MiB a process's main
+    // thread gets, so the parse runs on a thread with room. The window still
+    // opens on the main thread, which the operating systems require.
+    let cli = std::thread::Builder::new()
+        .name("cli".to_owned())
+        .stack_size(16 * 1024 * 1024)
+        .spawn(Cli::parse)
+        .expect("the parser thread starts")
+        .join()
+        .unwrap_or_else(|_| Cli::parse_from(["bonk"]));
+
     match run(cli) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
@@ -1770,6 +1795,79 @@ fn ledger(access: &Access, database: &Path, keystore: &Path, command: LedgerComm
                 println!("not checked: {reason}");
             }
             println!("mapping      {}", store::vat::MAPPING_VERSION);
+            Ok(())
+        }
+        LedgerCommand::OpenItems { kind, aging, as_of } => {
+            let as_of = parse_date_or(as_of, LocalDate::today_utc())?;
+            let kind = match kind.as_deref() {
+                Some("receivable") => store::OpenItemKind::Receivable,
+                Some("payable") => store::OpenItemKind::Payable,
+                Some(other) => {
+                    return Err(CliError::Input(format!(
+                        "unknown kind {other:?}; use receivable or payable"
+                    )));
+                }
+                None => store::OpenItemKind::Receivable,
+            };
+            let currency = store::reporting_currency(connection, owner)?;
+
+            if aging {
+                let report = store::aging(connection, owner, kind, as_of)?;
+                println!("{} at {as_of} ({})", kind.as_str(), report.currency);
+                println!(
+                    "{:<20} {:>14}",
+                    "not yet due",
+                    amount_text(report.current.micros(), currency)?
+                );
+                println!(
+                    "{:<20} {:>14}",
+                    "1-30 days",
+                    amount_text(report.days_1_30.micros(), currency)?
+                );
+                println!(
+                    "{:<20} {:>14}",
+                    "31-60 days",
+                    amount_text(report.days_31_60.micros(), currency)?
+                );
+                println!(
+                    "{:<20} {:>14}",
+                    "61-90 days",
+                    amount_text(report.days_61_90.micros(), currency)?
+                );
+                println!(
+                    "{:<20} {:>14}",
+                    "over 90 days",
+                    amount_text(report.over_90.micros(), currency)?
+                );
+                println!(
+                    "{:<20} {:>14}",
+                    "total",
+                    amount_text(report.total()?.micros(), currency)?
+                );
+                return Ok(());
+            }
+
+            let items = store::open_items(connection, owner, kind)?;
+            if items.is_empty() {
+                println!("no open {}", kind.as_str());
+                return Ok(());
+            }
+            println!(
+                "{:<14} {:<12} {:>14} {:<12} {:<36}",
+                "document", "date", "amount", "due", "party"
+            );
+            for item in &items {
+                println!(
+                    "{:<14} {:<12} {:>14} {:<12} {:<36}",
+                    item.number,
+                    item.original_date.to_iso_string(),
+                    amount_text(item.outstanding.micros(), currency)?,
+                    item.due_date.map(|due| due.to_iso_string()).unwrap_or_default(),
+                    item.party_id
+                );
+            }
+            let total = store::open_item_total(connection, owner, kind)?;
+            println!("{:<27} {:>14}", "total", amount_text(total.micros(), currency)?);
             Ok(())
         }
         LedgerCommand::Reverse {

@@ -465,6 +465,8 @@ pub struct PostingRequest<'a> {
     pub rule_version: &'a str,
     /// The entry this one undoes, when it is a reversal.
     pub reverses: Option<JournalEntryId>,
+    /// The open item this posting creates, when it creates one.
+    pub open_item: Option<crate::open_items::NewOpenItem>,
 }
 
 /// A written posting.
@@ -574,6 +576,18 @@ pub fn post_entry(conn: &Connection, request: PostingRequest<'_>) -> Result<Post
         )?;
     }
 
+    if let (Some(item), Some(source_id)) = (&request.open_item, request.source.id()) {
+        let document = DocumentId::parse_str(&source_id).map_err(|error| StoreError::Data(error.to_string()))?;
+        crate::open_items::insert(
+            &transaction,
+            request.seller_id,
+            request.source.kind(),
+            document,
+            item,
+            request.now,
+        )?;
+    }
+
     let audit_head = audit::append(
         &transaction,
         request.now,
@@ -588,6 +602,7 @@ pub fn post_entry(conn: &Connection, request: PostingRequest<'_>) -> Result<Post
             "source_kind": request.source.kind(),
             "source_id": request.source.id(),
             "reverses": request.reverses.map(|entry| entry.to_string()),
+            "open_item": request.open_item.as_ref().map(crate::open_items::audit_payload),
             "content_hash": content_hash,
         }),
     )?;
@@ -789,6 +804,7 @@ pub fn reverse_entry(
             posting_profile_id: &stored.posting_profile_id,
             rule_version: &stored.rule_version,
             reverses: Some(entry_id),
+            open_item: None,
         },
     )
 }
@@ -896,6 +912,7 @@ pub fn post_opening_balances(
             posting_profile_id: "nl-sme",
             rule_version: "1",
             reverses: None,
+            open_item: None,
         },
     )
 }

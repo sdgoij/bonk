@@ -76,6 +76,7 @@ fn post(
             posting_profile_id: "nl-sme",
             rule_version: "1",
             reverses: None,
+            open_item: None,
         },
     )
     .unwrap()
@@ -364,6 +365,7 @@ fn a_locked_period_refuses_a_posting() {
             posting_profile_id: "nl-sme",
             rule_version: "1",
             reverses: None,
+            open_item: None,
         },
     )
     .unwrap_err();
@@ -494,6 +496,7 @@ fn an_archived_account_takes_no_postings() {
             posting_profile_id: "nl-sme",
             rule_version: "1",
             reverses: None,
+            open_item: None,
         },
     )
     .unwrap_err();

@@ -302,8 +302,8 @@ fn the_vat_return_is_read_from_the_ledger_and_then_prepared() {
     assert!(said.contains("5c"), "{said}");
     assert!(said.contains("fileable:    yes"), "{said}");
     assert!(
-        said.contains("not checked: open items are not implemented yet"),
-        "{said}"
+        !said.contains("not checked"),
+        "every check can run now that open items exist: {said}"
     );
     assert!(said.contains("mapping      nl-2026.1"), "{said}");
     assert!(
