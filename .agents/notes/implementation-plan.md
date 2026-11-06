@@ -1087,8 +1087,20 @@ Open decision recorded here because it deviates from §3.2's "~60-account starte
 chart, pre-mapped": the chart ships **without** RGS codes. The Referentie
 Grootboek Schema is a published, versioned release, and a mapping written without
 checking it against that release would look authoritative and be wrong; it should
-ship as a checked artefact. Still to come in A1: entry numbering, the posting
-rules themselves, and idempotent posting from issued and received documents.
+ship as a checked artefact. Since then, posting landed: entries number per
+journal and year from the same `sequence` counters as invoices, `post_entry`
+writes an entry, its lines, and one audit event in a single transaction and
+returns the existing entry when the source fact is posted twice, and the
+`nl-sme` rule set (version 1) posts issued invoices and credit notes — gross to
+1300, each VAT breakdown row to a revenue account chosen by treatment, its tax
+to 1600/1610/1620, and a credit note as the same entry mirrored. The scenario
+matrix rows for a high-rate sale, a low-rate sale, a reverse-charged EU service,
+an export, and a credit note are acceptance tests over the posted lines rather
+than over the preview. Purchase invoices are **not** posted yet: a
+reverse-charged purchase arrives with no VAT on it, and self-assessing needs the
+rate policy that belongs with the tax-code mapping of A3, so posting one today
+would have to guess. That, opening balances, and the reports that read the
+ledger are what remain of A1/A2.
 
 ---
 
