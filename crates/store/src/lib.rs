@@ -52,8 +52,9 @@ pub use ledger::{
     seed_starter_chart, starter_chart, update_account,
 };
 pub use posting::{
-    DEBTORS, PROFILE_ID, PendingPosting, RULE_VERSION, VAT_RECEIVABLE, output_vat_account, pending,
-    post_outbound_document, preview_outbound_entry, revenue_account,
+    DEBTORS, PROFILE_ID, PendingPosting, RULE_VERSION, SELF_ASSESSED_RATE_BP, UNCLASSIFIED_EXPENSE, VAT_RECEIVABLE,
+    output_vat_account, pending, post_document, post_inbound_document, post_outbound_document, preview_outbound_entry,
+    revenue_account,
 };
 pub use repo::{
     CustomerRecord, Direction, DocumentRecord, DocumentStatus, ImportSource, IssueRequest, IssueView, IssuedReference,

@@ -423,11 +423,12 @@ enum LedgerCommand {
     /// Accounts already present are left alone, so this is safe to re-run after
     /// a rename. Nothing is posted until the chart exists.
     Setup,
-    /// Post issued documents that have no entry yet.
+    /// Post documents that have no entry yet.
     ///
-    /// With no arguments every unposted document of the books is posted; naming
-    /// numbers posts only those. Posting is idempotent, so a document that is
-    /// already posted is reported rather than posted twice.
+    /// With no arguments every unposted document of the books is posted, both the
+    /// invoices we issued and the ones we received. Naming numbers posts only
+    /// those, and only numbers we issued: a supplier's number is theirs and does
+    /// not identify a document on its own.
     Post {
         /// Document numbers, e.g. `2026-0001`.
         documents: Vec<String>,
@@ -1501,6 +1502,7 @@ fn ledger(access: &Access, database: &Path, keystore: &Path, command: LedgerComm
                         id: reference.id,
                         number: reference.number,
                         issue_date: reference.issue_date,
+                        direction: "outbound".to_owned(),
                     });
                 }
                 resolved
@@ -1511,7 +1513,7 @@ fn ledger(access: &Access, database: &Path, keystore: &Path, command: LedgerComm
                 return Ok(());
             }
             for target in &targets {
-                let posted = store::post_outbound_document(connection, target.id, &actor, &now)?;
+                let posted = store::post_document(connection, target.id, &actor, &now)?;
                 if posted.created {
                     println!("posted {} {} {}", target.number, posted.journal.code(), posted.number);
                 } else {

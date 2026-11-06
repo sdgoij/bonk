@@ -17,6 +17,10 @@ use tempfile::TempDir;
 
 const NOW: &str = "2026-11-06T14:00:00.123456Z";
 
+fn euros(units: i64) -> Money {
+    Money::from_major_units(units, Currency::EUR).unwrap()
+}
+
 struct Books {
     _dir: TempDir,
     database: Database,
@@ -385,4 +389,203 @@ fn a_received_document_cannot_be_posted_as_a_sale() {
         error.to_string().contains("cannot be posted as a sale"),
         "unexpected error: {error}"
     );
+}
+
+/// Records a purchase invoice from a supplier and returns its id.
+fn receive(books: &Books, treatment: TaxTreatment, net_units: i64, on: &str) -> DocumentId {
+    let net = euros(net_units);
+    let tax = if treatment.category == VatCategory::Standard {
+        crux::tax_amount(net, treatment.rate).unwrap()
+    } else {
+        Money::zero(Currency::EUR)
+    };
+    let totals = crux::InvoiceTotals {
+        net,
+        tax,
+        gross: net.checked_add(tax).unwrap(),
+        breakdown: vec![crux::TaxBreakdown {
+            category: treatment.category,
+            rate_bp: treatment.rate.basis_points(),
+            taxable_base: net,
+            tax,
+        }],
+    };
+    let issuer = Party::new("Leverancier BV", Address::new("Rotterdam", CountryCode::NL));
+    let seller = store::load_seller(books.database.connection(), books.seller).unwrap();
+    let received = store::ReceivedDocument {
+        number: "SUP-INV-1",
+        doc_type: DocType::Invoice,
+        currency: Currency::EUR,
+        issue_date: LocalDate::parse_iso(on).unwrap(),
+        due_date: None,
+        delivery_date: None,
+        buyer_reference: None,
+        order_reference: None,
+        note: None,
+        issuer: &issuer,
+        recipient: &seller.party,
+        lines: &[],
+        totals: &totals,
+        preceding_number: None,
+        preceding_issue_date: None,
+    };
+    let payload = format!("<Invoice>{on}</Invoice>");
+    store::record_received(
+        books.database.connection(),
+        books.seller,
+        None,
+        &received,
+        &store::ImportSource {
+            kind: "ubl",
+            path: None,
+            payload_hash: &store::audit::sha256_hex(payload.as_bytes()),
+            payload: payload.as_bytes(),
+        },
+        None,
+        NOW,
+    )
+    .unwrap();
+    let id: String = books
+        .database
+        .connection()
+        .query_row(
+            "SELECT id FROM document WHERE direction = 'inbound' ORDER BY created_at DESC LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    DocumentId::parse_str(&id).unwrap()
+}
+
+#[test]
+fn a_domestic_purchase_deducts_the_vat_it_paid() {
+    let books = Books::open();
+    let purchase = receive(
+        &books,
+        TaxTreatment::standard(VatRate::STANDARD_NL),
+        1_000,
+        "2026-01-12",
+    );
+    let posted = store::post_inbound_document(books.database.connection(), purchase, "ada", NOW).unwrap();
+
+    assert!(
+        books.lines_of(&posted).iter().any(|line| line == "9999 debit 100000"),
+        "{:?}",
+        books.lines_of(&posted)
+    );
+    assert!(books.lines_of(&posted).iter().any(|line| line == "1500 debit 21000"));
+    assert!(books.lines_of(&posted).iter().any(|line| line == "1400 credit 121000"));
+    assert_eq!(posted.journal, crux::Journal::Purchase);
+}
+
+#[test]
+fn a_reverse_charged_purchase_is_self_assessed() {
+    let books = Books::open();
+    let purchase = receive(
+        &books,
+        TaxTreatment::zero(VatCategory::ReverseCharge),
+        1_000,
+        "2026-01-12",
+    );
+    let posted = store::post_inbound_document(books.database.connection(), purchase, "ada", NOW).unwrap();
+
+    // The matrix row: the supplier charges nothing, so we owe and deduct the same
+    // 210 ourselves, and the creditors line is the net amount.
+    assert_eq!(
+        books.lines_of(&posted),
+        vec![
+            "9999 debit 100000".to_owned(),
+            "1500 debit 21000".to_owned(),
+            "1400 credit 100000".to_owned(),
+            "1620 credit 21000".to_owned(),
+        ]
+    );
+}
+
+#[test]
+fn an_intra_eu_acquisition_is_self_assessed_the_same_way() {
+    let books = Books::open();
+    let purchase = receive(
+        &books,
+        TaxTreatment::zero(VatCategory::IntraCommunity),
+        1_000,
+        "2026-01-12",
+    );
+    let posted = store::post_inbound_document(books.database.connection(), purchase, "ada", NOW).unwrap();
+
+    assert!(books.lines_of(&posted).iter().any(|line| line == "1500 debit 21000"));
+    assert!(books.lines_of(&posted).iter().any(|line| line == "1620 credit 21000"));
+}
+
+#[test]
+fn an_exempt_purchase_carries_no_vat_at_all() {
+    let books = Books::open();
+    let purchase = receive(&books, TaxTreatment::zero(VatCategory::Exempt), 1_000, "2026-01-12");
+    let posted = store::post_inbound_document(books.database.connection(), purchase, "ada", NOW).unwrap();
+
+    assert_eq!(
+        books.lines_of(&posted),
+        vec!["9999 debit 100000".to_owned(), "1400 credit 100000".to_owned()]
+    );
+}
+
+#[test]
+fn posting_a_purchase_twice_does_not_double_the_books() {
+    let books = Books::open();
+    let purchase = receive(
+        &books,
+        TaxTreatment::standard(VatRate::STANDARD_NL),
+        1_000,
+        "2026-01-12",
+    );
+
+    let first = store::post_document(books.database.connection(), purchase, "ada", NOW).unwrap();
+    let second = store::post_document(books.database.connection(), purchase, "ada", NOW).unwrap();
+    assert!(first.created);
+    assert!(!second.created);
+    assert_eq!(first.id, second.id);
+}
+
+#[test]
+fn an_issued_document_cannot_be_posted_as_a_purchase() {
+    let mut books = Books::open();
+    let invoice = books.issue(TaxTreatment::standard(VatRate::STANDARD_NL), 1_000, "2026-01-15");
+
+    let error = store::post_inbound_document(books.database.connection(), invoice, "ada", NOW).unwrap_err();
+    assert!(
+        error.to_string().contains("cannot be posted as a purchase"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
+fn pending_lists_both_directions_until_they_are_posted() {
+    let mut books = Books::open();
+    let invoice = books.issue(TaxTreatment::standard(VatRate::STANDARD_NL), 1_000, "2026-01-15");
+    let purchase = receive(&books, TaxTreatment::standard(VatRate::STANDARD_NL), 500, "2026-01-12");
+
+    let pending = store::pending(books.database.connection(), books.seller).unwrap();
+    assert_eq!(pending.len(), 2);
+    assert_eq!(
+        pending.iter().map(|row| row.direction.as_str()).collect::<Vec<_>>(),
+        vec!["inbound", "outbound"],
+        "oldest first, both directions"
+    );
+
+    for row in &pending {
+        store::post_document(books.database.connection(), row.id, "ada", NOW).unwrap();
+    }
+    assert!(
+        store::pending(books.database.connection(), books.seller)
+            .unwrap()
+            .is_empty()
+    );
+
+    let entries: i64 = books
+        .database
+        .connection()
+        .query_row("SELECT count(*) FROM journal_entry", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(entries, 2);
+    let _ = (invoice, purchase);
 }

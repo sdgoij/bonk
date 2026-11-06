@@ -41,6 +41,21 @@ pub const VAT_PAYABLE_LOW: &str = "1610";
 /// VAT payable at any other rate.
 pub const VAT_PAYABLE_OTHER: &str = "1620";
 
+/// The expense account a purchase is posted to until someone classifies it.
+///
+/// Classification is line-level work that belongs with the item catalogue and the
+/// supplier defaults; until one exists, a purchase lands here and a period close
+/// refuses to happen while this account has a balance.
+pub const UNCLASSIFIED_EXPENSE: &str = crate::ledger::UNCLASSIFIED_ACCOUNT;
+
+/// The rate a reverse-charged purchase is self-assessed at.
+///
+/// The supplier charges nothing, so the VAT we owe and the VAT we may deduct are
+/// both computed here, at the domestic rate for the same supply. It is a rule-set
+/// value, not a guess: a business with a different rate policy needs its own
+/// profile, and the posting records which profile produced it.
+pub const SELF_ASSESSED_RATE_BP: u16 = 2100;
+
 /// The revenue account a VAT treatment is posted to.
 ///
 /// One account per treatment, because the VAT return and the P&L both have to
@@ -117,23 +132,29 @@ pub fn post_outbound_document(
 pub struct PendingPosting {
     /// Document identity.
     pub id: DocumentId,
-    /// Its number, as printed to the customer.
+    /// Its number, as printed to the customer or written by the supplier.
     pub number: String,
     /// The date the posting will carry.
     pub issue_date: LocalDate,
+    /// `outbound` for one we issued, `inbound` for one we received.
+    pub direction: String,
 }
 
-/// Every outbound document of these books that has not been posted.
+/// Every document of these books that has not been posted.
 ///
 /// The left join is on the source key the posting uses, so a document cannot
 /// look unposted while an entry exists for it, whatever route wrote that entry.
 pub fn pending(conn: &Connection, seller_id: SellerId) -> Result<Vec<PendingPosting>, StoreError> {
     let mut statement = conn.prepare(
-        "SELECT d.id, d.number, d.issue_date_local
+        "SELECT d.id, d.number, d.issue_date_local, d.direction
          FROM document d
          LEFT JOIN journal_entry e
-                ON e.source_kind = 'outbound_document' AND e.source_id = d.id
-         WHERE d.direction = 'outbound' AND d.owner_id = ?1 AND e.id IS NULL
+                ON e.source_id = d.id
+               AND e.source_kind = CASE d.direction
+                                       WHEN 'outbound' THEN 'outbound_document'
+                                       ELSE 'inbound_document'
+                                   END
+         WHERE d.owner_id = ?1 AND e.id IS NULL
          ORDER BY d.issue_date_local, d.number",
     )?;
     let mut rows = statement.query([seller_id.to_string()])?;
@@ -145,9 +166,64 @@ pub fn pending(conn: &Connection, seller_id: SellerId) -> Result<Vec<PendingPost
             id: DocumentId::parse_str(&id).map_err(|error| StoreError::Data(error.to_string()))?,
             number: row.get(1)?,
             issue_date: LocalDate::parse_iso(&issue_date).map_err(|error| StoreError::Data(error.to_string()))?,
+            direction: row.get(3)?,
         });
     }
     Ok(pending)
+}
+
+/// Posts a document, choosing the rule set that matches its direction.
+pub fn post_document(
+    conn: &Connection,
+    document_id: DocumentId,
+    actor: &str,
+    now: &str,
+) -> Result<PostedEntry, StoreError> {
+    match load_document(conn, document_id)?.direction.as_str() {
+        "outbound" => post_outbound_document(conn, document_id, actor, now),
+        "inbound" => post_inbound_document(conn, document_id, actor, now),
+        other => Err(StoreError::Data(format!(
+            "document {document_id} has direction {other:?}"
+        ))),
+    }
+}
+
+/// Posts an invoice we received.
+///
+/// A purchase is the mirror of a sale, with one difference that matters: on a
+/// reverse-charged supply the supplier charges no VAT, so the VAT we owe and the
+/// VAT we may deduct are both computed here from the taxable base at the
+/// self-assessed rate. Both sides of that assessment are posted, because a
+/// deduction without the matching liability would understate what is due.
+pub fn post_inbound_document(
+    conn: &Connection,
+    document_id: DocumentId,
+    actor: &str,
+    now: &str,
+) -> Result<PostedEntry, StoreError> {
+    let document = load_document(conn, document_id)?;
+    if document.direction != "inbound" {
+        return Err(StoreError::Rejected(format!(
+            "document {} is {} and cannot be posted as a purchase",
+            document.number, document.direction
+        )));
+    }
+
+    let entry = inbound_entry_for(&document)?;
+    ledger::post_entry(
+        conn,
+        PostingRequest {
+            entry: &entry,
+            seller_id: document.seller_id,
+            entry_date: document.issue_date,
+            source: PostingSource::InboundDocument(document_id),
+            actor,
+            now,
+            posting_profile_id: PROFILE_ID,
+            rule_version: RULE_VERSION,
+            reverses: None,
+        },
+    )
 }
 
 /// The entry an outbound document would produce, without writing it.
@@ -217,6 +293,81 @@ fn outbound_entry_for(document: &DocumentFacts) -> Result<LedgerEntry, StoreErro
     if document.is_credit_note() {
         // A credit note is the invoice's mirror, so the correction reads the same
         // way the invoice did, with every side reversed.
+        entry.reversed(description).map_err(domain)
+    } else {
+        Ok(entry)
+    }
+}
+
+fn inbound_entry_for(document: &DocumentFacts) -> Result<LedgerEntry, StoreError> {
+    let currency = document.currency;
+    let gross = money(&document.totals, "gross", currency)?;
+    if !gross.is_positive() {
+        return Err(StoreError::Rejected(format!(
+            "document {} has no amount to post",
+            document.number
+        )));
+    }
+    let breakdown = document
+        .totals
+        .get("breakdown")
+        .and_then(Value::as_array)
+        .ok_or_else(|| StoreError::Data(format!("document {} has no tax breakdown", document.number)))?;
+
+    let mut lines = Vec::new();
+    let mut self_assessed: Option<Money> = None;
+    let mut classified = false;
+    for row in breakdown {
+        let category = VatCategory::parse(&text(row, "category")?).map_err(domain)?;
+        let base = money(row, "taxable_base", currency)?;
+        let tax = money(row, "tax", currency)?;
+        if base.is_zero() {
+            continue;
+        }
+        classified = true;
+        lines.push(LedgerLine::debit(account(UNCLASSIFIED_EXPENSE)?, base).map_err(domain)?);
+
+        // What may be deducted: what the supplier charged, or — when they charged
+        // nothing because the VAT shifted to us — what we owe ourselves.
+        let deductible = if tax.is_positive() {
+            tax
+        } else if matches!(category, VatCategory::ReverseCharge | VatCategory::IntraCommunity) {
+            let rate = VatRate::from_basis_points(SELF_ASSESSED_RATE_BP).map_err(domain)?;
+            let assessed = crux::tax_amount(base, rate).map_err(domain)?;
+            self_assessed = Some(match self_assessed {
+                Some(previous) => previous.checked_add(assessed).map_err(domain)?,
+                None => assessed,
+            });
+            assessed
+        } else {
+            crux::Money::zero(currency)
+        };
+
+        if deductible.is_positive() {
+            lines.push(LedgerLine::debit(account(VAT_RECEIVABLE)?, deductible).map_err(domain)?);
+        }
+    }
+
+    if !classified {
+        return Err(StoreError::Rejected(format!(
+            "document {} has no taxable amount to post",
+            document.number
+        )));
+    }
+
+    // What we owe the supplier, and the VAT we assessed on their behalf.
+    lines.push(LedgerLine::credit(account(CREDITORS)?, gross).map_err(domain)?);
+    if let Some(assessed) = self_assessed.filter(|amount| amount.is_positive()) {
+        lines.push(LedgerLine::credit(account(VAT_PAYABLE_OTHER)?, assessed).map_err(domain)?);
+    }
+
+    let description = if document.is_credit_note() {
+        format!("Inkoopcreditfactuur {}", document.number)
+    } else {
+        format!("Inkoopfactuur {}", document.number)
+    };
+    let entry = LedgerEntry::new(Journal::Purchase, description.clone(), lines).map_err(domain)?;
+    if document.is_credit_note() {
         entry.reversed(description).map_err(domain)
     } else {
         Ok(entry)
