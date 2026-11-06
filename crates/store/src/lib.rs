@@ -28,6 +28,7 @@ pub mod kit;
 pub mod ledger;
 pub mod migrations;
 pub mod permissions;
+pub mod posting;
 pub mod repo;
 pub mod saved;
 pub mod support;
@@ -47,6 +48,10 @@ pub use ledger::{
     Account, FiscalPeriod, PeriodStatus, PostedEntry, PostingRequest, PostingSource, UNCLASSIFIED_ACCOUNT,
     content_hash, ensure_period, insert_account, list_accounts, list_periods, load_account, load_period, lock_period,
     post_entry, seed_starter_chart, starter_chart, update_account,
+};
+pub use posting::{
+    DEBTORS, PROFILE_ID, RULE_VERSION, VAT_RECEIVABLE, output_vat_account, post_outbound_document,
+    preview_outbound_entry, revenue_account,
 };
 pub use repo::{
     CustomerRecord, Direction, DocumentRecord, DocumentStatus, ImportSource, IssueRequest, IssueView, IssuedReference,
