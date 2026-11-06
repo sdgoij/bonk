@@ -414,7 +414,17 @@ pub fn prepare(
     actor: &str,
     now: &str,
 ) -> Result<PreparedReturn, StoreError> {
-    let computed = compute(conn, seller_id, year, period_no)?;
+    // Refuse to mark a period prepared while a check is red: a stored return is
+    // evidence, and evidence that cannot be reconciled is worse than none.
+    let readiness = crate::reconcile::readiness(conn, seller_id, year, period_no)?;
+    if !readiness.is_ready() {
+        return Err(StoreError::Rejected(format!(
+            "the period is not ready to be filed: {}",
+            readiness.blockers().join("; ")
+        )));
+    }
+
+    let computed = readiness.report;
     let basis_hash = basis_hash(conn, &computed.basis)?;
 
     let transaction = conn.unchecked_transaction()?;

@@ -300,7 +300,12 @@ fn the_vat_return_is_read_from_the_ledger_and_then_prepared() {
     assert!(said.contains("5a"), "{said}");
     assert!(said.contains("5b"), "{said}");
     assert!(said.contains("5c"), "{said}");
-    assert!(said.contains("mapping nl-2026.1"), "{said}");
+    assert!(said.contains("fileable:    yes"), "{said}");
+    assert!(
+        said.contains("not checked: open items are not implemented yet"),
+        "{said}"
+    );
+    assert!(said.contains("mapping      nl-2026.1"), "{said}");
     assert!(
         !said.contains("prepared:"),
         "a preview must not claim to have written anything: {said}"

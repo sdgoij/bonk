@@ -29,6 +29,7 @@ pub mod ledger;
 pub mod migrations;
 pub mod permissions;
 pub mod posting;
+pub mod reconcile;
 pub mod repo;
 pub mod report;
 pub mod saved;
@@ -57,6 +58,7 @@ pub use posting::{
     output_vat_account, pending, post_document, post_inbound_document, post_outbound_document, preview_outbound_entry,
     revenue_account,
 };
+pub use reconcile::{Check, Readiness, readiness};
 pub use repo::{
     CustomerRecord, Direction, DocumentRecord, DocumentStatus, ImportSource, IssueRequest, IssueView, IssuedReference,
     ReceivedDocument, ReceivedLine, ReceivedSummary, SEARCH_LIMIT, SearchCounts, SearchHit, SearchPage, SearchRequest,

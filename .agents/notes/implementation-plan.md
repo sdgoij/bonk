@@ -1118,9 +1118,15 @@ VAT columns rather than a posting destination, and 5c is 5a minus 5b. The shippe
 mapping is asserted row by row by a golden test. Open limitations, recorded here
 rather than hidden: `AE` covers reverse-charged goods and services alike, so 4b is
 never produced and those purchases land in 4a; 1d (private use) is never produced;
-and the invoice-to-ledger reconciliation and the control-account check of §6.5 are
-not written yet, so "prepared" means "computed and stored", not "checked against
-every document". The CLI exposes the whole path: `ledger setup`, `post`, `chart`,
+and the control-account check of §6.5 has nothing to check against: open items do
+not exist, so it reports itself as not checked rather than as passed. The other
+two checks are in `store::reconcile` and block preparation: every document dated in
+the period must be posted, the VAT posted for each document must equal the VAT on
+it (with the self-assessed side added for reverse-charged purchases), and the trial
+balance up to the period end must net to zero. A check that cannot run is not a
+blocker — refusing to file because a future feature is missing would leave the
+books unfileable — so `bonk ledger vat-return` prints `fileable: yes` next to the
+box it could not check. The CLI exposes the whole path: `ledger setup`, `post`, `chart`,
 `trial-balance`, `profit-and-loss`, `balance-sheet`, `reverse`, and `vat-return`
 with `--prepare`.
 

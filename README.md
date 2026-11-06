@@ -250,8 +250,12 @@ The VAT return is a projection of the period's journal lines into the rubrieken
 of the Dutch form, not a set of numbers typed in. Preparing one stores the totals
 together with the entries they came from and a hash over both, so a filed figure
 can always be explained; preparing again supersedes the earlier return and keeps
-it. Two boxes are not produced yet: reverse-charged *goods* (4b) cannot be told
-apart from reverse-charged *services* (4a) in the archive.
+it. Preparing is refused while a check is red: every document dated in the period
+has to be posted, the VAT posted per document has to equal the VAT on that
+document, and the trial balance has to net to zero. The control-account check
+prints as *not checked* rather than as passed, because open items do not exist yet.
+One box is not produced: reverse-charged *goods* (4b) cannot be told apart from
+reverse-charged *services* (4a) in the archive.
 
 ### A demo archive to explore the window
 

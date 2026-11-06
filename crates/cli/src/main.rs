@@ -1756,15 +1756,20 @@ fn ledger(access: &Access, database: &Path, keystore: &Path, command: LedgerComm
                 "",
                 amount_text(report.payable_micros(), report.currency)?
             );
-            if !report.unmapped.is_empty() {
-                println!();
-                println!("not ready to file: {} line(s) have no rubriek", report.unmapped.len());
-                for line in &report.unmapped {
-                    println!("  {line}");
+            let ready = store::readiness(connection, owner, year, month)?;
+            println!();
+            if ready.is_ready() {
+                println!("fileable:    yes");
+            } else {
+                println!("fileable:    no");
+                for blocker in ready.blockers() {
+                    println!("  {blocker}");
                 }
             }
-            println!();
-            println!("mapping {}", store::vat::MAPPING_VERSION);
+            for reason in ready.unchecked() {
+                println!("not checked: {reason}");
+            }
+            println!("mapping      {}", store::vat::MAPPING_VERSION);
             Ok(())
         }
         LedgerCommand::Reverse {
