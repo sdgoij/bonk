@@ -107,6 +107,7 @@ pub fn post_outbound_document(
             now,
             posting_profile_id: PROFILE_ID,
             rule_version: RULE_VERSION,
+            reverses: None,
         },
     )
 }

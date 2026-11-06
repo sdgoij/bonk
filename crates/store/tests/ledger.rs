@@ -3,12 +3,12 @@
 //! postings and journals cannot be edited once they exist.
 
 use crux::{
-    AccountCode, AccountKind, Currency, DocumentId, Journal, LedgerEntry, LedgerLine, LocalDate, Money, SellerId,
+    AccountCode, AccountKind, Currency, DocumentId, Journal, LedgerEntry, LedgerLine, LocalDate, Money, SellerId, Side,
 };
 use store::ledger::{
-    Account, PeriodStatus, PostingRequest, PostingSource, UNCLASSIFIED_ACCOUNT, content_hash, ensure_period,
-    insert_account, list_accounts, list_periods, load_account, load_period, lock_period, post_entry,
-    seed_starter_chart, starter_chart, update_account,
+    Account, OpeningBalance, PeriodStatus, PostingRequest, PostingSource, UNCLASSIFIED_ACCOUNT, content_hash,
+    ensure_period, insert_account, list_accounts, list_periods, load_account, load_entry, load_period, lock_period,
+    post_entry, post_opening_balances, reversal_of, reverse_entry, seed_starter_chart, starter_chart, update_account,
 };
 use store::{Database, KdfParams, KeyStore, SellerRecord, StoreError, insert_seller};
 use tempfile::TempDir;
@@ -75,6 +75,7 @@ fn post(
             now: NOW,
             posting_profile_id: "nl-sme",
             rule_version: "1",
+            reverses: None,
         },
     )
     .unwrap()
@@ -362,6 +363,7 @@ fn a_locked_period_refuses_a_posting() {
             now: NOW,
             posting_profile_id: "nl-sme",
             rule_version: "1",
+            reverses: None,
         },
     )
     .unwrap_err();
@@ -491,9 +493,284 @@ fn an_archived_account_takes_no_postings() {
             now: NOW,
             posting_profile_id: "nl-sme",
             rule_version: "1",
+            reverses: None,
         },
     )
     .unwrap_err();
     assert!(matches!(error, StoreError::Rejected(_)), "{error}");
     assert!(error.to_string().contains("archived"), "{error}");
+}
+
+#[test]
+fn a_reversal_names_the_entry_it_undoes_and_nets_to_zero() {
+    let (_dir, database, seller) = database();
+    seed_starter_chart(database.connection(), NOW).unwrap();
+
+    let original = post(
+        &database,
+        seller,
+        &domestic_sale("Invoice 2026-0001"),
+        "2026-01-15",
+        PostingSource::Manual,
+    );
+    let reversal = reverse_entry(
+        database.connection(),
+        original.id,
+        "wrong customer",
+        date("2026-02-03"),
+        "ada",
+        NOW,
+    )
+    .unwrap();
+
+    assert!(reversal.created);
+    assert_eq!(reversal.number, "2026-0002", "the reversal is a new entry, not an edit");
+    assert_eq!(
+        reversal_of(database.connection(), original.id).unwrap().as_deref(),
+        Some("2026-0002")
+    );
+
+    let stored = load_entry(database.connection(), reversal.id).unwrap().unwrap();
+    assert_eq!(stored.reverses, Some(original.id));
+    assert_eq!(stored.journal, Journal::Sales);
+    assert_eq!(
+        stored.entry_date.to_iso_string(),
+        "2026-02-03",
+        "dated by the caller, in an open period"
+    );
+    assert!(stored.entry.description().contains("Tegenboeking 2026-0001"));
+    assert!(stored.entry.description().contains("wrong customer"));
+    assert_eq!(
+        stored.posting_profile_id,
+        load_entry(database.connection(), original.id)
+            .unwrap()
+            .unwrap()
+            .posting_profile_id,
+        "a reversal is produced by the rules that produced the original"
+    );
+
+    // The pair cancels per account.
+    let net: i64 = database
+        .connection()
+        .query_row(
+            "SELECT sum(CASE side WHEN 'debit' THEN amount_micros ELSE -amount_micros END)
+             FROM journal_line WHERE entry_id IN (?1, ?2)",
+            rusqlite::params![original.id.to_string(), reversal.id.to_string()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(net, 0);
+}
+
+#[test]
+fn an_entry_is_reversed_at_most_once() {
+    let (_dir, database, seller) = database();
+    seed_starter_chart(database.connection(), NOW).unwrap();
+
+    let original = post(
+        &database,
+        seller,
+        &domestic_sale("Invoice 2026-0001"),
+        "2026-01-15",
+        PostingSource::Manual,
+    );
+    reverse_entry(
+        database.connection(),
+        original.id,
+        "typo",
+        date("2026-02-03"),
+        "ada",
+        NOW,
+    )
+    .unwrap();
+
+    let error = reverse_entry(
+        database.connection(),
+        original.id,
+        "again",
+        date("2026-02-04"),
+        "ada",
+        NOW,
+    )
+    .unwrap_err();
+    assert!(matches!(error, StoreError::Rejected(_)), "{error}");
+    assert!(error.to_string().contains("already reversed"), "{error}");
+
+    let entries: i64 = database
+        .connection()
+        .query_row("SELECT count(*) FROM journal_entry", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(entries, 2, "the original and its one reversal");
+}
+
+#[test]
+fn a_reversal_needs_a_reason() {
+    let (_dir, database, seller) = database();
+    seed_starter_chart(database.connection(), NOW).unwrap();
+    let original = post(
+        &database,
+        seller,
+        &domestic_sale("Invoice 2026-0001"),
+        "2026-01-15",
+        PostingSource::Manual,
+    );
+
+    let error = reverse_entry(
+        database.connection(),
+        original.id,
+        "   ",
+        date("2026-02-03"),
+        "ada",
+        NOW,
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("needs a reason"), "{error}");
+}
+
+#[test]
+fn a_reversal_into_a_locked_period_is_refused() {
+    let (_dir, database, seller) = database();
+    seed_starter_chart(database.connection(), NOW).unwrap();
+    let original = post(
+        &database,
+        seller,
+        &domestic_sale("Invoice 2026-0001"),
+        "2026-01-15",
+        PostingSource::Manual,
+    );
+
+    let period = ensure_period(database.connection(), seller, date("2026-02-10")).unwrap();
+    lock_period(database.connection(), period.id, "ada", NOW).unwrap();
+
+    let error = reverse_entry(
+        database.connection(),
+        original.id,
+        "wrong period",
+        date("2026-02-10"),
+        "ada",
+        NOW,
+    )
+    .unwrap_err();
+    assert!(matches!(error, StoreError::Rejected(_)), "{error}");
+    assert_eq!(
+        reversal_of(database.connection(), original.id).unwrap(),
+        None,
+        "a refused reversal leaves nothing behind"
+    );
+}
+
+#[test]
+fn opening_balances_post_into_the_opening_journal() {
+    let (_dir, database, seller) = database();
+    seed_starter_chart(database.connection(), NOW).unwrap();
+
+    let posted = post_opening_balances(
+        database.connection(),
+        seller,
+        date("2026-01-01"),
+        &[
+            OpeningBalance {
+                account: code("1100"),
+                side: Side::Debit,
+                amount: euros(5_000),
+            },
+            OpeningBalance {
+                account: code("0500"),
+                side: Side::Credit,
+                amount: euros(5_000),
+            },
+        ],
+        "ada",
+        NOW,
+    )
+    .unwrap();
+
+    let stored = load_entry(database.connection(), posted.id).unwrap().unwrap();
+    assert_eq!(stored.journal, Journal::Opening);
+    assert_eq!(stored.entry.description(), "Beginbalans 2026");
+    assert_eq!(stored.number, "2026-0001");
+    assert_eq!(stored.entry.debit_total().unwrap(), euros(5_000));
+}
+
+#[test]
+fn opening_balances_must_balance_and_stay_on_the_balance_sheet() {
+    let (_dir, database, seller) = database();
+    seed_starter_chart(database.connection(), NOW).unwrap();
+
+    let unbalanced = post_opening_balances(
+        database.connection(),
+        seller,
+        date("2026-01-01"),
+        &[
+            OpeningBalance {
+                account: code("1100"),
+                side: Side::Debit,
+                amount: euros(5_000),
+            },
+            OpeningBalance {
+                account: code("0500"),
+                side: Side::Credit,
+                amount: euros(4_000),
+            },
+        ],
+        "ada",
+        NOW,
+    )
+    .unwrap_err();
+    assert!(
+        unbalanced.to_string().contains("do not balance"),
+        "unexpected error: {unbalanced}"
+    );
+
+    let profit_and_loss = post_opening_balances(
+        database.connection(),
+        seller,
+        date("2026-01-01"),
+        &[
+            OpeningBalance {
+                account: code("1100"),
+                side: Side::Debit,
+                amount: euros(5_000),
+            },
+            OpeningBalance {
+                account: code("8000"),
+                side: Side::Credit,
+                amount: euros(5_000),
+            },
+        ],
+        "ada",
+        NOW,
+    )
+    .unwrap_err();
+    assert!(
+        profit_and_loss.to_string().contains("balance sheet"),
+        "unexpected error: {profit_and_loss}"
+    );
+}
+
+#[test]
+fn opening_balances_are_posted_once() {
+    let (_dir, database, seller) = database();
+    seed_starter_chart(database.connection(), NOW).unwrap();
+
+    let balances = vec![
+        OpeningBalance {
+            account: code("1100"),
+            side: Side::Debit,
+            amount: euros(5_000),
+        },
+        OpeningBalance {
+            account: code("0500"),
+            side: Side::Credit,
+            amount: euros(5_000),
+        },
+    ];
+    post_opening_balances(database.connection(), seller, date("2026-01-01"), &balances, "ada", NOW).unwrap();
+
+    let again =
+        post_opening_balances(database.connection(), seller, date("2026-01-01"), &balances, "ada", NOW).unwrap_err();
+    assert!(
+        again.to_string().contains("already posted"),
+        "unexpected error: {again}"
+    );
 }

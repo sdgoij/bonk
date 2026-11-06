@@ -11,7 +11,8 @@
 //!   because there is none in the schema either.
 
 use crux::{
-    AccountCode, AccountKind, DocumentId, FiscalPeriodId, Journal, JournalEntryId, LedgerEntry, LocalDate, SellerId,
+    AccountCode, AccountKind, DocumentId, FiscalPeriodId, Journal, JournalEntryId, LedgerEntry, LedgerLine, LocalDate,
+    SellerId,
 };
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::json;
@@ -462,6 +463,8 @@ pub struct PostingRequest<'a> {
     pub posting_profile_id: &'a str,
     /// The version of that rule set.
     pub rule_version: &'a str,
+    /// The entry this one undoes, when it is a reversal.
+    pub reverses: Option<JournalEntryId>,
 }
 
 /// A written posting.
@@ -526,7 +529,7 @@ pub fn post_entry(conn: &Connection, request: PostingRequest<'_>) -> Result<Post
              (id, journal_code, period_id, number, entry_date_local, description,
               source_kind, source_id, reverses_entry_id, posting_profile_id, rule_version,
               currency, created_at, created_by, content_hash)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, NULL, ?9, ?10, ?11, ?12, ?13, ?14)",
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
         params![
             id.to_string(),
             request.entry.journal().code(),
@@ -536,6 +539,7 @@ pub fn post_entry(conn: &Connection, request: PostingRequest<'_>) -> Result<Post
             request.entry.description(),
             request.source.kind(),
             request.source.id(),
+            request.reverses.map(|entry| entry.to_string()),
             request.posting_profile_id,
             request.rule_version,
             request.entry.currency().as_str(),
@@ -578,6 +582,7 @@ pub fn post_entry(conn: &Connection, request: PostingRequest<'_>) -> Result<Post
             "period": format!("{}-{:02}", period.year, period.period_no),
             "source_kind": request.source.kind(),
             "source_id": request.source.id(),
+            "reverses": request.reverses.map(|entry| entry.to_string()),
             "content_hash": content_hash,
         }),
     )?;
@@ -594,12 +599,278 @@ pub fn post_entry(conn: &Connection, request: PostingRequest<'_>) -> Result<Post
     })
 }
 
+/// A posting as it is stored, with the context around it.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct StoredEntry {
+    /// Identifier.
+    pub id: JournalEntryId,
+    /// Rendered per journal and year.
+    pub number: String,
+    /// Journal it belongs to.
+    pub journal: Journal,
+    /// Business date.
+    pub entry_date: LocalDate,
+    /// The entry itself.
+    pub entry: LedgerEntry,
+    /// Hash recorded at posting time.
+    pub content_hash: String,
+    /// The entry this one reverses, when it is a reversal.
+    pub reverses: Option<JournalEntryId>,
+    /// Who posted it.
+    pub created_by: String,
+    /// Which set of posting rules produced it.
+    pub posting_profile_id: String,
+    /// Version of that rule set.
+    pub rule_version: String,
+}
+
+/// Reads one entry back, lines included.
+pub fn load_entry(conn: &Connection, id: JournalEntryId) -> Result<Option<StoredEntry>, StoreError> {
+    let stored = {
+        let mut statement = conn.prepare(
+            "SELECT number, journal_code, entry_date_local, description, currency,
+                    content_hash, reverses_entry_id, created_by, posting_profile_id, rule_version
+             FROM journal_entry WHERE id = ?1",
+        )?;
+        let mut rows = statement.query([id.to_string()])?;
+        let Some(row) = rows.next()? else {
+            return Ok(None);
+        };
+        (
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, String>(3)?,
+            row.get::<_, String>(4)?,
+            row.get::<_, String>(5)?,
+            row.get::<_, Option<String>>(6)?,
+            row.get::<_, String>(7)?,
+            row.get::<_, String>(8)?,
+            row.get::<_, String>(9)?,
+        )
+    };
+
+    let (
+        number,
+        journal_code,
+        entry_date_raw,
+        description,
+        currency_raw,
+        content_hash,
+        reverses_raw,
+        created_by,
+        posting_profile_id,
+        rule_version,
+    ) = stored;
+
+    let journal = Journal::parse(&journal_code).map_err(|error| StoreError::Data(error.to_string()))?;
+    let entry_date = LocalDate::parse_iso(&entry_date_raw).map_err(|error| StoreError::Data(error.to_string()))?;
+    let currency = crux::Currency::parse(&currency_raw).map_err(|error| StoreError::Data(error.to_string()))?;
+
+    let mut lines_statement = conn
+        .prepare("SELECT account_code, side, amount_micros FROM journal_line WHERE entry_id = ?1 ORDER BY line_no")?;
+    let mut line_rows = lines_statement.query([id.to_string()])?;
+    let mut lines = Vec::new();
+    while let Some(row) = line_rows.next()? {
+        let account: String = row.get(0)?;
+        let side: String = row.get(1)?;
+        let micros: i64 = row.get(2)?;
+        lines.push(
+            LedgerLine::new(
+                AccountCode::parse(&account).map_err(|error| StoreError::Data(error.to_string()))?,
+                crux::Side::parse(&side).map_err(|error| StoreError::Data(error.to_string()))?,
+                crux::Money::from_micros(micros, currency),
+            )
+            .map_err(|error| StoreError::Data(error.to_string()))?,
+        );
+    }
+
+    let entry = LedgerEntry::new(journal, description, lines)
+        .map_err(|error| StoreError::Data(format!("stored entry {id} cannot be read back: {error}")))?;
+
+    Ok(Some(StoredEntry {
+        id,
+        number,
+        journal,
+        entry_date,
+        entry,
+        content_hash,
+        reverses: reverses_raw
+            .map(|value| JournalEntryId::parse_str(&value))
+            .transpose()
+            .map_err(|error| StoreError::Data(error.to_string()))?,
+        created_by,
+        posting_profile_id,
+        rule_version,
+    }))
+}
+
+/// The entry that reverses `entry_id`, in the same journal.
+///
+/// A correction is never an edit: the original stays where it is, the reversal
+/// names it, and together they net to zero. The reversal is dated by the caller,
+/// because the month the mistake was made in may already be locked and the
+/// correction belongs in the open period.
+///
+/// The reason is required and travels in the description, which is what an
+/// accountant reading the journal sees; the link to the original is recorded in
+/// the entry and in the audit event.
+pub fn reverse_entry(
+    conn: &Connection,
+    entry_id: JournalEntryId,
+    reason: &str,
+    entry_date: LocalDate,
+    actor: &str,
+    now: &str,
+) -> Result<PostedEntry, StoreError> {
+    if reason.trim().is_empty() {
+        return Err(StoreError::Rejected("a reversal needs a reason".to_owned()));
+    }
+    let stored = load_entry(conn, entry_id)?.ok_or_else(|| StoreError::NotFound(format!("entry {entry_id}")))?;
+
+    if let Some(existing) = reversal_of(conn, entry_id)? {
+        return Err(StoreError::Rejected(format!(
+            "entry {} is already reversed by {}",
+            stored.number, existing
+        )));
+    }
+
+    let description = format!("Tegenboeking {} ({})", stored.number, reason.trim());
+    let entry = stored
+        .entry
+        .reversed(description)
+        .map_err(|error| StoreError::Data(error.to_string()))?;
+
+    post_entry(
+        conn,
+        PostingRequest {
+            entry: &entry,
+            seller_id: seller_of(conn, entry_id)?,
+            entry_date,
+            source: PostingSource::Manual,
+            actor,
+            now,
+            posting_profile_id: &stored.posting_profile_id,
+            rule_version: &stored.rule_version,
+            reverses: Some(entry_id),
+        },
+    )
+}
+
+/// The entry that already reverses `entry_id`, if one does.
+pub fn reversal_of(conn: &Connection, entry_id: JournalEntryId) -> Result<Option<String>, StoreError> {
+    let mut statement = conn.prepare("SELECT number FROM journal_entry WHERE reverses_entry_id = ?1")?;
+    let mut rows = statement.query([entry_id.to_string()])?;
+    match rows.next()? {
+        Some(row) => Ok(Some(row.get(0)?)),
+        None => Ok(None),
+    }
+}
+
+/// The seller whose books an entry sits in, via its period.
+fn seller_of(conn: &Connection, entry_id: JournalEntryId) -> Result<SellerId, StoreError> {
+    let raw: String = conn.query_row(
+        "SELECT p.seller_id FROM journal_entry e JOIN fiscal_period p ON p.id = e.period_id WHERE e.id = ?1",
+        [entry_id.to_string()],
+        |row| row.get(0),
+    )?;
+    SellerId::parse_str(&raw).map_err(|error| StoreError::Data(error.to_string()))
+}
+
+/// One line of an opening balance: where the business starts.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct OpeningBalance {
+    /// The balance-sheet account.
+    pub account: AccountCode,
+    /// Which side the balance sits on.
+    pub side: crux::Side,
+    /// Positive amount.
+    pub amount: crux::Money,
+}
+
+/// Posts the opening balances of a set of books.
+///
+/// Only balance-sheet accounts may carry one: a revenue or expense balance at a
+/// start date means the P&L of a year nobody posted, which is a migration mistake
+/// rather than a starting position. The set must balance, and it is posted once —
+/// later years inherit the closing position instead of restating it.
+pub fn post_opening_balances(
+    conn: &Connection,
+    seller_id: SellerId,
+    date: LocalDate,
+    balances: &[OpeningBalance],
+    actor: &str,
+    now: &str,
+) -> Result<PostedEntry, StoreError> {
+    let existing: i64 = conn.query_row(
+        "SELECT count(*) FROM journal_entry WHERE source_kind = 'opening'",
+        [],
+        |row| row.get(0),
+    )?;
+    if existing > 0 {
+        return Err(StoreError::Rejected(
+            "opening balances are already posted; later years continue from the closing position".to_owned(),
+        ));
+    }
+
+    for balance in balances {
+        let account = load_account(conn, &balance.account)?
+            .ok_or_else(|| StoreError::Rejected(format!("account {} does not exist", balance.account)))?;
+        if !account.kind.is_balance_sheet() {
+            return Err(StoreError::Rejected(format!(
+                "account {} is a {} account; an opening balance belongs on the balance sheet",
+                balance.account,
+                account.kind.as_str()
+            )));
+        }
+    }
+
+    let lines = balances
+        .iter()
+        .map(|balance| {
+            LedgerLine::new(balance.account.clone(), balance.side, balance.amount)
+                .map_err(|error| StoreError::Data(error.to_string()))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let entry = LedgerEntry::new(
+        Journal::Opening,
+        format!("Beginbalans {}", date.as_date().year()),
+        lines,
+    )
+    .map_err(|error| match error {
+        crux::DomainError::EntryUnbalanced {
+            debit_micros,
+            credit_micros,
+        } => StoreError::Rejected(format!(
+            "the opening balances do not balance: {debit_micros} debited, {credit_micros} credited"
+        )),
+        other => StoreError::Data(other.to_string()),
+    })?;
+
+    post_entry(
+        conn,
+        PostingRequest {
+            entry: &entry,
+            seller_id,
+            entry_date: date,
+            source: PostingSource::Opening,
+            actor,
+            now,
+            posting_profile_id: "nl-sme",
+            rule_version: "1",
+            reverses: None,
+        },
+    )
+}
+
 /// Recomputes the hash a posting of this entry would carry.
 ///
 /// Exposed so a verifier can re-derive it from the stored facts and compare, the
 /// same way invoice artefacts are re-derived. Everything that decides what the
-/// entry means is in the input; everything else (ids, timestamps, actor) is
-/// context and stays out, so the same fact posted twice hashes the same.
+/// entry means is in the input; everything else (ids, timestamps, actor, and the
+/// link to a reversed entry, which the audit event carries) is context and stays
+/// out, so the same fact posted twice hashes the same.
 pub fn content_hash(
     entry: &LedgerEntry,
     number: &str,
