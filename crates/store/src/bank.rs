@@ -377,6 +377,8 @@ pub enum MatchMethod {
     ExactReference,
     /// The amount agreed and the invoice was not named.
     ExactAmount,
+    /// One payment settled several invoices, each named in the remittance.
+    Group,
     /// A human said so.
     Manual,
 }
@@ -387,6 +389,7 @@ impl MatchMethod {
         match self {
             Self::ExactReference => "exact_ref",
             Self::ExactAmount => "exact_amount",
+            Self::Group => "group",
             Self::Manual => "manual",
         }
     }
@@ -482,6 +485,86 @@ pub fn proposals(conn: &Connection, seller_id: SellerId, transaction_id: &str) -
     Ok(proposals)
 }
 
+/// A set of open items that one payment settles together.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct GroupProposal {
+    /// The items, in document-number order.
+    pub open_item_ids: Vec<String>,
+    /// Their document numbers, for a person.
+    pub numbers: Vec<String>,
+    /// What the payment would settle.
+    pub applies: Money,
+}
+
+/// How many named items a group search looks at.
+///
+/// The combinations grow cubically with the number of candidates, and a list of
+/// hundreds of proposals is worse for a person than the four that fit. The cap is
+/// a guard on the search, not a rule about what a payment may settle: a person can
+/// still match any set by hand.
+const MAX_GROUP_CANDIDATES: usize = 12;
+
+/// Groups of two or three open items that one payment settles together.
+///
+/// A customer paying three invoices with one transfer sends one bank line, so the
+/// matching needs to see the three at once. Only items the remittance names are
+/// considered, and only an exact sum: "these two are four cents short" is a
+/// question a person answers better than a rule that rounds.
+pub fn group_proposals(
+    conn: &Connection,
+    seller_id: SellerId,
+    transaction_id: &str,
+) -> Result<Vec<GroupProposal>, StoreError> {
+    let transaction = load_transaction(conn, seller_id, transaction_id)?;
+    if transaction.status != "new" && transaction.status != "partially_matched" {
+        return Ok(Vec::new());
+    }
+    let magnitude = transaction.amount_micros.abs();
+    if magnitude == 0 {
+        return Ok(Vec::new());
+    }
+
+    let mut candidates: Vec<crate::open_items::OpenItem> =
+        crate::open_items::list(conn, seller_id, transaction.kind())?
+            .into_iter()
+            .filter(|item| item.is_open() && item.outstanding.currency() == transaction.currency)
+            .filter(|item| names_the_item(transaction.remittance_info.as_deref(), &item.number))
+            .collect();
+    candidates.sort_by(|left, right| left.number.cmp(&right.number));
+    candidates.truncate(MAX_GROUP_CANDIDATES);
+
+    let mut groups = Vec::new();
+    for first in 0..candidates.len() {
+        for second in (first + 1)..candidates.len() {
+            let pair = outstanding(&candidates[first]) + outstanding(&candidates[second]);
+            if pair == magnitude {
+                groups.push(as_group(&candidates, &[first, second], transaction.currency));
+                // A third item would take the sum past the payment.
+                continue;
+            }
+            for third in (second + 1)..candidates.len() {
+                if pair + outstanding(&candidates[third]) == magnitude {
+                    groups.push(as_group(&candidates, &[first, second, third], transaction.currency));
+                }
+            }
+        }
+    }
+    Ok(groups)
+}
+
+fn outstanding(item: &crate::open_items::OpenItem) -> i64 {
+    item.outstanding.micros().abs()
+}
+
+fn as_group(items: &[crate::open_items::OpenItem], picks: &[usize], currency: Currency) -> GroupProposal {
+    let total: i64 = picks.iter().map(|index| outstanding(&items[*index])).sum();
+    GroupProposal {
+        open_item_ids: picks.iter().map(|index| items[*index].id.clone()).collect(),
+        numbers: picks.iter().map(|index| items[*index].number.clone()).collect(),
+        applies: Money::from_micros(total, currency),
+    }
+}
+
 /// Matches every transaction that has exactly one strong candidate.
 ///
 /// Only a reference-and-amount match counts as strong: an amount that fits two
@@ -516,12 +599,162 @@ pub fn auto_match(
     Ok(reports)
 }
 
-/// Settles an open item with a bank transaction, and posts the payment.
+/// Settles a transaction against one or more open items, and posts the payment.
 ///
-/// The payment posts in the same transaction as the allocation: a matched
-/// transaction whose entry is missing would leave the bank balance in the ledger
-/// disagreeing with the statement. The entry is keyed by the transaction, so
-/// matching twice cannot pay twice.
+/// One transfer can pay several invoices, and then the books should say so once:
+/// one bank line, one entry for the total, and an allocation per invoice naming
+/// its share. An entry per invoice would pretend the bank moved the money several
+/// times, and between those entries the bank account would disagree with the
+/// statement it came from.
+///
+/// The entry, the allocations, the status change, and the audit event are one
+/// transaction. A group that half-wrote would leave invoices settled that no
+/// payment covers. The entry is keyed by the transaction, so matching twice
+/// cannot pay twice.
+pub fn allocate_group(
+    conn: &Connection,
+    seller_id: SellerId,
+    transaction_id: &str,
+    open_item_ids: &[String],
+    method: MatchMethod,
+    actor: &str,
+    now: &str,
+) -> Result<Vec<MatchReport>, StoreError> {
+    if open_item_ids.is_empty() {
+        return Err(StoreError::Rejected("a match needs an open item".to_owned()));
+    }
+    for (index, id) in open_item_ids.iter().enumerate() {
+        if open_item_ids[..index].contains(id) {
+            return Err(StoreError::Rejected(format!("{id} is named twice in the same match")));
+        }
+    }
+
+    let transaction = load_transaction(conn, seller_id, transaction_id)?;
+    let items = crate::open_items::list(conn, seller_id, transaction.kind())?;
+
+    // Each item takes what is still open on it, capped by what is left of the
+    // payment, so a group can never settle more than arrived.
+    let mut remaining = transaction.amount_micros.abs();
+    let mut shares: Vec<(&crate::open_items::OpenItem, i64)> = Vec::with_capacity(open_item_ids.len());
+    for id in open_item_ids {
+        let item = items
+            .iter()
+            .find(|item| &item.id == id)
+            .ok_or_else(|| StoreError::NotFound(format!("open item {id}")))?;
+        if !item.is_open() {
+            return Err(StoreError::Rejected(format!("{} is already settled", item.number)));
+        }
+        if item.outstanding.currency() != transaction.currency {
+            return Err(StoreError::Rejected(format!(
+                "{} is in {} and the payment is in {}; a currency difference is a separate entry",
+                item.number,
+                item.outstanding.currency(),
+                transaction.currency
+            )));
+        }
+        let share = remaining.min(item.outstanding.micros().abs());
+        if share == 0 {
+            return Err(StoreError::Rejected(format!(
+                "nothing left of the payment to settle {}",
+                item.number
+            )));
+        }
+        remaining -= share;
+        shares.push((item, share));
+    }
+
+    let total: i64 = shares.iter().map(|(_, share)| *share).sum();
+    let currency = transaction.currency;
+    let names: Vec<&str> = shares.iter().map(|(item, _)| item.number.as_str()).collect();
+
+    let database = conn.unchecked_transaction()?;
+    let posted = post_settlement(
+        &database,
+        &transaction,
+        &names,
+        Money::from_micros(total, currency),
+        actor,
+        now,
+    )?;
+
+    let mut reports = Vec::with_capacity(shares.len());
+    for (item, share) in &shares {
+        let allocation_id = crux::DocumentId::new().to_string();
+        database.execute(
+            "INSERT INTO allocation
+                 (id, transaction_id, open_item_id, entry_id, amount_micros, fx_difference_micros,
+                  matched_at, matched_by, match_method, reversed)
+             VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6, ?7, ?8, 0)",
+            params![
+                allocation_id,
+                transaction_id,
+                item.id,
+                posted.id.to_string(),
+                -share,
+                now,
+                actor,
+                method.as_str(),
+            ],
+        )?;
+        reports.push(MatchReport {
+            transaction_id: transaction_id.to_owned(),
+            open_item_id: item.id.clone(),
+            number: item.number.clone(),
+            settled: Money::from_micros(-share, currency),
+            entry_id: posted.id,
+            allocation_id,
+        });
+    }
+
+    // Matched means the payment is used up: a transaction with money left over
+    // still needs a person, because the remainder is either another invoice or an
+    // account it belongs on.
+    let still_open = crate::open_items::list(&database, seller_id, transaction.kind())?
+        .into_iter()
+        .filter(|candidate| open_item_ids.contains(&candidate.id))
+        .any(|candidate| candidate.is_open());
+    let allocated: i64 = database.query_row(
+        "SELECT COALESCE(sum(amount_micros), 0) FROM allocation WHERE transaction_id = ?1",
+        [transaction_id],
+        |row| row.get(0),
+    )?;
+    let settled_in_full = allocated.abs() >= transaction.amount_micros.abs();
+    database.execute(
+        "UPDATE bank_transaction SET status = ?2 WHERE id = ?1",
+        params![
+            transaction_id,
+            if settled_in_full && !still_open {
+                "matched"
+            } else {
+                "partially_matched"
+            }
+        ],
+    )?;
+
+    audit::append(
+        &database,
+        now,
+        actor,
+        "bank_transaction_matched",
+        "bank_transaction",
+        transaction_id,
+        serde_json::json!({
+            "open_items": open_item_ids,
+            "numbers": names,
+            "settled_micros": -total,
+            "method": method.as_str(),
+            "entry": posted.id.to_string(),
+        }),
+    )?;
+    database.commit()?;
+
+    Ok(reports)
+}
+
+/// Settles a transaction against one open item.
+///
+/// The common case of [`allocate_group`], kept because most payments settle one
+/// invoice and a caller should not have to build a list for it.
 pub fn allocate(
     conn: &Connection,
     seller_id: SellerId,
@@ -531,89 +764,18 @@ pub fn allocate(
     actor: &str,
     now: &str,
 ) -> Result<MatchReport, StoreError> {
-    let transaction = load_transaction(conn, seller_id, transaction_id)?;
-    let item = crate::open_items::list(conn, seller_id, transaction.kind())?
-        .into_iter()
-        .find(|item| item.id == open_item_id)
-        .ok_or_else(|| StoreError::NotFound(format!("open item {open_item_id}")))?;
-
-    if !item.is_open() {
-        return Err(StoreError::Rejected(format!("{} is already settled", item.number)));
-    }
-    if item.outstanding.currency() != transaction.currency {
-        return Err(StoreError::Rejected(format!(
-            "{} is in {} and the payment is in {}; a currency difference is a separate entry",
-            item.number,
-            item.outstanding.currency(),
-            transaction.currency
-        )));
-    }
-
-    let magnitude = transaction.amount_micros.abs().min(item.outstanding.micros().abs());
-    if magnitude == 0 {
-        return Err(StoreError::Rejected(format!(
-            "nothing to settle between the payment and {}",
-            item.number
-        )));
-    }
-    let currency = transaction.currency;
-    let amount = Money::from_micros(-magnitude, currency);
-
-    let posted = post_settlement(conn, &transaction, &item, amount, actor, now)?;
-
-    conn.execute(
-        "INSERT INTO allocation
-             (id, transaction_id, open_item_id, entry_id, amount_micros, fx_difference_micros,
-              matched_at, matched_by, match_method, reversed)
-         VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6, ?7, ?8, 0)",
-        params![
-            crux::DocumentId::new().to_string(),
-            transaction_id,
-            open_item_id,
-            posted.id.to_string(),
-            amount.micros(),
-            now,
-            actor,
-            method.as_str(),
-        ],
-    )?;
-    let allocation_id: String = conn.query_row("SELECT id FROM allocation ORDER BY rowid DESC LIMIT 1", [], |row| {
-        row.get(0)
-    })?;
-
-    let still_open = crate::open_items::list(conn, seller_id, transaction.kind())?
-        .into_iter()
-        .find(|candidate| candidate.id == open_item_id)
-        .is_some_and(|candidate| candidate.is_open());
-    conn.execute(
-        "UPDATE bank_transaction SET status = ?2 WHERE id = ?1",
-        params![transaction_id, if still_open { "partially_matched" } else { "matched" }],
-    )?;
-
-    audit::append(
+    let mut reports = allocate_group(
         conn,
-        now,
-        actor,
-        "bank_transaction_matched",
-        "bank_transaction",
+        seller_id,
         transaction_id,
-        serde_json::json!({
-            "open_item": open_item_id,
-            "number": item.number,
-            "settled_micros": amount.micros(),
-            "method": method.as_str(),
-            "entry": posted.id.to_string(),
-        }),
+        &[open_item_id.to_owned()],
+        method,
+        actor,
+        now,
     )?;
-
-    Ok(MatchReport {
-        transaction_id: transaction_id.to_owned(),
-        open_item_id: open_item_id.to_owned(),
-        number: item.number,
-        settled: amount,
-        entry_id: posted.id,
-        allocation_id,
-    })
+    reports
+        .pop()
+        .ok_or_else(|| StoreError::Rejected("the match wrote no allocation".to_owned()))
 }
 
 /// Undoes a match by appending its opposite.
@@ -684,10 +846,15 @@ pub fn unmatch(
 
 /// Posts the payment: money in moves bank up and debtors down, and the reverse
 /// for money out.
+///
+/// It runs inside the caller's transaction, so an allocation that fails takes the
+/// payment with it. The description names the invoices the payment settles,
+/// because on the bank statement the entry is one line and a reader has to be
+/// able to see why.
 fn post_settlement(
     conn: &Connection,
     transaction: &LoadedTransaction,
-    item: &crate::open_items::OpenItem,
+    numbers: &[&str],
     amount: Money,
     actor: &str,
     now: &str,
@@ -706,10 +873,10 @@ fn post_settlement(
         ]
     };
 
-    let entry =
-        crux::LedgerEntry::new(crux::Journal::Bank, format!("Betaling {}", item.number), lines).map_err(domain)?;
+    let description = format!("Betaling {}", numbers.join(", "));
+    let entry = crux::LedgerEntry::new(crux::Journal::Bank, description, lines).map_err(domain)?;
 
-    crate::ledger::post_entry(
+    crate::ledger::post_entry_in(
         conn,
         crate::ledger::PostingRequest {
             entry: &entry,
@@ -797,7 +964,8 @@ fn rank(method: MatchMethod) -> u8 {
     match method {
         MatchMethod::ExactReference => 0,
         MatchMethod::ExactAmount => 1,
-        MatchMethod::Manual => 2,
+        MatchMethod::Group => 2,
+        MatchMethod::Manual => 3,
     }
 }
 

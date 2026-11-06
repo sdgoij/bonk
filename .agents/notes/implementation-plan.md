@@ -1284,9 +1284,33 @@ walks that path so the CAMT behaviour is not the only one covered.
 
 A two-digit year is read as `20xx`. That is documented in the module rather than
 configured: MT940 predates the four-digit year, and a pre-2000 statement is not
-something the ledger should silently accept. Still open in A4: CSV profiles (the
-profile file format needs deciding), group matching, rule-based classification,
-and the keyboard-first queue.
+something the ledger should silently accept.
+
+**Status, 2026-11-06 (one payment, several invoices).** Matching no longer assumes a
+payment and an invoice are one to one. `store::allocate_group` settles a whole set
+in one transaction: it writes **one** entry for the total and an allocation per
+invoice naming its share. The earlier shape — a settlement entry per allocation —
+could not express this at all, because posting is idempotent per source fact, so a
+second allocation for the same transaction would have reused the first entry and
+left the bank under-posted. `allocate` is now the one-item case of the group and
+behaves as it did, except in the transaction brackets: the entry, the allocations,
+the status, and the audit event are now what the doc comment always claimed, one
+transaction, because `post_settlement` runs through `post_entry_in` instead of
+committing behind the caller's back.
+
+Group discovery is `store::group_proposals`: pairs and triples of open items the
+remittance names whose outstanding amounts add up to the payment exactly, capped at
+twelve candidates so the cubic search stays small. A near miss is not proposed; the
+existing single-item proposals still describe it as "part of it". A payment with
+money left over after allocation is now `partially_matched` rather than `matched`,
+which is what the design note always said — the remainder is another invoice or an
+account it belongs on, and either way it is a person's decision. `bank match` takes
+`--item` repeatedly and reports the total, and `bank propose` lists groups under the
+singles. `open-items` and `bank transactions` now print the identifier their
+commands take; the queue was unactionable without it.
+
+Still open in A4: CSV profiles (the profile file format needs deciding), rule-based
+classification, and the keyboard-first queue.
 
 ---
 

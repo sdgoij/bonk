@@ -7,8 +7,8 @@ use crux::{
     LocalDate, Money, Party, Quantity, SellerId, TaxTreatment, UnitCode, VatRate,
 };
 use store::bank::{
-    BankAccount, MatchMethod, ParsedStatement, ParsedTransaction, allocate, auto_match, import_statement,
-    insert_bank_account, proposals, unmatch,
+    BankAccount, MatchMethod, ParsedStatement, ParsedTransaction, allocate, allocate_group, auto_match,
+    group_proposals, import_statement, insert_bank_account, proposals, unmatch,
 };
 use store::open_items::{OpenItemKind, list};
 use store::{
@@ -366,6 +366,101 @@ fn unmatching_puts_the_item_back_and_keeps_the_history() {
     )
     .unwrap_err();
     assert!(again.to_string().contains("already been undone"), "{again}");
+}
+
+#[test]
+fn one_payment_can_settle_several_invoices_and_posts_once() {
+    let mut books = Books::open();
+    let first = books.sell(1_000, "2026-02-10");
+    let second = books.sell(500, "2026-02-11");
+    let payment = books.receive_payment(1_815_000_000, "Betaling facturen 2026-0001 en 2026-0002", "feb");
+    assert_eq!(books.outstanding(OpenItemKind::Receivable), 1_815_000_000);
+
+    // Neither invoice alone is the payment, so each is only a partial proposal and
+    // the pair is what actually fits.
+    let singles = proposals(books.database.connection(), books.seller, &payment).unwrap();
+    assert_eq!(singles.len(), 2);
+    assert!(
+        singles.iter().all(|proposal| proposal.reason.contains("part of it")),
+        "{singles:?}"
+    );
+    let groups = group_proposals(books.database.connection(), books.seller, &payment).unwrap();
+    assert_eq!(groups.len(), 1);
+    assert_eq!(groups[0].numbers, vec![first.clone(), second.clone()]);
+    assert_eq!(groups[0].applies, euros(1_815));
+
+    let reports = allocate_group(
+        books.database.connection(),
+        books.seller,
+        &payment,
+        &groups[0].open_item_ids,
+        MatchMethod::Group,
+        "ada",
+        NOW,
+    )
+    .unwrap();
+    assert_eq!(reports.len(), 2);
+    assert_eq!(reports[0].settled, euros(-1_210));
+    assert_eq!(reports[1].settled, euros(-605));
+    assert_eq!(reports[0].entry_id, reports[1].entry_id, "one payment, one entry");
+
+    assert_eq!(books.outstanding(OpenItemKind::Receivable), 0, "both settled");
+    assert_eq!(books.balance("1100"), 1_815_000_000, "the bank moved once");
+    assert_eq!(books.balance("1300"), 0, "debtors cleared");
+    assert_eq!(
+        books.count("SELECT count(*) FROM journal_entry WHERE journal_code = 'BNK'"),
+        1,
+        "an entry per invoice would pretend the money arrived twice"
+    );
+    assert_eq!(
+        books.count("SELECT count(*) FROM bank_transaction WHERE status = 'matched'"),
+        1
+    );
+    assert_eq!(
+        books.count("SELECT count(*) FROM audit_event WHERE kind = 'bank_transaction_matched'"),
+        1
+    );
+}
+
+#[test]
+fn a_group_that_does_not_add_up_is_not_proposed() {
+    let mut books = Books::open();
+    books.sell(1_000, "2026-02-10");
+    books.sell(500, "2026-02-11");
+    let payment = books.receive_payment(1_800_000_000, "facturen 2026-0001 2026-0002", "feb");
+
+    assert!(
+        group_proposals(books.database.connection(), books.seller, &payment)
+            .unwrap()
+            .is_empty(),
+        "fifteen euros short is a question, not a rule"
+    );
+}
+
+#[test]
+fn money_left_over_keeps_the_transaction_in_the_queue() {
+    let mut books = Books::open();
+    books.sell(1_000, "2026-02-10");
+    let payment = books.receive_payment(1_500_000_000, "Losse storting", "feb");
+
+    let report = allocate(
+        books.database.connection(),
+        books.seller,
+        &payment,
+        &list(books.database.connection(), books.seller, OpenItemKind::Receivable).unwrap()[0].id,
+        MatchMethod::Manual,
+        "ada",
+        NOW,
+    )
+    .unwrap();
+    assert_eq!(report.settled, euros(-1_210));
+    assert_eq!(books.outstanding(OpenItemKind::Receivable), 0);
+    assert_eq!(books.balance("1100"), 1_210_000_000);
+    assert_eq!(
+        books.count("SELECT count(*) FROM bank_transaction WHERE status = 'partially_matched'"),
+        1,
+        "290 that settles nothing yet is still somebody's decision"
+    );
 }
 
 #[test]

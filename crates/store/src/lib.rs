@@ -44,9 +44,9 @@ pub use archive::{ArtefactInfo, DocumentView, StatusEvent, StoredLine, artefact_
 pub use audit::ChainHead;
 pub use backup::{BackupReport, BackupSummary, RETENTION};
 pub use bank::{
-    BankAccount, BankTransactionRow, ImportReport, MatchMethod, MatchReport, ParsedStatement, ParsedTransaction,
-    Proposal, allocate, auto_match, fingerprint, import_statement, insert_bank_account, list_bank_accounts,
-    list_transactions, proposals, unmatch,
+    BankAccount, BankTransactionRow, GroupProposal, ImportReport, MatchMethod, MatchReport, ParsedStatement,
+    ParsedTransaction, Proposal, allocate, allocate_group, auto_match, fingerprint, group_proposals, import_statement,
+    insert_bank_account, list_bank_accounts, list_transactions, proposals, unmatch,
 };
 pub use db::Database;
 pub use device::DeviceStore;

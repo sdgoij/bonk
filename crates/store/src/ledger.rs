@@ -508,7 +508,7 @@ pub fn post_entry(conn: &Connection, request: PostingRequest<'_>) -> Result<Post
 /// A correction that touches more than one entry — a reversal and the entry that
 /// replaces it — has to write both or neither, so the body is available to a
 /// caller that already opened a transaction.
-fn post_entry_in(conn: &Connection, request: PostingRequest<'_>) -> Result<PostedEntry, StoreError> {
+pub(crate) fn post_entry_in(conn: &Connection, request: PostingRequest<'_>) -> Result<PostedEntry, StoreError> {
     if let Some(existing) = find_posted(conn, request.source, request.entry.journal())? {
         return Ok(existing);
     }

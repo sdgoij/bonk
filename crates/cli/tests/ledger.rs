@@ -35,6 +35,8 @@ struct Archive {
     database: String,
     keystore: String,
     out: String,
+    seller: String,
+    customer: String,
 }
 
 impl Archive {
@@ -147,7 +149,33 @@ impl Archive {
             database,
             keystore,
             out,
+            seller,
+            customer,
         }
+    }
+
+    /// Issues one more invoice for a single `Consulting` line, returning its number.
+    fn sell(&self, net: &str) -> String {
+        let draft = field(
+            &self.run(&[
+                "draft-new",
+                "--seller",
+                &self.seller,
+                "--customer",
+                &self.customer,
+                "--date",
+                "2026-02-11",
+                "--due",
+                "2026-03-13",
+                "--buyer-ref",
+                "PO-2",
+                "--line",
+                &format!("Consulting|1|{net}|21"),
+            ]),
+            "draft:",
+        );
+        let out = format!("{}/extra.xml", self.out);
+        field(&self.run(&["issue", &draft, "--out", &out]), "issued:")
     }
 
     fn args(&self, command: &[&str]) -> Vec<String> {
@@ -462,6 +490,75 @@ fn a_statement_that_does_not_add_up_is_refused_with_the_difference_named() {
     let said = archive.fail(&["ledger", "bank", "import", statement.to_str().expect("utf-8")]);
     assert!(said.contains("does not add up"), "{said}");
     assert!(said.contains("100000000"), "the difference is named: {said}");
+}
+
+#[test]
+fn one_payment_settles_two_invoices_with_one_entry() {
+    let archive = Archive::new();
+    archive.run(&["ledger", "setup"]);
+    let second = archive.sell("50.00");
+    archive.run(&["ledger", "post"]);
+    archive.run(&[
+        "ledger",
+        "bank",
+        "add",
+        "--name",
+        "Zakelijk",
+        "--iban",
+        "NL91ABNA0417164300",
+    ]);
+
+    // 121.00 and 60.50 arrive as one transfer that names both.
+    let statement = archive.dir.path().join("two.940");
+    std::fs::write(
+        &statement,
+        ":20:BONK-2026-02\n:60F:C260201EUR0,00\n:61:260220C181,50NTRF\n:86:Facturen 2026-0001 en 2026-0002\n:62F:C260228EUR181,50\n",
+    )
+    .expect("statement");
+    archive.run(&["ledger", "bank", "import", statement.to_str().expect("utf-8")]);
+
+    // The queue sees a pair, and one `--item` per invoice settles both.
+    let queue = archive.run(&["ledger", "bank", "transactions", "--status", "new"]);
+    let transaction = queue
+        .lines()
+        .nth(1)
+        .and_then(|row| row.split_whitespace().next())
+        .expect("the queue prints the transaction it wants matched")
+        .to_owned();
+
+    let said = archive.run(&["ledger", "bank", "propose", &transaction]);
+    assert!(said.contains("2026-0001 + 2026-0002"), "{said}");
+    assert!(said.contains("group"), "{said}");
+
+    let items = archive.run(&["ledger", "open-items"]);
+    let ids: Vec<String> = items
+        .lines()
+        .filter(|line| line.contains("2026-0001") || line.contains(&second))
+        .filter_map(|line| line.split_whitespace().next())
+        .map(str::to_owned)
+        .collect();
+    assert_eq!(ids.len(), 2, "both invoices are open: {items}");
+
+    let mut match_args = vec!["ledger", "bank", "match", transaction.as_str()];
+    for id in &ids {
+        match_args.push("--item");
+        match_args.push(id);
+    }
+    let said = archive.run(&match_args);
+    assert!(said.contains("one payment settled 2 invoices"), "{said}");
+
+    let said = archive.run(&["ledger", "open-items"]);
+    assert!(said.contains("no open receivable"), "{said}");
+
+    // One payment is one line of the bank account, whatever it settled.
+    let said = archive.run(&["ledger", "trial-balance", "--from", "2026-01-01", "--to", "2026-12-31"]);
+    assert!(said.trim_end().ends_with("balanced"), "{said}");
+    assert!(
+        archive
+            .run(&["ledger", "bank", "transactions", "--status", "matched"])
+            .contains("matched"),
+        "the transaction left the queue"
+    );
 }
 
 #[test]

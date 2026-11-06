@@ -461,13 +461,16 @@ enum BankCommand {
     /// invoices is left for a person.
     #[command(name = "auto-match")]
     AutoMatch,
-    /// Match one transaction to one open item.
+    /// Match one transaction to one or more open items.
+    ///
+    /// Repeating `--item` settles several invoices with one payment: the entry
+    /// carries the total, and each invoice gets an allocation naming its share.
     Match {
         /// The transaction identifier.
         transaction: String,
-        /// The open item identifier, as `open-items` prints it.
-        #[arg(long = "item")]
-        item: String,
+        /// The open item identifiers, as `open-items` prints them.
+        #[arg(long = "item", required = true)]
+        item: Vec<String>,
     },
     /// Undo a match, appending its reversal.
     Unmatch {
@@ -2152,12 +2155,13 @@ fn ledger(access: &Access, database: &Path, keystore: &Path, command: LedgerComm
                 return Ok(());
             }
             println!(
-                "{:<14} {:<12} {:>14} {:<12} {:<36}",
-                "document", "date", "amount", "due", "party"
+                "{:<38} {:<14} {:<12} {:>14} {:<12} party",
+                "id", "document", "date", "amount", "due"
             );
             for item in &items {
                 println!(
-                    "{:<14} {:<12} {:>14} {:<12} {:<36}",
+                    "{:<38} {:<14} {:<12} {:>14} {:<12} {}",
+                    item.id,
                     item.number,
                     item.original_date.to_iso_string(),
                     amount_text(item.outstanding.micros(), currency)?,
@@ -2166,7 +2170,12 @@ fn ledger(access: &Access, database: &Path, keystore: &Path, command: LedgerComm
                 );
             }
             let total = store::open_item_total(connection, owner, kind)?;
-            println!("{:<27} {:>14}", "total", amount_text(total.micros(), currency)?);
+            println!(
+                "{:<38} {:<27} {:>14}",
+                "",
+                "total",
+                amount_text(total.micros(), currency)?
+            );
             Ok(())
         }
         LedgerCommand::Reverse {
@@ -2295,7 +2304,8 @@ fn bank(database: &store::Database, owner: SellerId, command: BankCommand, now: 
         }
         BankCommand::Propose { transaction } => {
             let candidates = store::proposals(connection, owner, &transaction)?;
-            if candidates.is_empty() {
+            let groups = store::group_proposals(connection, owner, &transaction)?;
+            if candidates.is_empty() && groups.is_empty() {
                 println!("nothing to propose for {transaction}");
                 return Ok(());
             }
@@ -2308,6 +2318,15 @@ fn bank(database: &store::Database, owner: SellerId, command: BankCommand, now: 
                     candidate.reason
                 );
                 println!("  item {}", candidate.open_item_id);
+            }
+            for group in &groups {
+                println!(
+                    "{:<14} {:>14} {:<14} one payment settles these together",
+                    group.numbers.join(" + "),
+                    amount_text(group.applies.micros(), group.applies.currency())?,
+                    store::MatchMethod::Group.as_str()
+                );
+                println!("  items {}", group.open_item_ids.join(" "));
             }
             Ok(())
         }
@@ -2330,22 +2349,33 @@ fn bank(database: &store::Database, owner: SellerId, command: BankCommand, now: 
             Ok(())
         }
         BankCommand::Match { transaction, item } => {
-            let report = store::allocate(
-                connection,
-                owner,
-                &transaction,
-                &item,
-                store::MatchMethod::Manual,
-                "cli",
-                now,
-            )?;
-            println!("matched {} to {}", report.number, report.transaction_id);
-            println!(
-                "settled:    {}",
-                amount_text(report.settled.micros(), report.settled.currency())?
-            );
-            println!("entry:      BNK {}", report.entry_id);
-            println!("allocation: {}", report.allocation_id);
+            let method = if item.len() > 1 {
+                store::MatchMethod::Group
+            } else {
+                store::MatchMethod::Manual
+            };
+            let reports = store::allocate_group(connection, owner, &transaction, &item, method, "cli", now)?;
+            for report in &reports {
+                println!("matched {} to {}", report.number, report.transaction_id);
+                println!(
+                    "settled:    {}",
+                    amount_text(report.settled.micros(), report.settled.currency())?
+                );
+                println!("entry:      BNK {}", report.entry_id);
+                println!("allocation: {}", report.allocation_id);
+            }
+            if reports.len() > 1 {
+                let total = reports.iter().try_fold(0_i64, |sum, report| {
+                    sum.checked_add(report.settled.micros().abs())
+                        .ok_or_else(|| CliError::Input("the settled total overflows".to_owned()))
+                })?;
+                let currency = store::reporting_currency(connection, owner)?;
+                println!(
+                    "one payment settled {} invoices, {}",
+                    reports.len(),
+                    amount_text(total, currency)?
+                );
+            }
             Ok(())
         }
         BankCommand::Unmatch { allocation } => {
@@ -2361,12 +2391,13 @@ fn bank(database: &store::Database, owner: SellerId, command: BankCommand, now: 
                 return Ok(());
             }
             println!(
-                "{:<12} {:>14} {:<28} {:<10} {:<40}",
-                "date", "amount", "counterparty", "status", "remittance"
+                "{:<38} {:<12} {:>14} {:<28} {:<10} remittance",
+                "id", "date", "amount", "counterparty", "status"
             );
             for row in &rows {
                 println!(
-                    "{:<12} {:>14} {:<28} {:<10} {:<40}",
+                    "{:<38} {:<12} {:>14} {:<28} {:<10} {}",
+                    row.id,
                     row.booking_date.to_iso_string(),
                     amount_text(row.amount.micros(), row.amount.currency())?,
                     row.counterparty_name.clone().unwrap_or_default(),

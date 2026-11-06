@@ -251,6 +251,8 @@ bonk ledger open-items --kind payable --aging --as-of 2026-03-31
 bonk ledger bank add --name "Zakelijk" --iban NL91ABNA0417164300
 bonk ledger bank import ./statements/feb.camt.xml     # CAMT.053 (or MT940)
 bonk ledger bank auto-match                           # where the payment names the invoice
+bonk ledger bank propose <transaction>                # what it could settle, groups included
+bonk ledger bank match <transaction> --item <a> --item <b>   # one payment, several invoices
 bonk ledger bank transactions --status new            # the unmatched queue
 ```
 
@@ -275,7 +277,7 @@ where the remittance names the invoice *and* the amount agrees; anything else is
 proposal for a person. Unmatching appends its reversal rather than deleting.
 
 Both statement formats a European bank hands out are read: CAMT.053 (ISO 20022)
-and MT940 (the flat `:NN:` tag export behind most online banking screens). The
+and MT940 (the flat `:NN:` export behind most online banking screens). The
 format is detected from the file's contents, not its extension, and a file that
 is neither is refused with what it looked like instead. MT940 carries no
 counterparty field, and its `:86:` remittance block is stuffed with
@@ -284,6 +286,17 @@ That text is stored exactly as it arrived — folded onto one line — rather th
 decoded, because decoding the wrong layout invents a counterparty. The invoice
 number in it is what the matcher reads, which is enough to settle a payment;
 the structured subfields are left for a per-bank extension.
+
+One transfer can pay several invoices, so matching accepts more than one
+`--item`. The entry then carries the total and each invoice gets an allocation
+naming its share: an entry per invoice would pretend the bank moved the money
+several times and would put the bank account out of step with the statement.
+`bank propose` offers such a group only when the remittance names every invoice
+in it and the shares add up exactly; a near miss stays a question for a person.
+A payment with money left over stays in the queue as `partly matched` rather than
+being called done, because the remainder is either another invoice or an account
+it belongs on. Both `bank transactions` and `open-items` print the identifier a
+command takes, since a queue you cannot name an entry from is not a queue.
 
 One box needs a person to decide it. `AE` says "reverse charge" and nothing more,
 and the form asks reverse-charged goods (4b) and services (4a) separately, so a
