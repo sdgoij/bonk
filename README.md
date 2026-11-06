@@ -127,6 +127,12 @@ README, and `LICENSE.md`:
 | `x86_64-apple-darwin` | `macos-15-intel` | `bonk-x86_64-apple-darwin.tar.gz` |
 | `x86_64-pc-windows-msvc` | `windows-latest` | `bonk-x86_64-pc-windows-msvc.zip` |
 
+The release also carries `bonk.cdx.json` — a CycloneDX 1.6 SBOM of the shipped
+binary's dependency graph, timestamped from the commit so the same tag produces
+the same document — and `SHA256SUMS` covering every asset, including the SBOM.
+After downloading the files into one directory, `sha256sum -c SHA256SUMS` checks
+them offline.
+
 Linux and Windows build on a runner of their own architecture and refuse to
 continue if the runner's host triple is not the target they were asked for. Both
 macOS targets are cross-built from one Intel runner, because the arm64 macOS pool

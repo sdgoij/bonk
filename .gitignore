@@ -11,3 +11,6 @@ keystore.bin
 # OS noise
 .DS_Store
 Thumbs.db
+
+# Release SBOMs, generated per tag by `cargo cyclonedx`.
+*.cdx.json

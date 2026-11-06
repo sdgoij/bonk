@@ -1274,8 +1274,10 @@ were asked for; the macOS job verifies the cross-built arm64 binary with `lipo`
 and smoke-tests the Intel one, so no archive is labelled with an architecture it
 does not contain. The arm64 macOS runner pool is deliberately out of the critical
 path: it had already left a release queued with no machine twice. Still missing
-against the table above, and required before v1.0: installers, code signing,
-notarisation, the SBOM and SHA-256 sums, and the signed update manifest.
+against the table above: installers, code signing, notarisation, and the signed
+update manifest. Every release now carries `SHA256SUMS` over all its assets and
+`bonk.cdx.json`, a CycloneDX 1.6 SBOM of the shipped binary's dependency graph
+timestamped from the commit so the same tag produces the same document.
 
 ---
 
