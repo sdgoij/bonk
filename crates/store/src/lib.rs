@@ -47,13 +47,13 @@ pub use keystore::{KdfParams, KeyStore, copy_to_directory};
 pub use kit::KitReport;
 pub use ledger::{
     Account, FiscalPeriod, OpeningBalance, PeriodStatus, PostedEntry, PostingRequest, PostingSource, StoredEntry,
-    UNCLASSIFIED_ACCOUNT, content_hash, ensure_period, insert_account, list_accounts, list_periods, load_account,
-    load_entry, load_period, lock_period, post_entry, post_opening_balances, reversal_of, reverse_entry,
+    UNCLASSIFIED_ACCOUNT, content_hash, ensure_period, find_entry, insert_account, list_accounts, list_periods,
+    load_account, load_entry, load_period, lock_period, post_entry, post_opening_balances, reversal_of, reverse_entry,
     seed_starter_chart, starter_chart, update_account,
 };
 pub use posting::{
-    DEBTORS, PROFILE_ID, RULE_VERSION, VAT_RECEIVABLE, output_vat_account, post_outbound_document,
-    preview_outbound_entry, revenue_account,
+    DEBTORS, PROFILE_ID, PendingPosting, RULE_VERSION, VAT_RECEIVABLE, output_vat_account, pending,
+    post_outbound_document, preview_outbound_entry, revenue_account,
 };
 pub use repo::{
     CustomerRecord, Direction, DocumentRecord, DocumentStatus, ImportSource, IssueRequest, IssueView, IssuedReference,

@@ -7,9 +7,9 @@ use std::process::ExitCode;
 use app::{Session, strength, text};
 use clap::{Parser, Subcommand};
 use crux::{
-    Address, CountryCode, Currency, CustomerId, DocumentId, DraftLine, Finding, InvoiceDraft, LineId, LocalDate, Money,
-    Party, Quantity, SellerId, Severity, TaxTreatment, UnitCode, VatCategory, VatRate, calculate_totals, has_blocking,
-    validate_draft,
+    Address, CountryCode, Currency, CustomerId, DocumentId, DraftLine, Finding, InvoiceDraft, Journal, JournalEntryId,
+    LineId, LocalDate, Money, Party, Quantity, SellerId, Severity, TaxTreatment, UnitCode, VatCategory, VatRate,
+    calculate_totals, has_blocking, validate_draft,
 };
 use store::{
     CustomerRecord, DocumentStatus, IssueRequest, KeyStore, SearchRequest, SellerRecord, StoreError, advance_status,
@@ -406,8 +406,80 @@ enum Command {
         #[arg(long, value_parser = ["en", "nl"])]
         language: Option<String>,
     },
+    /// The general ledger: the books derived from the archive.
+    Ledger {
+        #[command(subcommand)]
+        command: LedgerCommand,
+    },
     /// Open the desktop UI (also the default with no subcommand).
     Gui,
+}
+
+/// Subcommands of [`Command::Ledger`].
+#[derive(Debug, Subcommand)]
+enum LedgerCommand {
+    /// Seed the starter chart of accounts.
+    ///
+    /// Accounts already present are left alone, so this is safe to re-run after
+    /// a rename. Nothing is posted until the chart exists.
+    Setup,
+    /// Post issued documents that have no entry yet.
+    ///
+    /// With no arguments every unposted document of the books is posted; naming
+    /// numbers posts only those. Posting is idempotent, so a document that is
+    /// already posted is reported rather than posted twice.
+    Post {
+        /// Document numbers, e.g. `2026-0001`.
+        documents: Vec<String>,
+        #[arg(long, default_value = "cli")]
+        actor: String,
+    },
+    /// Show what the chart of accounts holds.
+    Chart {
+        /// Include archived accounts.
+        #[arg(long)]
+        all: bool,
+    },
+    /// Print the trial balance (proefbalans) for a window.
+    #[command(name = "trial-balance")]
+    TrialBalance {
+        /// First day, `YYYY-MM-DD`; defaults to 1 January of the current year.
+        #[arg(long)]
+        from: Option<String>,
+        /// Last day, `YYYY-MM-DD`; defaults to today.
+        #[arg(long)]
+        to: Option<String>,
+    },
+    /// Print the profit and loss statement (winst- en verliesrekening).
+    #[command(name = "profit-and-loss")]
+    ProfitAndLoss {
+        /// First day, `YYYY-MM-DD`; defaults to 1 January of the current year.
+        #[arg(long)]
+        from: Option<String>,
+        /// Last day, `YYYY-MM-DD`; defaults to today.
+        #[arg(long)]
+        to: Option<String>,
+    },
+    /// Print the balance sheet (balans) at a date.
+    #[command(name = "balance-sheet")]
+    BalanceSheet {
+        /// The date, `YYYY-MM-DD`; defaults to today.
+        #[arg(long)]
+        as_of: Option<String>,
+    },
+    /// Reverse one entry, naming it `VK:2026-0001` or by identifier.
+    Reverse {
+        /// Journal and number, or the entry identifier.
+        entry: String,
+        /// Why it is being reversed; it travels in the entry's description.
+        #[arg(long)]
+        reason: String,
+        /// The date the correction is booked, `YYYY-MM-DD`; defaults to today.
+        #[arg(long)]
+        date: Option<String>,
+        #[arg(long, default_value = "cli")]
+        actor: String,
+    },
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -1367,7 +1439,286 @@ fn run(cli: Cli) -> Result<(), CliError> {
             }
             Ok(())
         }
+        Some(Command::Ledger { command }) => ledger(&access, &database, &keystore, command),
     }
+}
+
+/// Runs one ledger subcommand against the archive.
+///
+/// Every command opens the archive, resolves the only seller these books hold,
+/// and then reads or writes the ledger. Nothing here formats money itself beyond
+/// two decimals: the arithmetic is in `store`, the rules are in `store::posting`.
+fn ledger(access: &Access, database: &Path, keystore: &Path, command: LedgerCommand) -> Result<(), CliError> {
+    let session = access.session(database, keystore)?;
+    let connection = session.database().connection();
+    let owner = owner_of(session.database(), None)?;
+    let now = store::now_rfc3339();
+
+    match command {
+        LedgerCommand::Setup => {
+            let added = store::seed_starter_chart(connection, &now)?;
+            if added == 0 {
+                println!("the chart of accounts is already in place");
+            } else {
+                println!("accounts added: {added}");
+            }
+            println!("accounts:       {}", store::list_accounts(connection)?.len());
+            Ok(())
+        }
+        LedgerCommand::Chart { all } => {
+            let accounts = store::list_accounts(connection)?;
+            if accounts.is_empty() {
+                println!("no chart of accounts yet; run `bonk ledger setup`");
+                return Ok(());
+            }
+            for account in accounts.iter().filter(|account| all || !account.archived) {
+                println!(
+                    "{:<6} {:<34} {:<10} {}{}",
+                    account.code,
+                    account.name,
+                    account.kind.as_str(),
+                    if account.is_control { "control" } else { "" },
+                    if account.archived { " archived" } else { "" }
+                );
+            }
+            Ok(())
+        }
+        LedgerCommand::Post { documents, actor } => {
+            if store::list_accounts(connection)?.is_empty() {
+                return Err(CliError::Input(
+                    "no chart of accounts yet; run `bonk ledger setup` first".to_owned(),
+                ));
+            }
+
+            let targets = if documents.is_empty() {
+                store::pending(connection, owner)?
+            } else {
+                let mut resolved = Vec::with_capacity(documents.len());
+                for number in &documents {
+                    let reference = store::find_issued_reference(connection, owner, number)?
+                        .ok_or_else(|| CliError::Input(format!("no issued document {number:?}")))?;
+                    resolved.push(store::PendingPosting {
+                        id: reference.id,
+                        number: reference.number,
+                        issue_date: reference.issue_date,
+                    });
+                }
+                resolved
+            };
+
+            if targets.is_empty() {
+                println!("nothing to post");
+                return Ok(());
+            }
+            for target in &targets {
+                let posted = store::post_outbound_document(connection, target.id, &actor, &now)?;
+                if posted.created {
+                    println!("posted {} {} {}", target.number, posted.journal.code(), posted.number);
+                } else {
+                    println!(
+                        "already posted {} as {} {}",
+                        target.number,
+                        posted.journal.code(),
+                        posted.number
+                    );
+                }
+            }
+            Ok(())
+        }
+        LedgerCommand::TrialBalance { from, to } => {
+            let (from, to) = window(from, to)?;
+            let balance = store::trial_balance(connection, owner, from, to)?;
+            println!("proefbalans {from} to {to} ({})", balance.currency);
+            println!("{:<6} {:<34} {:>14} {:>14}", "code", "name", "debit", "credit");
+            for row in &balance.rows {
+                println!(
+                    "{:<6} {:<34} {:>14} {:>14}",
+                    row.code,
+                    row.name,
+                    column_text(row.debit_micros, balance.currency)?,
+                    column_text(row.credit_micros, balance.currency)?
+                );
+            }
+            println!(
+                "{:<6} {:<34} {:>14} {:>14}",
+                "",
+                "total",
+                amount_text(balance.debit_total_micros, balance.currency)?,
+                amount_text(balance.credit_total_micros, balance.currency)?
+            );
+            if balance.balances() {
+                println!("balanced");
+            } else {
+                println!(
+                    "DOES NOT BALANCE: off by {}",
+                    amount_text(balance.difference_micros(), balance.currency)?
+                );
+            }
+            Ok(())
+        }
+        LedgerCommand::ProfitAndLoss { from, to } => {
+            let (from, to) = window(from, to)?;
+            let report = store::profit_and_loss(connection, owner, from, to)?;
+            println!("winst- en verliesrekening {from} to {to} ({})", report.currency);
+            println!("omzet");
+            for row in &report.revenue {
+                println!(
+                    "  {:<6} {:<34} {:>14}",
+                    row.code,
+                    row.name,
+                    amount_text(row.balance_micros(), report.currency)?
+                );
+            }
+            println!(
+                "  {:<41} {:>14}",
+                "omzet totaal",
+                amount_text(report.revenue_micros, report.currency)?
+            );
+            println!("kosten");
+            for row in &report.expenses {
+                println!(
+                    "  {:<6} {:<34} {:>14}",
+                    row.code,
+                    row.name,
+                    amount_text(row.balance_micros(), report.currency)?
+                );
+            }
+            println!(
+                "  {:<41} {:>14}",
+                "kosten totaal",
+                amount_text(report.expense_micros, report.currency)?
+            );
+            println!(
+                "{:<41} {:>14}",
+                "resultaat",
+                amount_text(report.result_micros(), report.currency)?
+            );
+            Ok(())
+        }
+        LedgerCommand::BalanceSheet { as_of } => {
+            let as_of = parse_date_or(as_of, LocalDate::today_utc())?;
+            let sheet = store::balance_sheet(connection, owner, as_of)?;
+            println!("balans {as_of} ({})", sheet.currency);
+            println!("activa");
+            for row in &sheet.assets {
+                println!(
+                    "  {:<6} {:<34} {:>14}",
+                    row.code,
+                    row.name,
+                    amount_text(row.balance_micros(), sheet.currency)?
+                );
+            }
+            println!(
+                "  {:<41} {:>14}",
+                "totaal activa",
+                amount_text(sheet.assets_micros, sheet.currency)?
+            );
+            println!("schulden");
+            for row in &sheet.liabilities {
+                println!(
+                    "  {:<6} {:<34} {:>14}",
+                    row.code,
+                    row.name,
+                    amount_text(row.balance_micros(), sheet.currency)?
+                );
+            }
+            println!(
+                "  {:<41} {:>14}",
+                "totaal schulden",
+                amount_text(sheet.liabilities_micros, sheet.currency)?
+            );
+            println!("eigen vermogen");
+            for row in &sheet.equity {
+                println!(
+                    "  {:<6} {:<34} {:>14}",
+                    row.code,
+                    row.name,
+                    amount_text(row.balance_micros(), sheet.currency)?
+                );
+            }
+            println!(
+                "  {:<41} {:>14}",
+                "resultaat boekjaar",
+                amount_text(sheet.result_micros, sheet.currency)?
+            );
+            println!(
+                "  {:<41} {:>14}",
+                "totaal vermogen",
+                amount_text(sheet.liabilities_and_equity_micros(), sheet.currency)?
+            );
+            if sheet.balances() {
+                println!("balanced: activa equals schulden plus vermogen");
+            } else {
+                println!(
+                    "DOES NOT BALANCE: off by {}",
+                    amount_text(sheet.difference_micros(), sheet.currency)?
+                );
+            }
+            Ok(())
+        }
+        LedgerCommand::Reverse {
+            entry,
+            reason,
+            date,
+            actor,
+        } => {
+            let id = resolve_entry(session.database(), &entry)?;
+            let date = parse_date_or(date, LocalDate::today_utc())?;
+            let posted = store::reverse_entry(connection, id, &reason, date, &actor, &now)?;
+            println!("reversed {} as {} {}", entry, posted.journal.code(), posted.number);
+            println!("dated {date}");
+            Ok(())
+        }
+    }
+}
+
+/// Resolves `VK:2026-0001` or a bare entry identifier.
+fn resolve_entry(database: &store::Database, needle: &str) -> Result<JournalEntryId, CliError> {
+    match needle.split_once(':') {
+        Some((journal, number)) => {
+            let journal = Journal::parse(journal).map_err(|_| {
+                CliError::Input(format!(
+                    "unknown journal {journal:?}; use VK, IK, BNK, KAS, MEM, OPEN, or BTW"
+                ))
+            })?;
+            store::find_entry(database.connection(), journal, number)?
+                .ok_or_else(|| CliError::Input(format!("no entry {needle:?}")))
+        }
+        None => JournalEntryId::parse_str(needle)
+            .map_err(|_| CliError::Input(format!("{needle:?} is neither VK:2026-0001 nor an entry identifier"))),
+    }
+}
+
+/// The window a report covers: this calendar year up to today unless asked otherwise.
+fn window(from: Option<String>, to: Option<String>) -> Result<(LocalDate, LocalDate), CliError> {
+    let today = LocalDate::today_utc();
+    let default_from = LocalDate::from_ymd(today.as_date().year(), 1, 1)?;
+    Ok((parse_date_or(from, default_from)?, parse_date_or(to, today)?))
+}
+
+/// Parses an optional `YYYY-MM-DD`, falling back to a default.
+fn parse_date_or(raw: Option<String>, default: LocalDate) -> Result<LocalDate, CliError> {
+    match raw {
+        Some(value) => Ok(LocalDate::parse_iso(&value)
+            .map_err(|_| CliError::Input(format!("{value:?} is not a date, expected YYYY-MM-DD")))?),
+        None => Ok(default),
+    }
+}
+
+/// An amount in micro-units, printed with two decimals and no currency symbol.
+fn amount_text(micros: i64, currency: Currency) -> Result<String, CliError> {
+    Ok(Money::from_micros(micros, currency).to_fixed_string(2)?)
+}
+
+/// An amount in one column of a printed statement: nothing rather than `0.00`.
+///
+/// Column-oriented output is what a bookkeeper reads, and a column of zeros
+/// hides the two numbers that matter.
+fn column_text(micros: i64, currency: Currency) -> Result<String, CliError> {
+    if micros == 0 {
+        return Ok(String::new());
+    }
+    amount_text(micros, currency)
 }
 
 /// How a command wants to open the archive.

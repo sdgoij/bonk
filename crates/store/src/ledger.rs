@@ -472,6 +472,8 @@ pub struct PostingRequest<'a> {
 pub struct PostedEntry {
     /// Identifier of the entry.
     pub id: JournalEntryId,
+    /// The journal it was posted into.
+    pub journal: Journal,
     /// Rendered per journal and year, e.g. `2026-0001`.
     pub number: String,
     /// The period it landed in.
@@ -591,6 +593,7 @@ pub fn post_entry(conn: &Connection, request: PostingRequest<'_>) -> Result<Post
 
     Ok(PostedEntry {
         id,
+        journal: request.entry.journal(),
         number,
         period_id: period.id,
         content_hash,
@@ -703,6 +706,25 @@ pub fn load_entry(conn: &Connection, id: JournalEntryId) -> Result<Option<Stored
         posting_profile_id,
         rule_version,
     }))
+}
+
+/// Finds an entry by the journal and number a person reads.
+///
+/// Numbers are unique per journal and year, so the journal is part of the name:
+/// `VK:2026-0001` is one entry, and `2026-0001` alone is ambiguous as soon as a
+/// second journal has one.
+pub fn find_entry(conn: &Connection, journal: Journal, number: &str) -> Result<Option<JournalEntryId>, StoreError> {
+    let mut statement = conn.prepare("SELECT id FROM journal_entry WHERE journal_code = ?1 AND number = ?2")?;
+    let mut rows = statement.query(params![journal.code(), number])?;
+    match rows.next()? {
+        Some(row) => {
+            let id: String = row.get(0)?;
+            Ok(Some(
+                JournalEntryId::parse_str(&id).map_err(|error| StoreError::Data(error.to_string()))?,
+            ))
+        }
+        None => Ok(None),
+    }
 }
 
 /// The entry that reverses `entry_id`, in the same journal.
@@ -929,6 +951,7 @@ fn find_posted(conn: &Connection, source: PostingSource, journal: Journal) -> Re
             let period: String = row.get(2)?;
             Ok(Some(PostedEntry {
                 id: JournalEntryId::parse_str(&id).map_err(|error| StoreError::Data(error.to_string()))?,
+                journal,
                 number: row.get(1)?,
                 period_id: FiscalPeriodId::parse_str(&period).map_err(|error| StoreError::Data(error.to_string()))?,
                 content_hash: row.get(3)?,

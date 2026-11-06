@@ -112,6 +112,44 @@ pub fn post_outbound_document(
     )
 }
 
+/// An outbound document that has no journal entry yet.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct PendingPosting {
+    /// Document identity.
+    pub id: DocumentId,
+    /// Its number, as printed to the customer.
+    pub number: String,
+    /// The date the posting will carry.
+    pub issue_date: LocalDate,
+}
+
+/// Every outbound document of these books that has not been posted.
+///
+/// The left join is on the source key the posting uses, so a document cannot
+/// look unposted while an entry exists for it, whatever route wrote that entry.
+pub fn pending(conn: &Connection, seller_id: SellerId) -> Result<Vec<PendingPosting>, StoreError> {
+    let mut statement = conn.prepare(
+        "SELECT d.id, d.number, d.issue_date_local
+         FROM document d
+         LEFT JOIN journal_entry e
+                ON e.source_kind = 'outbound_document' AND e.source_id = d.id
+         WHERE d.direction = 'outbound' AND d.owner_id = ?1 AND e.id IS NULL
+         ORDER BY d.issue_date_local, d.number",
+    )?;
+    let mut rows = statement.query([seller_id.to_string()])?;
+    let mut pending = Vec::new();
+    while let Some(row) = rows.next()? {
+        let id: String = row.get(0)?;
+        let issue_date: String = row.get(2)?;
+        pending.push(PendingPosting {
+            id: DocumentId::parse_str(&id).map_err(|error| StoreError::Data(error.to_string()))?,
+            number: row.get(1)?,
+            issue_date: LocalDate::parse_iso(&issue_date).map_err(|error| StoreError::Data(error.to_string()))?,
+        });
+    }
+    Ok(pending)
+}
+
 /// The entry an outbound document would produce, without writing it.
 ///
 /// Separate from [`post_outbound_document`] so a caller can show a preview of

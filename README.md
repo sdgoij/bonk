@@ -224,6 +224,26 @@ bonk backup --to ./backups --keep 10
 bonk verify-backup ./backups/backup-20261028T120000Z.db
 ```
 
+### The books: posting and reading the ledger
+
+The ledger is derived from the archive, never typed twice. Posting is
+idempotent, so running `ledger post` again posts only what is new:
+
+```sh
+bonk ledger setup                                  # the starter chart, once
+bonk ledger post                                   # everything not yet posted
+bonk ledger post 2026-0001                         # or named documents only
+bonk ledger chart                                  # accounts, kinds, control flags
+bonk ledger trial-balance --from 2026-01-01 --to 2026-03-31
+bonk ledger profit-and-loss --from 2026-01-01 --to 2026-03-31
+bonk ledger balance-sheet --as-of 2026-03-31
+bonk ledger reverse VK:2026-0001 --reason "wrong customer" --date 2026-04-02
+```
+
+Entry numbers are per journal and year (`VK 2026-0001`), which is why a reversal
+names the journal too. A correction is a new entry that names the one it undoes;
+nothing in the ledger is ever edited.
+
 ### A demo archive to explore the window
 
 ```sh
