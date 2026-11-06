@@ -10,9 +10,13 @@
 //! - Postings are append-only. There is no update and no delete in this module,
 //!   because there is none in the schema either.
 
-use crux::{AccountCode, AccountKind, FiscalPeriodId, LocalDate, SellerId};
+use crux::{
+    AccountCode, AccountKind, DocumentId, FiscalPeriodId, Journal, JournalEntryId, LedgerEntry, LocalDate, SellerId,
+};
 use rusqlite::{Connection, OptionalExtension, params};
+use serde_json::json;
 
+use crate::audit;
 use crate::error::StoreError;
 
 /// An account in the chart of accounts.
@@ -397,6 +401,299 @@ fn read_period(row: &rusqlite::Row<'_>) -> Result<FiscalPeriod, StoreError> {
         ends_on: LocalDate::parse_iso(&ends_on).map_err(|error| StoreError::Data(error.to_string()))?,
         status: PeriodStatus::parse(&status)?,
     })
+}
+
+/// What produced a posting.
+///
+/// The source is what makes posting idempotent: one document produces one entry,
+/// and a second attempt finds the first instead of doubling the books. Manual and
+/// opening entries carry no identifier — several of those in a month are normal —
+/// so they are exempt.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum PostingSource {
+    /// Someone typed it in.
+    Manual,
+    /// An invoice or credit note we issued.
+    OutboundDocument(DocumentId),
+    /// An invoice we received and recorded.
+    InboundDocument(DocumentId),
+    /// A bank statement line.
+    Bank,
+    /// An opening balance at the accounting start date.
+    Opening,
+}
+
+impl PostingSource {
+    /// The storage token for the kind of source.
+    pub const fn kind(self) -> &'static str {
+        match self {
+            Self::Manual => "manual",
+            Self::OutboundDocument(_) => "outbound_document",
+            Self::InboundDocument(_) => "inbound_document",
+            Self::Bank => "bank",
+            Self::Opening => "opening",
+        }
+    }
+
+    /// The identifier of the fact, when it has one.
+    pub fn id(self) -> Option<String> {
+        match self {
+            Self::OutboundDocument(id) | Self::InboundDocument(id) => Some(id.to_string()),
+            Self::Manual | Self::Bank | Self::Opening => None,
+        }
+    }
+}
+
+/// Everything a posting needs besides the entry itself.
+pub struct PostingRequest<'a> {
+    /// The balanced entry to write.
+    pub entry: &'a LedgerEntry,
+    /// The books being posted into.
+    pub seller_id: SellerId,
+    /// Business date; decides the period.
+    pub entry_date: LocalDate,
+    /// What produced it.
+    pub source: PostingSource,
+    /// Who posted it.
+    pub actor: &'a str,
+    /// When it was written, RFC 3339.
+    pub now: &'a str,
+    /// Which set of posting rules produced it.
+    pub posting_profile_id: &'a str,
+    /// The version of that rule set.
+    pub rule_version: &'a str,
+}
+
+/// A written posting.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct PostedEntry {
+    /// Identifier of the entry.
+    pub id: JournalEntryId,
+    /// Rendered per journal and year, e.g. `2026-0001`.
+    pub number: String,
+    /// The period it landed in.
+    pub period_id: FiscalPeriodId,
+    /// Hash of the entry's content, chained into the audit log.
+    pub content_hash: String,
+    /// The audit chain head after the posting.
+    pub audit_head: String,
+    /// False when the entry already existed and this call found it.
+    pub created: bool,
+}
+
+/// Writes a posting, or returns the one that source already produced.
+///
+/// The whole operation is one transaction: a half-written entry would be a
+/// half-true set of books. A locked period is refused here and again by the
+/// schema, and an archived account is refused before anything is written.
+pub fn post_entry(conn: &Connection, request: PostingRequest<'_>) -> Result<PostedEntry, StoreError> {
+    let transaction = conn.unchecked_transaction()?;
+
+    if let Some(existing) = find_posted(&transaction, request.source, request.entry.journal())? {
+        return Ok(existing);
+    }
+
+    for line in request.entry.lines() {
+        let account = load_account(&transaction, line.account())?
+            .ok_or_else(|| StoreError::Rejected(format!("account {} does not exist", line.account())))?;
+        if account.archived {
+            return Err(StoreError::Rejected(format!(
+                "account {} is archived and takes no postings",
+                line.account()
+            )));
+        }
+    }
+
+    let period = ensure_period(&transaction, request.seller_id, request.entry_date)?;
+    if !period.is_open() {
+        return Err(StoreError::Rejected(format!(
+            "fiscal period {}-{:02} is locked",
+            period.year, period.period_no
+        )));
+    }
+
+    let number = next_entry_number(
+        &transaction,
+        request.seller_id,
+        request.entry.journal(),
+        request.entry_date.as_date().year(),
+    )?;
+    let content_hash = content_hash(request.entry, &number, request.entry_date, request.source)?;
+    let id = JournalEntryId::new();
+
+    transaction.execute(
+        "INSERT INTO journal_entry
+             (id, journal_code, period_id, number, entry_date_local, description,
+              source_kind, source_id, reverses_entry_id, posting_profile_id, rule_version,
+              currency, created_at, created_by, content_hash)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, NULL, ?9, ?10, ?11, ?12, ?13, ?14)",
+        params![
+            id.to_string(),
+            request.entry.journal().code(),
+            period.id.to_string(),
+            number,
+            request.entry_date.to_iso_string(),
+            request.entry.description(),
+            request.source.kind(),
+            request.source.id(),
+            request.posting_profile_id,
+            request.rule_version,
+            request.entry.currency().as_str(),
+            request.now,
+            request.actor,
+            content_hash,
+        ],
+    )?;
+
+    for (index, line) in request.entry.lines().iter().enumerate() {
+        let line_no = i64::try_from(index + 1).map_err(|_| StoreError::Data("too many lines".to_owned()))?;
+        let amount = line.amount().micros();
+        transaction.execute(
+            "INSERT INTO journal_line
+                 (id, entry_id, line_no, account_code, side, amount_micros, currency,
+                  fx_rate_micros, base_amount_micros, party_id, tax_code_id, description)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL, ?6, NULL, NULL, NULL)",
+            params![
+                JournalEntryId::new().to_string(),
+                id.to_string(),
+                line_no,
+                line.account().as_str(),
+                line.side().as_str(),
+                amount,
+                request.entry.currency().as_str(),
+            ],
+        )?;
+    }
+
+    let audit_head = audit::append(
+        &transaction,
+        request.now,
+        request.actor,
+        "posted",
+        "journal_entry",
+        &id.to_string(),
+        json!({
+            "journal": request.entry.journal().code(),
+            "number": number,
+            "period": format!("{}-{:02}", period.year, period.period_no),
+            "source_kind": request.source.kind(),
+            "source_id": request.source.id(),
+            "content_hash": content_hash,
+        }),
+    )?;
+
+    transaction.commit()?;
+
+    Ok(PostedEntry {
+        id,
+        number,
+        period_id: period.id,
+        content_hash,
+        audit_head,
+        created: true,
+    })
+}
+
+/// Recomputes the hash a posting of this entry would carry.
+///
+/// Exposed so a verifier can re-derive it from the stored facts and compare, the
+/// same way invoice artefacts are re-derived. Everything that decides what the
+/// entry means is in the input; everything else (ids, timestamps, actor) is
+/// context and stays out, so the same fact posted twice hashes the same.
+pub fn content_hash(
+    entry: &LedgerEntry,
+    number: &str,
+    entry_date: LocalDate,
+    source: PostingSource,
+) -> Result<String, StoreError> {
+    let lines: Vec<serde_json::Value> = entry
+        .lines()
+        .iter()
+        .enumerate()
+        .map(|(index, line)| {
+            json!({
+                "account": line.account().as_str(),
+                "amount_micros": line.amount().micros(),
+                "line_no": index + 1,
+                "side": line.side().as_str(),
+            })
+        })
+        .collect();
+
+    let canonical = json!({
+        "currency": entry.currency().as_str(),
+        "date": entry_date.to_iso_string(),
+        "description": entry.description(),
+        "journal": entry.journal().code(),
+        "lines": lines,
+        "number": number,
+        "source": { "id": source.id(), "kind": source.kind() },
+    });
+    // serde_json maps are BTreeMap-backed, so key order is stable and the hash is
+    // a function of the values rather than of the order they were written in.
+    Ok(audit::sha256_hex(serde_json::to_string(&canonical)?.as_bytes()))
+}
+
+/// The entry a source already produced, if any.
+fn find_posted(conn: &Connection, source: PostingSource, journal: Journal) -> Result<Option<PostedEntry>, StoreError> {
+    let Some(source_id) = source.id() else {
+        return Ok(None);
+    };
+    let mut statement = conn.prepare(
+        "SELECT id, number, period_id, content_hash, journal_code
+         FROM journal_entry WHERE source_kind = ?1 AND source_id = ?2",
+    )?;
+    let mut rows = statement.query(params![source.kind(), source_id])?;
+    match rows.next()? {
+        Some(row) => {
+            let stored_journal: String = row.get(4)?;
+            if Journal::parse(&stored_journal) != Ok(journal) {
+                return Err(StoreError::Data(format!(
+                    "source {} {} is already posted to journal {stored_journal}",
+                    source.kind(),
+                    source_id
+                )));
+            }
+            let id: String = row.get(0)?;
+            let period: String = row.get(2)?;
+            Ok(Some(PostedEntry {
+                id: JournalEntryId::parse_str(&id).map_err(|error| StoreError::Data(error.to_string()))?,
+                number: row.get(1)?,
+                period_id: FiscalPeriodId::parse_str(&period).map_err(|error| StoreError::Data(error.to_string()))?,
+                content_hash: row.get(3)?,
+                audit_head: String::new(),
+                created: false,
+            }))
+        }
+        None => Ok(None),
+    }
+}
+
+/// Allocates the next number in a journal's year.
+///
+/// The counters live in the same `sequence` table as invoice numbers, under the
+/// journal code and the `J` series, so the accounting layer inherits the lease
+/// machinery that will be needed when more than one device can write.
+fn next_entry_number(
+    conn: &Connection,
+    seller_id: SellerId,
+    journal: Journal,
+    year: i32,
+) -> Result<String, StoreError> {
+    conn.execute(
+        "INSERT INTO sequence (owner_id, doc_type, series, year, next_value)
+         VALUES (?1, ?2, 'J', ?3, 1)
+         ON CONFLICT DO NOTHING",
+        params![seller_id.to_string(), journal.code(), year],
+    )?;
+    let allocated: i64 = conn.query_row(
+        "UPDATE sequence SET next_value = next_value + 1
+         WHERE owner_id = ?1 AND doc_type = ?2 AND series = 'J' AND year = ?3
+         RETURNING next_value - 1",
+        params![seller_id.to_string(), journal.code(), year],
+        |row| row.get(0),
+    )?;
+    Ok(format!("{year}-{allocated:04}"))
 }
 
 #[cfg(test)]

@@ -2,10 +2,13 @@
 //! The ledger's storage contract: seeding, periods, locks, and the fact that
 //! postings and journals cannot be edited once they exist.
 
-use crux::{AccountCode, AccountKind, Journal, LocalDate, SellerId};
+use crux::{
+    AccountCode, AccountKind, Currency, DocumentId, Journal, LedgerEntry, LedgerLine, LocalDate, Money, SellerId,
+};
 use store::ledger::{
-    Account, PeriodStatus, UNCLASSIFIED_ACCOUNT, ensure_period, insert_account, list_accounts, list_periods,
-    load_account, load_period, lock_period, seed_starter_chart, starter_chart, update_account,
+    Account, PeriodStatus, PostingRequest, PostingSource, UNCLASSIFIED_ACCOUNT, content_hash, ensure_period,
+    insert_account, list_accounts, list_periods, load_account, load_period, lock_period, post_entry,
+    seed_starter_chart, starter_chart, update_account,
 };
 use store::{Database, KdfParams, KeyStore, SellerRecord, StoreError, insert_seller};
 use tempfile::TempDir;
@@ -30,6 +33,51 @@ fn database() -> (TempDir, Database, SellerId) {
 
 fn date(raw: &str) -> LocalDate {
     LocalDate::parse_iso(raw).unwrap()
+}
+
+fn code(raw: &str) -> AccountCode {
+    AccountCode::parse(raw).unwrap()
+}
+
+fn euros(units: i64) -> Money {
+    Money::from_major_units(units, Currency::EUR).unwrap()
+}
+
+/// The domestic sale from the scenario matrix: 1 000 net at 21 %.
+fn domestic_sale(description: &str) -> LedgerEntry {
+    LedgerEntry::new(
+        Journal::Sales,
+        description,
+        vec![
+            LedgerLine::debit(code("1300"), euros(1_210)).unwrap(),
+            LedgerLine::credit(code("8000"), euros(1_000)).unwrap(),
+            LedgerLine::credit(code("1600"), euros(210)).unwrap(),
+        ],
+    )
+    .unwrap()
+}
+
+fn post(
+    database: &Database,
+    seller: SellerId,
+    entry: &LedgerEntry,
+    on: &str,
+    source: PostingSource,
+) -> store::ledger::PostedEntry {
+    post_entry(
+        database.connection(),
+        PostingRequest {
+            entry,
+            seller_id: seller,
+            entry_date: date(on),
+            source,
+            actor: "ada",
+            now: NOW,
+            posting_profile_id: "nl-sme",
+            rule_version: "1",
+        },
+    )
+    .unwrap()
 }
 
 #[test]
@@ -207,4 +255,245 @@ fn journals_and_postings_cannot_be_edited() {
         load_account(connection, &unclassified).unwrap().unwrap().kind,
         AccountKind::Expense
     );
+}
+
+#[test]
+fn posting_writes_the_entry_its_lines_and_one_audit_event() {
+    let (_dir, database, seller) = database();
+    seed_starter_chart(database.connection(), NOW).unwrap();
+
+    let entry = domestic_sale("Invoice 2026-0001");
+    let posted = post(&database, seller, &entry, "2026-01-15", PostingSource::Manual);
+    assert!(posted.created);
+    assert_eq!(posted.number, "2026-0001");
+
+    let connection = database.connection();
+    let stored: (String, String, i64) = connection
+        .query_row(
+            "SELECT journal_code, currency, length(number) FROM journal_entry WHERE id = ?1",
+            [posted.id.to_string()],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(stored, ("VK".to_owned(), "EUR".to_owned(), 9));
+
+    let (debits, credits): (i64, i64) = connection
+        .query_row(
+            "SELECT sum(CASE side WHEN 'debit' THEN amount_micros ELSE 0 END),
+                    sum(CASE side WHEN 'credit' THEN amount_micros ELSE 0 END)
+             FROM journal_line WHERE entry_id = ?1",
+            [posted.id.to_string()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(debits, credits, "what was written must balance");
+    assert_eq!(debits, 1_210_000_000);
+
+    let events: i64 = connection
+        .query_row(
+            "SELECT count(*) FROM audit_event WHERE kind = 'posted' AND subject_id = ?1",
+            [posted.id.to_string()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(events, 1);
+
+    let head = store::audit::head(connection).unwrap().unwrap();
+    assert_eq!(head.hash, posted.audit_head);
+}
+
+#[test]
+fn posting_the_same_document_twice_returns_the_first_entry() {
+    let (_dir, database, seller) = database();
+    seed_starter_chart(database.connection(), NOW).unwrap();
+
+    let document = DocumentId::new();
+    let entry = domestic_sale("Invoice 2026-0001");
+    let first = post(
+        &database,
+        seller,
+        &entry,
+        "2026-01-15",
+        PostingSource::OutboundDocument(document),
+    );
+    let second = post(
+        &database,
+        seller,
+        &entry,
+        "2026-01-15",
+        PostingSource::OutboundDocument(document),
+    );
+
+    assert!(first.created);
+    assert!(!second.created, "the second call found the first posting");
+    assert_eq!(first.id, second.id);
+    assert_eq!(first.number, second.number);
+    assert_eq!(first.content_hash, second.content_hash);
+    assert_eq!(second.audit_head, "", "finding an entry records nothing new");
+
+    let connection = database.connection();
+    let entries: i64 = connection
+        .query_row("SELECT count(*) FROM journal_entry", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(entries, 1);
+    let events: i64 = connection
+        .query_row("SELECT count(*) FROM audit_event WHERE kind = 'posted'", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(events, 1);
+}
+
+#[test]
+fn a_locked_period_refuses_a_posting() {
+    let (_dir, database, seller) = database();
+    seed_starter_chart(database.connection(), NOW).unwrap();
+    let period = ensure_period(database.connection(), seller, date("2026-01-15")).unwrap();
+    lock_period(database.connection(), period.id, "ada", NOW).unwrap();
+
+    let error = post_entry(
+        database.connection(),
+        PostingRequest {
+            entry: &domestic_sale("Invoice 2026-0001"),
+            seller_id: seller,
+            entry_date: date("2026-01-15"),
+            source: PostingSource::Manual,
+            actor: "ada",
+            now: NOW,
+            posting_profile_id: "nl-sme",
+            rule_version: "1",
+        },
+    )
+    .unwrap_err();
+
+    assert!(matches!(error, StoreError::Rejected(_)), "{error}");
+    assert!(error.to_string().contains("locked"), "{error}");
+    let entries: i64 = database
+        .connection()
+        .query_row("SELECT count(*) FROM journal_entry", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(entries, 0);
+}
+
+#[test]
+fn numbers_run_per_journal_and_per_year() {
+    let (_dir, database, seller) = database();
+    seed_starter_chart(database.connection(), NOW).unwrap();
+
+    let first = post(
+        &database,
+        seller,
+        &domestic_sale("One"),
+        "2026-01-15",
+        PostingSource::Manual,
+    );
+    let second = post(
+        &database,
+        seller,
+        &domestic_sale("Two"),
+        "2026-01-20",
+        PostingSource::Manual,
+    );
+    assert_eq!(first.number, "2026-0001");
+    assert_eq!(second.number, "2026-0002");
+
+    // A different journal starts its own series.
+    let memorial = LedgerEntry::new(
+        Journal::Memorial,
+        "Bank fee",
+        vec![
+            LedgerLine::debit(code("7100"), euros(5)).unwrap(),
+            LedgerLine::credit(code("1100"), euros(5)).unwrap(),
+        ],
+    )
+    .unwrap();
+    let fee = post(&database, seller, &memorial, "2026-02-01", PostingSource::Manual);
+    assert_eq!(fee.number, "2026-0001");
+
+    // And a new year starts again from one.
+    let next_year = post(
+        &database,
+        seller,
+        &domestic_sale("Three"),
+        "2027-01-05",
+        PostingSource::Manual,
+    );
+    assert_eq!(next_year.number, "2027-0001");
+}
+
+#[test]
+fn the_content_hash_is_a_function_of_the_entry() {
+    let (_dir, database, seller) = database();
+    seed_starter_chart(database.connection(), NOW).unwrap();
+
+    let document = DocumentId::new();
+    let entry = domestic_sale("Invoice 2026-0001");
+    let posted = post(
+        &database,
+        seller,
+        &entry,
+        "2026-01-15",
+        PostingSource::OutboundDocument(document),
+    );
+
+    let recomputed = content_hash(
+        &entry,
+        &posted.number,
+        date("2026-01-15"),
+        PostingSource::OutboundDocument(document),
+    )
+    .unwrap();
+    assert_eq!(
+        recomputed, posted.content_hash,
+        "a verifier must be able to re-derive it"
+    );
+
+    // Any change to what the entry says changes the hash; the identifier and the
+    // actor do not, which is why re-deriving it from the stored facts works.
+    let edited = domestic_sale("Invoice 2026-0001 (corrected)");
+    let edited_hash = content_hash(
+        &edited,
+        &posted.number,
+        date("2026-01-15"),
+        PostingSource::OutboundDocument(document),
+    )
+    .unwrap();
+    assert_ne!(edited_hash, posted.content_hash);
+
+    let other_number = content_hash(
+        &entry,
+        "2026-0002",
+        date("2026-01-15"),
+        PostingSource::OutboundDocument(document),
+    )
+    .unwrap();
+    assert_ne!(other_number, posted.content_hash);
+}
+
+#[test]
+fn an_archived_account_takes_no_postings() {
+    let (_dir, database, seller) = database();
+    seed_starter_chart(database.connection(), NOW).unwrap();
+
+    let revenue = code("8000");
+    let mut account = load_account(database.connection(), &revenue).unwrap().unwrap();
+    account.archived = true;
+    update_account(database.connection(), &account, NOW).unwrap();
+
+    let error = post_entry(
+        database.connection(),
+        PostingRequest {
+            entry: &domestic_sale("Invoice 2026-0001"),
+            seller_id: seller,
+            entry_date: date("2026-01-15"),
+            source: PostingSource::Manual,
+            actor: "ada",
+            now: NOW,
+            posting_profile_id: "nl-sme",
+            rule_version: "1",
+        },
+    )
+    .unwrap_err();
+    assert!(matches!(error, StoreError::Rejected(_)), "{error}");
+    assert!(error.to_string().contains("archived"), "{error}");
 }

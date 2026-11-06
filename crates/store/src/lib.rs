@@ -44,8 +44,9 @@ pub use integrity::IntegrityReport;
 pub use keystore::{KdfParams, KeyStore, copy_to_directory};
 pub use kit::KitReport;
 pub use ledger::{
-    Account, FiscalPeriod, PeriodStatus, UNCLASSIFIED_ACCOUNT, ensure_period, insert_account, list_accounts,
-    list_periods, load_account, load_period, lock_period, seed_starter_chart, starter_chart, update_account,
+    Account, FiscalPeriod, PeriodStatus, PostedEntry, PostingRequest, PostingSource, UNCLASSIFIED_ACCOUNT,
+    content_hash, ensure_period, insert_account, list_accounts, list_periods, load_account, load_period, lock_period,
+    post_entry, seed_starter_chart, starter_chart, update_account,
 };
 pub use repo::{
     CustomerRecord, Direction, DocumentRecord, DocumentStatus, ImportSource, IssueRequest, IssueView, IssuedReference,
