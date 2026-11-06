@@ -386,6 +386,80 @@ fn a_bank_statement_settles_an_invoice_end_to_end() {
 }
 
 #[test]
+fn a_memorial_entry_is_written_and_must_balance() {
+    let archive = Archive::new();
+    archive.run(&["ledger", "setup"]);
+
+    let said = archive.run(&[
+        "ledger",
+        "post-manual",
+        "--date",
+        "2026-03-01",
+        "--description",
+        "Bankkosten maart",
+        "--line",
+        "7100|debit|12.50",
+        "--line",
+        "1100|credit|12.50",
+    ]);
+    assert!(said.contains("posted MEM 2026-0001 (2 lines)"), "{said}");
+
+    let said = archive.run(&["ledger", "trial-balance", "--from", "2026-01-01", "--to", "2026-12-31"]);
+    assert!(said.trim_end().ends_with("balanced"), "{said}");
+    assert!(said.contains("7100"), "{said}");
+
+    // An entry with one side is refused before anything is written.
+    let said = archive.fail(&[
+        "ledger",
+        "post-manual",
+        "--date",
+        "2026-03-01",
+        "--description",
+        "Half",
+        "--line",
+        "7100|debit|12.50",
+    ]);
+    assert!(said.contains("does not balance"), "{said}");
+
+    // So is a line that is not in the documented shape.
+    let said = archive.fail(&[
+        "ledger",
+        "post-manual",
+        "--date",
+        "2026-03-01",
+        "--description",
+        "Typo",
+        "--line",
+        "7100 debit 12.50",
+    ]);
+    assert!(said.contains("account|side|amount"), "{said}");
+
+    // A tagged line with a code reaches a box through the same path a purchase
+    // uses; a correction of a mis-boxed purchase is exactly this.
+    let said = archive.run(&[
+        "ledger",
+        "post-manual",
+        "--date",
+        "2026-03-01",
+        "--description",
+        "Herindeling",
+        "--line",
+        "9999|debit|200.00|AE|21|NL-AE-GOODS",
+        "--line",
+        "1500|debit|42.00|AE|21|NL-AE-GOODS",
+        "--line",
+        "1620|credit|42.00|AE|21|NL-AE-GOODS",
+        "--line",
+        "1400|credit|200.00",
+    ]);
+    assert!(said.contains("posted MEM 2026-0002 (4 lines)"), "{said}");
+
+    let said = archive.run(&["ledger", "vat-return", "--year", "2026", "--month", "3"]);
+    assert!(said.contains("4b"), "the correction reached its box: {said}");
+    assert!(said.contains("fileable:    yes"), "{said}");
+}
+
+#[test]
 fn tax_codes_are_listed_and_a_sale_has_none_to_choose() {
     let archive = Archive::new();
 

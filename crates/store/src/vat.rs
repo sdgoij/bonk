@@ -153,8 +153,13 @@ impl Rubriek {
 /// A code does not move the deduction: input VAT belongs in 5b whatever the supply
 /// was. It decides the box of the supply and of the VAT we assessed on it, which
 /// is exactly where the category alone could not say.
+///
+/// A memorial entry counts as a purchase here. Corrections are what the memorial
+/// journal is for, and a correction of a purchase has nothing but the code to say
+/// which box it belongs in; without this, its lines would fall back to the
+/// category's default and could land in the wrong box while looking deliberate.
 fn chosen_rubriek(journal: Journal, account: &AccountCode, code: Option<Rubriek>) -> Option<Rubriek> {
-    if journal != Journal::Purchase || account.as_str() == crate::posting::VAT_RECEIVABLE {
+    if !matches!(journal, Journal::Purchase | Journal::Memorial) || account.as_str() == crate::posting::VAT_RECEIVABLE {
         return None;
     }
     code

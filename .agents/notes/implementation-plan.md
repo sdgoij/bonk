@@ -1229,9 +1229,19 @@ hash when not, so entries posted before codes existed hash exactly as they did;
 the evidence bundle already carried the `tax_code_id` column and its verifier
 re-derives the hash with the code, so a coded posting verifies offline.
 
-Known gap, recorded rather than hidden: a wrong code on an already-posted purchase
-cannot be corrected in v1.1. The remedy is a manual correction entry in the
-memorial journal, which the CLI does not offer yet.
+A wrong code on an already-posted purchase is corrected the way any mistake in the
+books is, and the machinery now exists: `store::post_manual_entry` and
+`bonk ledger post-manual` write a balanced memorial entry that a person composed,
+and its lines may carry a category, a rate, and a tax code. That last part is what
+makes the correction reach a box: boxes are read from the tags on lines, so a
+memorial line without a treatment cannot move anything into 4b. A memorial line on
+1620 must carry a code, because that account's box depends on the treatment and
+without one it would land in 1c; a code also has to exist in the catalogue and
+agree with the line's category. `vat::chosen_rubriek` now honours codes in the
+memorial journal as well as in purchases, which is what a correction of a purchase
+needs. Reversing the entry and booking the corrected amounts under the right code
+leaves 4a at zero, 4b holding the supply, 5b unchanged, and the period fileable;
+an integration test walks exactly that sequence.
 
 ---
 

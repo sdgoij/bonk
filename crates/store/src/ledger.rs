@@ -624,6 +624,97 @@ pub fn post_entry(conn: &Connection, request: PostingRequest<'_>) -> Result<Post
     })
 }
 
+/// Posts an entry a person wrote, in the memorial journal.
+///
+/// The memorial journal is the accountant's escape hatch: a correction no rule can
+/// derive. It is the one journal whose lines come from a human, so the description
+/// is required, the entry must balance before anything is written, and every code
+/// it names must exist and agree with the line's category. It carries no source
+/// fact, so posting one twice writes two entries — which is what a human writing
+/// an entry means, unlike posting a document twice.
+pub fn post_manual_entry(
+    conn: &Connection,
+    seller_id: SellerId,
+    entry_date: LocalDate,
+    description: &str,
+    lines: Vec<LedgerLine>,
+    actor: &str,
+    now: &str,
+) -> Result<PostedEntry, StoreError> {
+    let currency = crate::report::reporting_currency(conn, seller_id)?;
+    let entry = LedgerEntry::new(Journal::Memorial, description, lines).map_err(|error| match error {
+        crux::DomainError::EntryUnbalanced {
+            debit_micros,
+            credit_micros,
+        } => StoreError::Rejected(format!(
+            "the entry does not balance: {} debited, {} credited",
+            money_text(crux::Money::from_micros(debit_micros, currency)),
+            money_text(crux::Money::from_micros(credit_micros, currency)),
+        )),
+        other => StoreError::Rejected(other.to_string()),
+    })?;
+    check_manual_codes(conn, entry.lines())?;
+
+    post_entry(
+        conn,
+        PostingRequest {
+            entry: &entry,
+            seller_id,
+            entry_date,
+            source: PostingSource::Manual,
+            actor,
+            now,
+            posting_profile_id: "manual",
+            rule_version: "1",
+            reverses: None,
+            open_item: None,
+        },
+    )
+}
+
+/// An amount for a sentence, without the currency code.
+fn money_text(amount: crux::Money) -> String {
+    amount
+        .to_fixed_string(2)
+        .unwrap_or_else(|_| amount.micros().to_string())
+}
+
+/// Checks the treatments a memorial entry names.
+///
+/// A line on the account whose box cannot be derived from the category says so by
+/// needing a code: without one it would land in 1c whatever the treatment was,
+/// which is a number in a box nobody chose.
+fn check_manual_codes(conn: &Connection, lines: &[LedgerLine]) -> Result<(), StoreError> {
+    for line in lines {
+        let Some(code) = line.tax_code() else {
+            if line.account().as_str() == crate::posting::VAT_PAYABLE_OTHER {
+                return Err(StoreError::Rejected(
+                    "a memorial line on 1620 needs a tax code: its box depends on the treatment".to_owned(),
+                ));
+            }
+            continue;
+        };
+        let record = crate::tax_code::load(conn, code)?
+            .ok_or_else(|| StoreError::Rejected(format!("tax code {code} is not in the catalogue")))?;
+        match line.vat() {
+            Some(vat) if vat.category == record.category => {}
+            Some(vat) => {
+                return Err(StoreError::Rejected(format!(
+                    "tax code {code} resolves category {} but the line carries {}",
+                    record.category.code(),
+                    vat.category.code()
+                )));
+            }
+            None => {
+                return Err(StoreError::Rejected(format!(
+                    "tax code {code} needs a VAT category and rate on the line"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// A posting as it is stored, with the context around it.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct StoredEntry {

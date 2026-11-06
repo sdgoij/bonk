@@ -7,9 +7,9 @@ use std::process::ExitCode;
 use app::{Session, strength, text};
 use clap::{Parser, Subcommand};
 use crux::{
-    Address, CountryCode, Currency, CustomerId, DocumentId, DraftLine, Finding, InvoiceDraft, Journal, JournalEntryId,
-    LineId, LocalDate, Money, Party, Quantity, SellerId, Severity, TaxTreatment, UnitCode, VatCategory, VatRate,
-    calculate_totals, has_blocking, validate_draft,
+    AccountCode, Address, CountryCode, Currency, CustomerId, DocumentId, DraftLine, Finding, InvoiceDraft, Journal,
+    JournalEntryId, LedgerLine, LineId, LocalDate, Money, Party, Quantity, SellerId, Severity, Side, TaxCode,
+    TaxTreatment, UnitCode, VatCategory, VatRate, calculate_totals, has_blocking, validate_draft,
 };
 use store::{
     CustomerRecord, DocumentStatus, IssueRequest, KeyStore, SearchRequest, SellerRecord, StoreError, advance_status,
@@ -600,6 +600,27 @@ enum LedgerCommand {
         #[arg(long, default_value = "cli")]
         actor: String,
     },
+    /// Post a balanced entry a person wrote (memoriaal).
+    ///
+    /// The escape hatch for a correction no rule can derive. A line is
+    /// `account|side|amount`, optionally followed by `|category|rate` and then a
+    /// tax code; the code is what puts a VAT line in the box the category alone
+    /// cannot name, so a mis-boxed purchase is corrected by reversing its entry
+    /// and posting the corrected amounts under the right code.
+    #[command(name = "post-manual")]
+    PostManual {
+        /// The date the entry is booked, `YYYY-MM-DD`; it decides the period.
+        #[arg(long)]
+        date: String,
+        /// What happened, in words; it is what a reader of the journal sees.
+        #[arg(long)]
+        description: String,
+        /// A line: `account|side|amount`, optionally `|category|rate` and `|code`.
+        #[arg(long = "line", required = true)]
+        line: Vec<String>,
+        #[arg(long, default_value = "cli")]
+        actor: String,
+    },
     /// Reverse one entry, naming it `VK:2026-0001` or by identifier.
     Reverse {
         /// Journal and number, or the entry identifier.
@@ -631,6 +652,30 @@ enum CliError {
     Validation,
     #[error(transparent)]
     Demo(#[from] demo::DemoError),
+}
+
+/// Parses `account|side|amount[|category|rate[|code]]`.
+fn parse_manual_line(raw: &str, currency: Currency) -> Result<LedgerLine, CliError> {
+    const SHAPE: &str = "a line is `account|side|amount`, optionally `|category|rate` and then a tax code";
+    let parts: Vec<&str> = raw.split('|').map(str::trim).collect();
+    if !matches!(parts.len(), 3 | 5 | 6) {
+        return Err(CliError::Input(format!("{raw:?}: {SHAPE}")));
+    }
+    let explained = |error: crux::DomainError| CliError::Input(format!("{raw:?}: {error}"));
+
+    let account = AccountCode::parse(parts[0]).map_err(explained)?;
+    let side = Side::parse(parts[1]).map_err(explained)?;
+    let amount = Money::parse_fixed(parts[2], currency).map_err(explained)?;
+    let mut line = LedgerLine::new(account, side, amount).map_err(explained)?;
+    if parts.len() >= 5 {
+        let category = VatCategory::parse(parts[3]).map_err(explained)?;
+        let rate = VatRate::parse_percent(parts[4]).map_err(explained)?;
+        line = line.tagged(category, rate);
+    }
+    if parts.len() == 6 {
+        line = line.coded(TaxCode::parse(parts[5]).map_err(explained)?);
+    }
+    Ok(line)
 }
 
 fn main() -> ExitCode {
@@ -1978,6 +2023,29 @@ fn ledger(access: &Access, database: &Path, keystore: &Path, command: LedgerComm
             println!("assigned:  {} ({})", assigned.code, assigned.name);
             println!("box:       {} {}", assigned.rubriek.code(), assigned.rubriek.label());
             println!("the next `bonk ledger post` puts the VAT there");
+            Ok(())
+        }
+        LedgerCommand::PostManual {
+            date,
+            description,
+            line,
+            actor,
+        } => {
+            if store::list_accounts(connection)?.is_empty() {
+                return Err(CliError::Input(
+                    "no chart of accounts yet; run `bonk ledger setup` first".to_owned(),
+                ));
+            }
+            let entry_date = LocalDate::parse_iso(&date)
+                .map_err(|_| CliError::Input(format!("{date:?} is not a date in YYYY-MM-DD form")))?;
+            let currency = store::reporting_currency(connection, owner)?;
+            let mut lines = Vec::with_capacity(line.len());
+            for raw in &line {
+                lines.push(parse_manual_line(raw, currency)?);
+            }
+            let count = lines.len();
+            let posted = store::post_manual_entry(connection, owner, entry_date, &description, lines, &actor, &now)?;
+            println!("posted {} {} ({count} lines)", posted.journal.code(), posted.number);
             Ok(())
         }
         LedgerCommand::OpenItems { kind, aging, as_of } => {

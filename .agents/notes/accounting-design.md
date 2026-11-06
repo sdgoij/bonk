@@ -488,8 +488,11 @@ the category and rate already say would be a choice nobody makes. Posting stamps
 the code on the lines of the matching breakdown row and snapshots it in
 `journal_line.tax_code_id`, so a report never re-reads a document's
 classification after it could have changed. Sales carry no code. Changing a code
-after posting is refused: entries are append-only, and a wrong box on a posted
-purchase needs a correction entry, which v1.1 does not offer yet.
+after posting is refused: entries are append-only, so a mis-boxed purchase is
+corrected the way any mistake is — reverse the entry, then book the corrected
+amounts in the memorial journal with a line that names the category, the rate and
+the code. The memorial journal is the one journal where a person writes the lines,
+which is exactly what a fix that no rule can derive needs.
 
 ### 6.3 Periods, ICP, and corrections
 
