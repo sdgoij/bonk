@@ -498,13 +498,23 @@ pub struct PostedEntry {
 /// schema, and an archived account is refused before anything is written.
 pub fn post_entry(conn: &Connection, request: PostingRequest<'_>) -> Result<PostedEntry, StoreError> {
     let transaction = conn.unchecked_transaction()?;
+    let posted = post_entry_in(&transaction, request)?;
+    transaction.commit()?;
+    Ok(posted)
+}
 
-    if let Some(existing) = find_posted(&transaction, request.source, request.entry.journal())? {
+/// The body of [`post_entry`], inside a transaction the caller owns.
+///
+/// A correction that touches more than one entry — a reversal and the entry that
+/// replaces it — has to write both or neither, so the body is available to a
+/// caller that already opened a transaction.
+fn post_entry_in(conn: &Connection, request: PostingRequest<'_>) -> Result<PostedEntry, StoreError> {
+    if let Some(existing) = find_posted(conn, request.source, request.entry.journal())? {
         return Ok(existing);
     }
 
     for line in request.entry.lines() {
-        let account = load_account(&transaction, line.account())?
+        let account = load_account(conn, line.account())?
             .ok_or_else(|| StoreError::Rejected(format!("account {} does not exist", line.account())))?;
         if account.archived {
             return Err(StoreError::Rejected(format!(
@@ -514,7 +524,7 @@ pub fn post_entry(conn: &Connection, request: PostingRequest<'_>) -> Result<Post
         }
     }
 
-    let period = ensure_period(&transaction, request.seller_id, request.entry_date)?;
+    let period = ensure_period(conn, request.seller_id, request.entry_date)?;
     if !period.is_open() {
         return Err(StoreError::Rejected(format!(
             "fiscal period {}-{:02} is locked",
@@ -523,7 +533,7 @@ pub fn post_entry(conn: &Connection, request: PostingRequest<'_>) -> Result<Post
     }
 
     let number = next_entry_number(
-        &transaction,
+        conn,
         request.seller_id,
         request.entry.journal(),
         request.entry_date.as_date().year(),
@@ -531,7 +541,7 @@ pub fn post_entry(conn: &Connection, request: PostingRequest<'_>) -> Result<Post
     let content_hash = content_hash(request.entry, &number, request.entry_date, request.source)?;
     let id = JournalEntryId::new();
 
-    transaction.execute(
+    conn.execute(
         "INSERT INTO journal_entry
              (id, journal_code, period_id, number, entry_date_local, description,
               source_kind, source_id, reverses_entry_id, posting_profile_id, rule_version,
@@ -559,7 +569,7 @@ pub fn post_entry(conn: &Connection, request: PostingRequest<'_>) -> Result<Post
     for (index, line) in request.entry.lines().iter().enumerate() {
         let line_no = i64::try_from(index + 1).map_err(|_| StoreError::Data("too many lines".to_owned()))?;
         let amount = line.amount().micros();
-        transaction.execute(
+        conn.execute(
             "INSERT INTO journal_line
                  (id, entry_id, line_no, account_code, side, amount_micros, currency,
                   fx_rate_micros, base_amount_micros, party_id, tax_code_id, description,
@@ -583,7 +593,7 @@ pub fn post_entry(conn: &Connection, request: PostingRequest<'_>) -> Result<Post
     if let (Some(item), Some(source_id)) = (&request.open_item, request.source.id()) {
         let document = DocumentId::parse_str(&source_id).map_err(|error| StoreError::Data(error.to_string()))?;
         crate::open_items::insert(
-            &transaction,
+            conn,
             request.seller_id,
             request.source.kind(),
             document,
@@ -593,7 +603,7 @@ pub fn post_entry(conn: &Connection, request: PostingRequest<'_>) -> Result<Post
     }
 
     let audit_head = audit::append(
-        &transaction,
+        conn,
         request.now,
         request.actor,
         "posted",
@@ -610,8 +620,6 @@ pub fn post_entry(conn: &Connection, request: PostingRequest<'_>) -> Result<Post
             "content_hash": content_hash,
         }),
     )?;
-
-    transaction.commit()?;
 
     Ok(PostedEntry {
         id,
@@ -873,6 +881,21 @@ pub fn reverse_entry(
     actor: &str,
     now: &str,
 ) -> Result<PostedEntry, StoreError> {
+    let transaction = conn.unchecked_transaction()?;
+    let posted = reverse_entry_in(&transaction, entry_id, reason, entry_date, actor, now)?;
+    transaction.commit()?;
+    Ok(posted)
+}
+
+/// The body of [`reverse_entry`], inside a transaction the caller owns.
+fn reverse_entry_in(
+    conn: &Connection,
+    entry_id: JournalEntryId,
+    reason: &str,
+    entry_date: LocalDate,
+    actor: &str,
+    now: &str,
+) -> Result<PostedEntry, StoreError> {
     if reason.trim().is_empty() {
         return Err(StoreError::Rejected("a reversal needs a reason".to_owned()));
     }
@@ -891,7 +914,7 @@ pub fn reverse_entry(
         .reversed(description)
         .map_err(|error| StoreError::Data(error.to_string()))?;
 
-    post_entry(
+    post_entry_in(
         conn,
         PostingRequest {
             entry: &entry,
@@ -906,6 +929,128 @@ pub fn reverse_entry(
             open_item: None,
         },
     )
+}
+
+/// What a reclassification wrote.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Reclassified {
+    /// The number of the entry that was corrected, without its journal.
+    pub original: String,
+    /// The entry that undoes it.
+    pub reversal: PostedEntry,
+    /// The entry that replaces it, under the new code.
+    pub corrected: PostedEntry,
+}
+
+/// Files a posted purchase under a different treatment.
+///
+/// A code cannot be changed after the fact — the entry is append-only and the
+/// reviewable facts are what they are — so the correction is the pair the books
+/// already understand: the reversal, then the same amounts under the code that
+/// names the right box. Both are written in one transaction, because half a
+/// correction would leave the supply either counted twice or missing.
+///
+/// Only lines whose category the code resolves take the new code; anything else on
+/// the entry keeps what it had. A code that matches no line is refused rather than
+/// written, since it would look like a correction and change no box.
+pub fn reclassify(
+    conn: &Connection,
+    entry_id: JournalEntryId,
+    code: &str,
+    reason: &str,
+    entry_date: LocalDate,
+    actor: &str,
+    now: &str,
+) -> Result<Reclassified, StoreError> {
+    if reason.trim().is_empty() {
+        return Err(StoreError::Rejected("a reclassification needs a reason".to_owned()));
+    }
+    let code = crux::TaxCode::parse(code).map_err(|error| StoreError::Rejected(error.to_string()))?;
+    let record = crate::tax_code::load(conn, &code)?.ok_or_else(|| StoreError::NotFound(format!("tax code {code}")))?;
+    let stored = load_entry(conn, entry_id)?.ok_or_else(|| StoreError::NotFound(format!("entry {entry_id}")))?;
+    if stored.journal != Journal::Purchase {
+        return Err(StoreError::Rejected(format!(
+            "{} is a {} entry; only a purchase has a box a tax code can change",
+            stored.number,
+            stored.journal.code()
+        )));
+    }
+    if let Some(existing) = reversal_of(conn, entry_id)? {
+        return Err(StoreError::Rejected(format!(
+            "entry {} is already reversed by {existing}; the correction is its own entry",
+            stored.number
+        )));
+    }
+
+    let mut matched = false;
+    let mut lines = Vec::with_capacity(stored.entry.lines().len());
+    for line in stored.entry.lines() {
+        let mut rebuilt = LedgerLine::new(line.account().clone(), line.side(), line.amount())
+            .map_err(|error| StoreError::Data(error.to_string()))?;
+        if let Some(vat) = line.vat() {
+            let rate = VatRate::from_basis_points(vat.rate_bp).map_err(|error| StoreError::Data(error.to_string()))?;
+            rebuilt = rebuilt.tagged(vat.category, rate);
+            if vat.category == record.category {
+                rebuilt = rebuilt.coded(code.clone());
+                matched = true;
+            } else if let Some(existing) = line.tax_code() {
+                rebuilt = rebuilt.coded(existing.clone());
+            }
+        }
+        lines.push(rebuilt);
+    }
+    if !matched {
+        return Err(StoreError::Rejected(format!(
+            "{} has no {} line, so {code} would change nothing",
+            stored.number,
+            record.category.code()
+        )));
+    }
+
+    let description = format!("Herindeling {} ({})", stored.number, reason.trim());
+    let corrected =
+        LedgerEntry::new(stored.journal, description, lines).map_err(|error| StoreError::Data(error.to_string()))?;
+
+    let transaction = conn.unchecked_transaction()?;
+    let seller_id = seller_of(&transaction, entry_id)?;
+    let reversal = reverse_entry_in(&transaction, entry_id, reason, entry_date, actor, now)?;
+    let corrected = post_entry_in(
+        &transaction,
+        PostingRequest {
+            entry: &corrected,
+            seller_id,
+            entry_date,
+            source: PostingSource::Manual,
+            actor,
+            now,
+            posting_profile_id: stored.posting_profile_id.as_str(),
+            rule_version: stored.rule_version.as_str(),
+            reverses: None,
+            open_item: None,
+        },
+    )?;
+    audit::append(
+        &transaction,
+        now,
+        actor,
+        "entry_reclassified",
+        "journal_entry",
+        &entry_id.to_string(),
+        json!({
+            "reversal": reversal.id.to_string(),
+            "corrected": corrected.id.to_string(),
+            "code": code.as_str(),
+            "rubriek": record.rubriek.code(),
+            "reason": reason.trim(),
+        }),
+    )?;
+    transaction.commit()?;
+
+    Ok(Reclassified {
+        original: stored.number,
+        reversal,
+        corrected,
+    })
 }
 
 /// The entry that already reverses `entry_id`, if one does.

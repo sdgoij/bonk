@@ -621,6 +621,27 @@ enum LedgerCommand {
         #[arg(long, default_value = "cli")]
         actor: String,
     },
+    /// File a posted purchase under a different treatment.
+    ///
+    /// Reverses the entry and posts the same amounts again with the code that
+    /// names the right box, in one transaction, so a correction never leaves the
+    /// supply counted twice or missing. Use it when a purchase was posted before
+    /// its treatment was known; afterwards `bonk ledger tax-code` is refused.
+    #[command(name = "reclassify")]
+    Reclassify {
+        /// The entry, as `IK:2026-0001` or by identifier.
+        entry: String,
+        /// The code that names where it belongs, e.g. NL-AE-GOODS.
+        code: String,
+        /// Why it is being corrected; it travels in both descriptions.
+        #[arg(long)]
+        reason: String,
+        /// The date the correction is booked; defaults to today.
+        #[arg(long)]
+        date: Option<String>,
+        #[arg(long, default_value = "cli")]
+        actor: String,
+    },
     /// Reverse one entry, naming it `VK:2026-0001` or by identifier.
     Reverse {
         /// Journal and number, or the entry identifier.
@@ -2046,6 +2067,30 @@ fn ledger(access: &Access, database: &Path, keystore: &Path, command: LedgerComm
             let count = lines.len();
             let posted = store::post_manual_entry(connection, owner, entry_date, &description, lines, &actor, &now)?;
             println!("posted {} {} ({count} lines)", posted.journal.code(), posted.number);
+            Ok(())
+        }
+        LedgerCommand::Reclassify {
+            entry,
+            code,
+            reason,
+            date,
+            actor,
+        } => {
+            let id = resolve_entry(session.database(), &entry)?;
+            let date = parse_date_or(date, LocalDate::today_utc())?;
+            let corrected = store::reclassify(connection, id, &code, &reason, date, &actor, &now)?;
+            println!(
+                "reversed {} as {} {}",
+                corrected.original,
+                corrected.reversal.journal.code(),
+                corrected.reversal.number
+            );
+            println!(
+                "refiled  {} {} under {code}",
+                corrected.corrected.journal.code(),
+                corrected.corrected.number
+            );
+            println!("dated {date}");
             Ok(())
         }
         LedgerCommand::OpenItems { kind, aging, as_of } => {

@@ -246,6 +246,7 @@ bonk ledger tax-codes                                   # the treatments a purch
 bonk ledger tax-code 2026-0042                          # what a document is filed under
 bonk ledger tax-code 2026-0042 NL-AE-GOODS              # put its reverse-charged VAT in 4b
 bonk ledger post-manual --date 2026-03-01 --description "Bankkosten" --line "7100|debit|12.50" --line "1100|credit|12.50"
+bonk ledger reclassify IK:2026-0001 NL-AE-GOODS --reason "verkeerde rubriek"
 bonk ledger open-items --kind payable --aging --as-of 2026-03-31
 bonk ledger bank add --name "Zakelijk" --iban NL91ABNA0417164300
 bonk ledger bank import ./statements/feb.camt.xml     # CAMT.053
@@ -283,13 +284,17 @@ document's classification after it could have changed — and the deduction stay
 in 5b either way. Sales need no code: their category and rate already decide the
 box.
 
-A treatment chosen wrongly after the fact is corrected the way any mistake in the
-books is: reverse the entry (`bonk ledger reverse IK:2026-0001 --reason ...`) and
-book the corrected amounts in the memorial journal. The memorial journal is the
-one place a person writes the lines, so it is where a box can be fixed: a line
-may name a category, a rate, and a code (`--line "1620|credit|42.00|AE|21|NL-AE-GOODS"`),
-and that is what puts the amount in 4b instead of wherever the account happened
-to point. A memorial entry needs a description, must balance, and a line on the
+A treatment chosen wrongly after the fact has one command:
+`bonk ledger reclassify IK:2026-0001 NL-AE-GOODS --reason "..."` writes the
+reversal and the replacement in one transaction, so the supply is never counted
+twice or missing, and records a single `entry_reclassified` event that ties the
+pair together. It only touches the lines the code's category applies to, refuses a
+second correction of the same entry, and refuses a sale — a sale's box is already
+decided by its category and rate. For a correction no rule can express, the
+memorial journal is still there: `bonk ledger post-manual` writes the lines a
+person composed, and a line may name a category, a rate, and a code
+(`--line "1620|credit|42.00|AE|21|NL-AE-GOODS"`), which is what puts the amount in
+4b. A memorial entry needs a description, must balance, and a line on the
 other-rate account must carry a code, because its box cannot be derived.
 
 ### A demo archive to explore the window

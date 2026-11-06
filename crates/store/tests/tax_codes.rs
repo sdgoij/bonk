@@ -341,6 +341,103 @@ fn a_coded_purchase_bundles_and_verifies_offline() {
 }
 
 #[test]
+fn a_posted_purchase_can_be_filed_under_another_code() {
+    let books = Books::open();
+    let connection = books.database.connection();
+    let purchase = books.buy(reverse_charge(), 200, "2026-01-12", "SUP-1");
+    let posted = post_document(connection, purchase, "ada", NOW).unwrap();
+    assert!(
+        compute(connection, books.seller, 2026, 1)
+            .unwrap()
+            .line(Rubriek::ReverseChargeServices)
+            .is_some()
+    );
+
+    let corrected = store::reclassify(
+        connection,
+        posted.id,
+        "NL-AE-GOODS",
+        "verkeerde rubriek",
+        date("2026-01-31"),
+        "ada",
+        NOW,
+    )
+    .unwrap();
+    assert_eq!(corrected.original, "2026-0001");
+    assert_eq!(corrected.reversal.journal, Journal::Purchase);
+    assert_ne!(corrected.reversal.number, corrected.corrected.number);
+
+    let report = compute(connection, books.seller, 2026, 1).unwrap();
+    assert!(
+        report.line(Rubriek::ReverseChargeServices).is_none(),
+        "the reversal empties 4a"
+    );
+    let goods = report.line(Rubriek::ReverseChargeGoods).unwrap();
+    assert_eq!(goods.base_micros, 200_000_000);
+    assert_eq!(goods.vat_micros, 42_000_000);
+    assert_eq!(
+        report.line(Rubriek::VatDeductible).unwrap().vat_micros,
+        42_000_000,
+        "the deduction is untouched"
+    );
+    assert!(store::readiness(connection, books.seller, 2026, 1).unwrap().is_ready());
+
+    // The replacement names the code on every line of the supply, so a report and
+    // a bundle read the same treatment.
+    let stored = load_entry(connection, corrected.corrected.id).unwrap().unwrap();
+    assert!(
+        stored
+            .entry
+            .lines()
+            .iter()
+            .filter(|line| line.vat().is_some())
+            .all(|line| line.tax_code().map(crux::TaxCode::as_str) == Some("NL-AE-GOODS"))
+    );
+
+    // The pair is one fact in the chain, not two unexplained entries.
+    let events: i64 = connection
+        .query_row(
+            "SELECT count(*) FROM audit_event WHERE kind = 'entry_reclassified'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(events, 1);
+
+    // A second correction is refused: the entry is already reversed.
+    let error = store::reclassify(
+        connection,
+        posted.id,
+        "NL-AE-GOODS",
+        "again",
+        date("2026-01-31"),
+        "ada",
+        NOW,
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("already reversed"), "{error}");
+}
+
+#[test]
+fn a_sale_is_not_reclassified_by_a_purchase_code() {
+    let mut books = Books::open();
+    let sale = books.sell(TaxTreatment::standard(VatRate::STANDARD_NL), 100, "2026-01-10");
+    let posted = post_outbound_document(books.database.connection(), sale, "ada", NOW).unwrap();
+
+    let error = store::reclassify(
+        books.database.connection(),
+        posted.id,
+        "NL-AE-GOODS",
+        "x",
+        date("2026-01-31"),
+        "ada",
+        NOW,
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("only a purchase"), "{error}");
+}
+
+#[test]
 fn clearing_returns_the_document_to_its_own_category() {
     let books = Books::open();
     let purchase = books.buy(reverse_charge(), 200, "2026-01-12", "SUP-1");

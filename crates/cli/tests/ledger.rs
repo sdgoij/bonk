@@ -462,6 +462,8 @@ fn a_memorial_entry_is_written_and_must_balance() {
 #[test]
 fn tax_codes_are_listed_and_a_sale_has_none_to_choose() {
     let archive = Archive::new();
+    archive.run(&["ledger", "setup"]);
+    archive.run(&["ledger", "post"]);
 
     let said = archive.run(&["ledger", "tax-codes"]);
     assert!(said.contains("NL-AE-SERVICES"), "{said}");
@@ -475,6 +477,10 @@ fn tax_codes_are_listed_and_a_sale_has_none_to_choose() {
     // Only received documents take a code: a sale is placed by its own category.
     let said = archive.fail(&["ledger", "tax-code", "2026-0001", "NL-AE-GOODS"]);
     assert!(said.contains("received documents"), "{said}");
+
+    // The same applies to a correction: there is no box to move on a sale.
+    let said = archive.fail(&["ledger", "reclassify", "VK:2026-0001", "NL-AE-GOODS", "--reason", "x"]);
+    assert!(said.contains("only a purchase"), "{said}");
 }
 
 #[test]

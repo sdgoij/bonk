@@ -1243,6 +1243,16 @@ needs. Reversing the entry and booking the corrected amounts under the right cod
 leaves 4a at zero, 4b holding the supply, 5b unchanged, and the period fileable;
 an integration test walks exactly that sequence.
 
+`store::reclassify`, behind `bonk ledger reclassify`, does the two-step in one
+transaction: it reverses the entry and posts the same amounts with the code
+swapped, and writes one `entry_reclassified` event that ties the pair together. It
+touches only the lines whose category the code resolves, refuses a second
+correction of the same entry, and refuses a sale. Making it atomic meant splitting
+`post_entry` and `reverse_entry` into thin transaction-owning wrappers around
+bodies a caller can run inside its own transaction: a correction that committed
+the reversal and then failed on the replacement would have dropped the supply from
+the books.
+
 ---
 
 ## 5. First two weeks, concretely
