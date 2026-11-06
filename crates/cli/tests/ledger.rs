@@ -384,3 +384,23 @@ fn a_bank_statement_settles_an_invoice_end_to_end() {
     let said = archive.run(&["ledger", "bank", "transactions", "--status", "matched"]);
     assert!(said.contains("Klant BV"), "{said}");
 }
+
+#[test]
+fn an_evidence_bundle_carries_the_books_the_invoice_landed_in() {
+    let archive = Archive::new();
+    archive.run(&["ledger", "setup"]);
+    archive.run(&["ledger", "post"]);
+    archive.run(&["ledger", "vat-return", "--year", "2026", "--month", "2", "--prepare"]);
+
+    let bundle = archive.dir.path().join("evidence");
+    let said = archive.run(&["evidence", "2026-0001", "--out", bundle.to_str().expect("utf-8")]);
+    assert!(said.contains("ledger:    1 entries, 1 VAT return(s)"), "{said}");
+    assert!(bundle.join("ledger.jsonl").exists());
+    assert!(bundle.join("vat-returns").is_dir(), "the filed return travels with it");
+
+    // The verifier needs neither the archive nor the keystore: the bundle
+    // explains its own books.
+    let said = bonk_ok(&["evidence-verify", bundle.to_str().expect("utf-8")]);
+    assert!(said.contains("bundle verified"), "{said}");
+    assert!(said.contains("1 entries, 1 VAT return(s)"), "{said}");
+}

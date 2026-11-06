@@ -128,6 +128,24 @@ impl Rubriek {
     pub const fn is_total(self) -> bool {
         matches!(self, Self::VatDue | Self::VatPayable)
     }
+
+    /// True when this box's VAT is part of 5a.
+    ///
+    /// The supplies with a zero VAT column (1e, 3a, 3b) are boxes without VAT, and
+    /// 5b is deducted rather than added. Everything else with a VAT column raises
+    /// what is due.
+    pub const fn counts_toward_due(self) -> bool {
+        matches!(
+            self,
+            Self::HighRate
+                | Self::LowRate
+                | Self::OtherRate
+                | Self::PrivateUse
+                | Self::EuAcquisitions
+                | Self::ReverseChargeServices
+                | Self::ReverseChargeGoods
+        )
+    }
 }
 
 /// The rubriek a journal line belongs in, or `None` when it has no VAT meaning.
@@ -361,18 +379,7 @@ pub fn compute(conn: &Connection, seller_id: SellerId, year: i32, period_no: u8)
     // way whatever produced it.
     let vat_due: i64 = totals
         .iter()
-        .filter(|(rubriek, _)| {
-            matches!(
-                rubriek,
-                Rubriek::HighRate
-                    | Rubriek::LowRate
-                    | Rubriek::OtherRate
-                    | Rubriek::PrivateUse
-                    | Rubriek::EuAcquisitions
-                    | Rubriek::ReverseChargeServices
-                    | Rubriek::ReverseChargeGoods
-            )
-        })
+        .filter(|(rubriek, _)| rubriek.counts_toward_due())
         .map(|(_, (_, vat))| *vat)
         .sum();
     let vat_deductible = totals.get(&Rubriek::VatDeductible).map_or(0, |(_, vat)| *vat);

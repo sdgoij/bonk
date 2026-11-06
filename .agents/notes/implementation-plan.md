@@ -933,7 +933,9 @@ the chain must recompute to the recorded head with at least one event naming the
 document. Export verifies what it wrote before reporting success, and refuses a
 number that matches both directions. `bonk evidence` and `bonk evidence-verify`
 expose it. The chain travels whole, so bundles grow with the archive; the design
-note records that trade-off and what a bundle does and does not prove.
+note records that trade-off and what a bundle does and does not prove. Since M10,
+the bundle also carries the journal entries and prepared VAT returns that belong
+to the document — see the M10 status note for how those are chosen and verified.
 
 M6.6's bundle is in. `store::support` collects counts, versions, sizes, the
 integrity audit, the chain head, and per-kind audit counts, writes `summary.json`
@@ -1154,6 +1156,20 @@ unmatching appends a reversal and leaves the history intact. The control-account
 check now compares against what is still outstanding. Still missing from A4:
 MT940 and CSV profiles, group matching, rule-based classification, and the
 keyboard-first queue (which is UI).
+
+**Status, 2026-11-06 (evidence bundle carries the books).** An exported bundle
+now holds the accountancy behind the document: `ledger.jsonl` with one record per
+journal entry, and `vat-returns/<id>.json` for every stored return whose basis
+names one of them. The selection starts at the posting the document produced,
+follows corrections both ways along `reverses_entry_id`, then pulls in each such
+return whole — a return cannot be explained by one of its postings, so the other
+entries of its period travel too. `verify` recomputes each entry's content hash
+from the numbers in the bundle, requires the verified chain to have recorded that
+same hash for the posting, re-derives each return's basis hash from the entries it
+names (refusing a basis entry the bundle does not carry), and re-adds the boxes to
+check 5a and 5c. A forger who rewrites a line and rebuilds every manifest hash
+still has to rewrite the chain, which is recomputed. The ledger fields are
+optional in the manifest, so a bundle written before this still verifies.
 
 ---
 

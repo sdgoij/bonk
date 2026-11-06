@@ -465,10 +465,16 @@ keep a second route open. The used key stops working.
 `evidence <document> --out <dir>` writes a bundle an auditor or counterparty can
 check without the archive: the document's stored record, its artefacts (and, for
 an imported document, the bytes as received), and the whole audit chain, with
-every file listed by SHA-256 in `manifest.json`. `evidence-verify <dir>` needs no
-keystore and no database: it hashes every file, rejects anything the manifest
-never listed, refuses paths that leave the bundle, and recomputes the chain,
-requiring it to end at the recorded head. A number that names both an issued and
+every file listed by SHA-256 in `manifest.json`. When the document is posted, the
+bundle also carries its books: `ledger.jsonl` holds the journal entries behind it,
+and `vat-returns/` holds every prepared return whose basis names one of them — a
+return is only explainable with its whole basis, so the other postings of its
+period travel too. `evidence-verify <dir>` needs no keystore and no database: it
+hashes every file, rejects anything the manifest never listed, refuses paths that
+leave the bundle, recomputes the chain and requires it to end at the recorded
+head, re-derives each entry's content hash and matches it against what the chain
+recorded, recomputes each return's basis hash from the entries present, and
+re-adds the rubrieken to check 5a and 5c. A number that names both an issued and
 a received document is refused rather than guessed at — pass the identifier.
 The chain travels whole, so a bundle grows with the archive; the design note says
 what that buys and what it does not prove.

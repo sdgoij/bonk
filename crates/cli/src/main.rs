@@ -709,6 +709,12 @@ fn run(cli: Cli) -> Result<(), CliError> {
                 Some(hash) => println!("chain:     {} events, head {hash}", report.events),
                 None => println!("chain:     empty"),
             }
+            if report.ledger_entries > 0 || report.vat_returns > 0 {
+                println!(
+                    "ledger:    {} entries, {} VAT return(s)",
+                    report.ledger_entries, report.vat_returns
+                );
+            }
             println!("verified:  ok");
             Ok(())
         }
@@ -722,6 +728,12 @@ fn run(cli: Cli) -> Result<(), CliError> {
             match &report.head {
                 Some(hash) => println!("chain:     {} events, head {hash}", report.events),
                 None => println!("chain:     empty"),
+            }
+            if report.ledger_entries > 0 || report.vat_returns > 0 {
+                println!(
+                    "ledger:    {} entries, {} VAT return(s)",
+                    report.ledger_entries, report.vat_returns
+                );
             }
             Ok(())
         }
