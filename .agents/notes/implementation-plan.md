@@ -1275,9 +1275,19 @@ and smoke-tests the Intel one, so no archive is labelled with an architecture it
 does not contain. The arm64 macOS runner pool is deliberately out of the critical
 path: it had already left a release queued with no machine twice. Still missing
 against the table above: installers, code signing, notarisation, and the signed
-update manifest. Every release now carries `SHA256SUMS` over all its assets and
-`bonk.cdx.json`, a CycloneDX 1.6 SBOM of the shipped binary's dependency graph
-timestamped from the commit so the same tag produces the same document.
+update manifest.
+
+**Status, 2026-11-06.** `v0.1.0-preview.3` is the first release to carry an SBOM
+and sums: the release page lists `bonk.cdx.json` and `SHA256SUMS` beside the five
+archives, the pipeline ran green end to end in 33 minutes, and the downloaded set
+passes `sha256sum -c SHA256SUMS` for every hashed file. The document is CycloneDX
+1.6 with root `cli 0.1.0` and a timestamp of the commit's own time
+(2026-11-06T11:30:19Z), so it is a function of the tag rather than of the build.
+One limitation remains open: `cargo cyclonedx` resolves for the host target, so
+the published document describes what the Linux binary links (438 components) and
+omits crates only Windows or macOS need. `--target all` covers every supported
+platform in one file, at the cost of listing dependencies a given archive does
+not contain.
 
 ---
 
