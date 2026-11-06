@@ -84,6 +84,10 @@ pub enum WorkspaceAction {
 pub struct Workspace {
     seller: Option<SellerRecord>,
     customers: Vec<CustomerRecord>,
+    /// The treatments a purchase can be filed under, read once when the workspace
+    /// opened: the catalogue is a published artefact and does not change while a
+    /// window is up.
+    tax_codes: Vec<store::TaxCodeRecord>,
     seller_form: SellerForm,
     customer_form: CustomerForm,
     show_customer_form: bool,
@@ -152,6 +156,10 @@ struct SearchView {
     query_error: Option<String>,
     /// The result the user opened, read back from the archive.
     opened: Option<DocumentView>,
+    /// The treatment the open document is filed under, when one is chosen.
+    opened_tax_code: Option<store::TaxCodeRecord>,
+    /// True when the open document has an entry, so its treatment is fixed.
+    opened_posted: bool,
     /// Why the last attempt to open a result failed, if it did.
     open_error: Option<String>,
     /// The saved filters for this seller.
@@ -185,6 +193,8 @@ impl Default for SearchView {
             counts: SearchCounts::default(),
             query_error: None,
             opened: None,
+            opened_tax_code: None,
+            opened_posted: false,
             open_error: None,
             saved: Vec::new(),
             save_name: String::new(),
@@ -504,15 +514,20 @@ impl SearchView {
     fn open(&mut self, database: &store::Database, id: DocumentId) {
         match store::archive::load(database.connection(), id) {
             Ok(Some(view)) => {
+                let connection = database.connection();
+                self.opened_tax_code = store::assigned_tax_code(connection, id).ok().flatten();
+                self.opened_posted = store::entry_for_document(connection, id).ok().flatten().is_some();
                 self.opened = Some(view);
                 self.open_error = None;
             }
             Ok(None) => {
                 self.opened = None;
+                self.opened_tax_code = None;
                 self.open_error = Some("that document is no longer in this archive; run the search again".to_owned());
             }
             Err(error) => {
                 self.opened = None;
+                self.opened_tax_code = None;
                 self.open_error = Some(error.to_string());
             }
         }
@@ -1085,6 +1100,7 @@ impl Workspace {
         let mut workspace = Self {
             seller: first_seller(connection)?,
             customers: list_customers(connection)?,
+            tax_codes: store::list_tax_codes(connection).unwrap_or_default(),
             seller_form: SellerForm::default(),
             customer_form: CustomerForm::default(),
             show_customer_form: false,
@@ -1466,6 +1482,7 @@ impl Workspace {
         let mut save_artefact = None;
         let mut settle = None;
         let mut match_supplier = None;
+        let mut tax_code: Option<Option<crux::TaxCode>> = None;
         let list = egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             ui.set_width(width);
             if self.search.results.is_empty() {
@@ -1546,7 +1563,18 @@ impl Workspace {
                         .corner_radius(6)
                         .inner_margin(egui::Margin::same(12))
                         .show(ui, |ui| match &self.search.opened {
-                            Some(view) => document_panel(ui, language, view, &self.customers, &mut self.match_target),
+                            Some(view) => document_panel(
+                                ui,
+                                language,
+                                view,
+                                &self.customers,
+                                &mut self.match_target,
+                                &TaxCodePicker {
+                                    codes: &self.tax_codes,
+                                    assigned: self.search.opened_tax_code.as_ref(),
+                                    posted: self.search.opened_posted,
+                                },
+                            ),
                             None => DocumentAction::None,
                         })
                         .inner;
@@ -1556,6 +1584,7 @@ impl Workspace {
                         DocumentAction::Save(kind) => save_artefact = Some(kind),
                         DocumentAction::Advance(status) => settle = Some(status),
                         DocumentAction::Match(customer) => match_supplier = Some(customer),
+                        DocumentAction::TaxCode(code) => tax_code = Some(code),
                     }
                     ui.add_space(4.0);
                 }
@@ -1596,6 +1625,11 @@ impl Workspace {
         }
         if let Some(customer) = match_supplier {
             self.match_opened(session, customer);
+        }
+        if let Some(code) = tax_code
+            && let Some(id) = self.search.opened.as_ref().map(|view| view.id)
+        {
+            self.set_tax_code(session, id, code);
         }
         if close_panel {
             self.search.opened = None;
@@ -4076,6 +4110,26 @@ impl Workspace {
         }
     }
 
+    /// Files the open purchase under a code, or under its own category again.
+    fn set_tax_code(&mut self, session: &Session, id: DocumentId, code: Option<crux::TaxCode>) {
+        let language = self.language;
+        let connection = session.database().connection();
+        let now = store::now_rfc3339();
+        let outcome = match code {
+            Some(code) => store::assign_tax_code(connection, id, code.as_str(), ACTOR, &now)
+                .map(|record| text::find::tax_code_assigned(language, record.code.as_str(), record.rubriek.code())),
+            None => store::clear_tax_code(connection, id, ACTOR, &now)
+                .map(|()| text::find::tax_code_cleared(language).to_owned()),
+        };
+        match outcome {
+            Ok(message) => {
+                self.message = Some(Message::ok(message));
+                self.refresh_opened(session, id);
+            }
+            Err(error) => self.message = Some(Message::error(error.to_string())),
+        }
+    }
+
     /// Moves the open received document forward one status.
     fn advance_opened(&mut self, session: &Session, target: DocumentStatus) {
         let Some(id) = self.search.opened.as_ref().map(|view| view.id) else {
@@ -5237,6 +5291,18 @@ enum DocumentAction {
     Advance(DocumentStatus),
     /// Record the chosen supplier for the open received document.
     Match(CustomerId),
+    /// File the open purchase under a code, or under its own category again.
+    TaxCode(Option<crux::TaxCode>),
+}
+
+/// The treatments offered for one document, and whether it can still change.
+struct TaxCodePicker<'a> {
+    /// The whole catalogue; the row offers the codes its categories allow.
+    codes: &'a [store::TaxCodeRecord],
+    /// What the document is filed under now.
+    assigned: Option<&'a store::TaxCodeRecord>,
+    /// True when the posting already snapshotted the treatment.
+    posted: bool,
 }
 
 /// Draws a stored document read-only.
@@ -5246,6 +5312,7 @@ fn document_panel(
     view: &DocumentView,
     customers: &[CustomerRecord],
     match_target: &mut Option<CustomerId>,
+    picker: &TaxCodePicker<'_>,
 ) -> DocumentAction {
     let mut action = DocumentAction::None;
     ui.horizontal(|ui| {
@@ -5296,6 +5363,9 @@ fn document_panel(
     ui.add_space(6.0);
     if view.direction == Direction::Inbound {
         action = received_actions(ui, language, view, customers, match_target);
+        if let Some(chosen) = tax_code_row(ui, language, view, picker) {
+            action = chosen;
+        }
         ui.add_space(6.0);
     }
     egui::Grid::new("document-lines")
@@ -5427,6 +5497,72 @@ fn received_actions(
         {
             action = DocumentAction::Advance(target);
         }
+    });
+    action
+}
+
+/// The treatment picker for a received document.
+///
+/// Only the codes whose category the document actually carries are offered, and
+/// only while the document is unposted: the posting snapshots the code, so a
+/// change afterwards would look like it had moved the VAT when it had not.
+fn tax_code_row(
+    ui: &mut egui::Ui,
+    language: Language,
+    view: &DocumentView,
+    picker: &TaxCodePicker<'_>,
+) -> Option<DocumentAction> {
+    let categories: Vec<VatCategory> = view
+        .totals
+        .breakdown
+        .iter()
+        .map(|row| row.category)
+        .filter(|category| matches!(category, VatCategory::ReverseCharge | VatCategory::IntraCommunity))
+        .collect();
+    if categories.is_empty() && picker.assigned.is_none() {
+        return None;
+    }
+    let assigned = picker.assigned;
+    let posted = picker.posted;
+
+    let mut action = None;
+    ui.horizontal(|ui| {
+        ui.label(text::find::tax_code_label(language));
+        let selected = assigned.map_or_else(
+            || text::find::tax_code_none(language).to_owned(),
+            |record| format!("{} ({})", record.code, record.rubriek.code()),
+        );
+        ui.add_enabled_ui(!posted, |ui| {
+            egui::ComboBox::from_id_salt("document-tax-code")
+                .selected_text(selected)
+                .show_ui(ui, |ui| {
+                    for record in picker
+                        .codes
+                        .iter()
+                        .filter(|record| categories.contains(&record.category))
+                    {
+                        let chosen = assigned.is_some_and(|current| current.code == record.code);
+                        let label = format!("{} ({})", record.code, record.rubriek.code());
+                        if ui.selectable_label(chosen, label).clicked() {
+                            action = Some(DocumentAction::TaxCode(Some(record.code.clone())));
+                        }
+                    }
+                });
+            if ui
+                .add_enabled(
+                    assigned.is_some(),
+                    egui::Button::new(text::find::tax_code_clear_action(language)),
+                )
+                .clicked()
+            {
+                action = Some(DocumentAction::TaxCode(None));
+            }
+        });
+    });
+    ui.weak(if posted {
+        text::find::tax_code_posted(language)
+    } else {
+        text::find::tax_code_hint(language)
     });
     action
 }
@@ -7296,5 +7432,34 @@ mod tests {
             });
             output.drop_without_applying_deltas();
         }
+    }
+
+    #[test]
+    fn an_opened_document_knows_whether_its_treatment_is_fixed() {
+        let (_dir, session, seller) = session_with_one_issued();
+        store::seed_starter_chart(session.database().connection(), NOW).unwrap();
+        let mut workspace = Workspace::new(&session).unwrap();
+        workspace.search.run(session.database(), seller.id).unwrap();
+        let id = workspace.search.results[0].id;
+
+        workspace.search.open(session.database(), id);
+        assert!(
+            !workspace.search.opened_posted,
+            "nothing has been posted, so a treatment could still be chosen"
+        );
+
+        store::post_outbound_document(session.database().connection(), id, "test", NOW).unwrap();
+        workspace.search.open(session.database(), id);
+        assert!(
+            workspace.search.opened_posted,
+            "the entry exists, so the panel disables the picker"
+        );
+
+        // A sale takes no code; if the window asked anyway, the refusal is what it
+        // would show rather than a silent no-op.
+        workspace.set_tax_code(&session, id, Some(crux::TaxCode::parse("NL-AE-GOODS").unwrap()));
+        let message = workspace.message.as_ref().expect("a refusal is reported");
+        assert!(message.error, "{}", message.text);
+        assert!(message.text.contains("received documents"), "{}", message.text);
     }
 }

@@ -339,7 +339,12 @@ received…** opens the platform's file picker — the Windows common dialog, th
 macOS panel, or the XDG portal — and the list switches to the received side with
 the new document folded open. An opened received document shows its supplier —
 matched, or **not matched** with a picker over the party table — and offers
-**Approve** and then **Mark paid**, recording the same audit events as the CLI.
+**Approve** and then **Mark paid**, recording the same audit events as the CLI. A
+reverse-charged purchase also shows the treatment it is filed under: a **Tax code**
+picker offering only the codes whose category the document actually carries, and
+**Clear** to put it back on its category alone. The picker is disabled once the
+document is posted, because the posting is what fixes the treatment; the same rule
+the store enforces, said where the user can see it.
 The composer's **Preview** lays the invoice out with the same engine that issuing
 uses — the window draws the same pages the PDF writer receives — and fits the
 page to the width of the window, centred, so a wide window shows a larger sheet.

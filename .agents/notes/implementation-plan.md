@@ -1253,6 +1253,14 @@ bodies a caller can run inside its own transaction: a correction that committed
 the reversal and then failed on the replacement would have dropped the supply from
 the books.
 
+The window can classify too. An opened received document shows a **Tax code**
+picker over the codes whose category it actually carries, disabled as soon as the
+document is posted, with **Clear** to return to the category alone. `SearchView`
+reads the assignment and whether an entry exists when it opens a document
+(`store::entry_for_document`), so the panel does not query the ledger per frame,
+and the picker writes through the same `assign`/`clear` the CLI uses. A refusal —
+say, a sale — arrives as the window's error banner rather than a silent no-op.
+
 ---
 
 ## 5. First two weeks, concretely

@@ -1079,6 +1079,57 @@ pub mod find {
         sentence!(language, "Supplier", "Leverancier")
     }
 
+    /// The treatment the open purchase is filed under.
+    pub fn tax_code_label(language: Language) -> &'static str {
+        sentence!(language, "Tax code", "Btw-code")
+    }
+
+    /// No code is assigned, so the category alone decides the box.
+    pub fn tax_code_none(language: Language) -> &'static str {
+        sentence!(language, "the category alone", "alleen de categorie")
+    }
+
+    /// A hint under the picker.
+    pub fn tax_code_hint(language: Language) -> &'static str {
+        sentence!(
+            language,
+            "Decides which box the return files this purchase under.",
+            "Bepaalt in welke rubriek de aangifte deze inkoop opneemt."
+        )
+    }
+
+    /// The treatment is already in the entry, so it is not editable here.
+    pub fn tax_code_posted(language: Language) -> &'static str {
+        sentence!(
+            language,
+            "Posted: the treatment is fixed in its entry.",
+            "Geboekt: de behandeling staat vast in de boeking."
+        )
+    }
+
+    /// The assignment changed.
+    pub fn tax_code_assigned(language: Language, code: &str, rubriek: &str) -> String {
+        sentence!(
+            language,
+            format!("Filed under {code}, box {rubriek}."),
+            format!("Opgenomen onder {code}, rubriek {rubriek}.")
+        )
+    }
+
+    /// The assignment was removed.
+    pub fn tax_code_cleared(language: Language) -> &'static str {
+        sentence!(
+            language,
+            "Tax code cleared; the category alone decides now.",
+            "Btw-code gewist; nu beslist alleen de categorie."
+        )
+    }
+
+    /// The action that removes the assignment.
+    pub fn tax_code_clear_action(language: Language) -> &'static str {
+        sentence!(language, "Clear", "Wissen")
+    }
+
     /// Shown when no party matched the issuer.
     pub fn unmatched(language: Language) -> &'static str {
         sentence!(language, "not matched", "niet gekoppeld")

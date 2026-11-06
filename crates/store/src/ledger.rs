@@ -1053,6 +1053,26 @@ pub fn reclassify(
     })
 }
 
+/// The entry a document was posted as, if it has been.
+///
+/// A document and its posting are one to one, so the source key decides it; the
+/// source kind is checked too because a caller should not have to know which one
+/// the posting rules chose.
+pub fn entry_for_document(conn: &Connection, document_id: DocumentId) -> Result<Option<JournalEntryId>, StoreError> {
+    let mut statement = conn.prepare(
+        "SELECT id FROM journal_entry WHERE source_id = ?1
+         AND source_kind IN ('outbound_document', 'inbound_document')",
+    )?;
+    let mut rows = statement.query([document_id.to_string()])?;
+    let Some(row) = rows.next()? else {
+        return Ok(None);
+    };
+    let id: String = row.get(0)?;
+    Ok(Some(
+        JournalEntryId::parse_str(&id).map_err(|error| StoreError::Data(error.to_string()))?,
+    ))
+}
+
 /// The entry that already reverses `entry_id`, if one does.
 pub fn reversal_of(conn: &Connection, entry_id: JournalEntryId) -> Result<Option<String>, StoreError> {
     let mut statement = conn.prepare("SELECT number FROM journal_entry WHERE reverses_entry_id = ?1")?;
