@@ -80,6 +80,43 @@ pub enum DomainError {
     /// An empty collection was summed, so the currency is unknown.
     #[error("cannot sum an empty collection of amounts")]
     EmptySum,
+
+    /// An account code was empty, too long, or held a character a code may not.
+    #[error("invalid account code: {0:?}")]
+    InvalidAccountCode(String),
+
+    /// An account kind was not one of the five the ledger knows.
+    #[error("invalid account kind: {0:?}")]
+    InvalidAccountKind(String),
+
+    /// A journal code was not one of the shipped journals.
+    #[error("invalid journal: {0:?}")]
+    InvalidJournal(String),
+
+    /// A ledger side was neither `debit` nor `credit`.
+    #[error("invalid ledger side: {0:?}")]
+    InvalidSide(String),
+
+    /// A ledger line carried a zero or negative amount.
+    #[error("a ledger line amount must be positive, got {0} micro-units")]
+    AmountNotPositive(i64),
+
+    /// An entry was built without lines.
+    #[error("a journal entry needs at least one line")]
+    EmptyEntry,
+
+    /// An entry's debits and credits did not match.
+    #[error("journal entry does not balance: debits {debit_micros} vs credits {credit_micros}")]
+    EntryUnbalanced {
+        /// Sum of the debit lines, in micro-units.
+        debit_micros: i64,
+        /// Sum of the credit lines, in micro-units.
+        credit_micros: i64,
+    },
+
+    /// A required piece of text was blank.
+    #[error("required text is empty: {0}")]
+    EmptyText(&'static str),
 }
 
 impl DomainError {
@@ -110,6 +147,14 @@ impl DomainError {
             Self::InvalidId(_) => "id-invalid",
             Self::DivisionByZero => "division-by-zero",
             Self::EmptySum => "sum-empty",
+            Self::InvalidAccountCode(_) => "account-code-invalid",
+            Self::InvalidAccountKind(_) => "account-kind-invalid",
+            Self::InvalidJournal(_) => "journal-invalid",
+            Self::InvalidSide(_) => "side-invalid",
+            Self::AmountNotPositive(_) => "amount-not-positive",
+            Self::EmptyEntry => "entry-empty",
+            Self::EntryUnbalanced { .. } => "entry-unbalanced",
+            Self::EmptyText(_) => "text-empty",
         }
     }
 }
@@ -146,6 +191,17 @@ mod tests {
             DomainError::InvalidId("x".to_owned()),
             DomainError::DivisionByZero,
             DomainError::EmptySum,
+            DomainError::InvalidAccountCode("x".to_owned()),
+            DomainError::InvalidAccountKind("x".to_owned()),
+            DomainError::InvalidJournal("x".to_owned()),
+            DomainError::InvalidSide("x".to_owned()),
+            DomainError::AmountNotPositive(-1),
+            DomainError::EmptyEntry,
+            DomainError::EntryUnbalanced {
+                debit_micros: 1,
+                credit_micros: 0,
+            },
+            DomainError::EmptyText("x"),
         ]
     }
 

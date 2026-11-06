@@ -2009,7 +2009,68 @@ pub mod problem {
                 "An empty set of amounts cannot be added up.".to_owned(),
                 "Een lege reeks bedragen kan niet worden opgeteld.".to_owned()
             ),
+            DomainError::InvalidAccountCode(value) => sentence!(
+                language,
+                format!("{value} is not an account code."),
+                format!("{value} is geen grootboekrekeningnummer.")
+            ),
+            DomainError::InvalidAccountKind(value) => sentence!(
+                language,
+                format!("{value} is not a kind of account."),
+                format!("{value} is geen soort grootboekrekening.")
+            ),
+            DomainError::InvalidJournal(value) => sentence!(
+                language,
+                format!("{value} is not a journal."),
+                format!("{value} is geen dagboek.")
+            ),
+            DomainError::InvalidSide(value) => sentence!(
+                language,
+                format!("{value} is neither a debit nor a credit side."),
+                format!("{value} is geen debet- of creditzijde.")
+            ),
+            DomainError::AmountNotPositive(_) => sentence!(
+                language,
+                "An amount must be greater than zero.".to_owned(),
+                "Een bedrag moet groter dan nul zijn.".to_owned()
+            ),
+            DomainError::EmptyEntry => sentence!(
+                language,
+                "A journal entry needs at least one line.".to_owned(),
+                "Een journaalpost heeft minstens één regel nodig.".to_owned()
+            ),
+            DomainError::EntryUnbalanced {
+                debit_micros,
+                credit_micros,
+            } => {
+                let debit = micros_text(*debit_micros);
+                let credit = micros_text(*credit_micros);
+                sentence!(
+                    language,
+                    format!("The entry does not balance: {debit} debited, {credit} credited."),
+                    format!("De boeking sluit niet: {debit} gedebiteerd, {credit} gecrediteerd.")
+                )
+            }
+            DomainError::EmptyText(what) => sentence!(
+                language,
+                format!("{what} is required."),
+                format!("{what} is verplicht.")
+            ),
         }
+    }
+
+    /// Micro-units as a plain decimal string, without floating point.
+    fn micros_text(micros: i64) -> String {
+        let sign = if micros < 0 { "-" } else { "" };
+        let magnitude = micros.unsigned_abs();
+        let whole = magnitude / 1_000_000;
+        let fraction = magnitude % 1_000_000;
+        if fraction == 0 {
+            return format!("{sign}{whole}");
+        }
+        let digits = format!("{fraction:06}");
+        let trimmed = digits.trim_end_matches('0');
+        format!("{sign}{whole}.{trimmed}")
     }
 
     /// A rate in basis points as a percentage, without floating point.
