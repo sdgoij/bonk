@@ -13,6 +13,7 @@ use crux::{Currency, CustomerId, DocumentId, LocalDate, Money, SellerId};
 use rusqlite::{Connection, params};
 use serde_json::json;
 
+use crate::audit;
 use crate::error::StoreError;
 
 /// Which control account an open item belongs to.
@@ -294,5 +295,109 @@ pub(crate) fn audit_payload(item: &NewOpenItem) -> serde_json::Value {
         "party_id": item.party_id.to_string(),
         "amount_micros": item.amount.micros(),
         "due_date": item.due_date.map(LocalDate::to_iso_string),
+    })
+}
+
+/// What a rebuild of the subledger found and wrote.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct RebuildReport {
+    /// Items written by this run.
+    pub added: usize,
+    /// Items that were already there; a rebuild never rewrites one.
+    pub present: usize,
+    /// Posted documents the posting had nothing to write for, because it could
+    /// not name a counterparty. They are why the control accounts would still
+    /// disagree, so they are named rather than dropped.
+    pub unmatched: Vec<String>,
+}
+
+impl RebuildReport {
+    /// True when the subledger now covers every posted document it can.
+    pub fn is_complete(&self) -> bool {
+        self.unmatched.is_empty()
+    }
+}
+
+/// Writes the subledger items an older archive never wrote.
+///
+/// An item is written inside a posting, so an archive whose documents were posted
+/// before the table existed has entries with nothing behind them: the debtors and
+/// creditors accounts cannot be reconciled against a subledger that is not there,
+/// and re-posting does not help, because posting is idempotent per document.
+///
+/// This fills that gap from the documents themselves, through the same function
+/// the posting uses, so the result is what the posting would have written. It only
+/// adds: an item that already exists is never rewritten, because allocations may
+/// already point at it.
+pub fn rebuild(conn: &Connection, seller_id: SellerId, actor: &str, now: &str) -> Result<RebuildReport, StoreError> {
+    let transaction = conn.unchecked_transaction()?;
+    let present: i64 = transaction.query_row(
+        "SELECT count(*) FROM open_item WHERE seller_id = ?1",
+        [seller_id.to_string()],
+        |row| row.get(0),
+    )?;
+    let present = usize::try_from(present).map_err(|_| StoreError::Data("too many open items".to_owned()))?;
+
+    let pending = {
+        let mut statement = transaction.prepare(
+            "SELECT e.source_kind, d.id, d.number
+             FROM journal_entry e
+             JOIN document d ON d.id = e.source_id
+             WHERE d.owner_id = ?1
+               AND e.source_kind IN ('outbound_document', 'inbound_document')
+               AND NOT EXISTS (
+                   SELECT 1 FROM open_item o
+                   WHERE o.source_id = d.id AND o.source_kind = e.source_kind
+               )
+             ORDER BY d.issue_date_local, d.number",
+        )?;
+        let mut rows = statement.query([seller_id.to_string()])?;
+        let mut pending = Vec::new();
+        while let Some(row) = rows.next()? {
+            let id: String = row.get(1)?;
+            pending.push((
+                row.get::<_, String>(0)?,
+                DocumentId::parse_str(&id).map_err(|error| StoreError::Data(error.to_string()))?,
+                row.get::<_, String>(2)?,
+            ));
+        }
+        pending
+    };
+
+    let mut added = 0;
+    let mut unmatched = Vec::new();
+    for (source_kind, document_id, number) in &pending {
+        match crate::posting::open_item_for_document(&transaction, *document_id)? {
+            Some(item) => {
+                insert(&transaction, seller_id, source_kind, *document_id, &item, now)?;
+                added += 1;
+            }
+            None => unmatched.push(number.clone()),
+        }
+    }
+
+    // A run that found nothing to do is not worth an event; one that wrote items
+    // is, because the subledger changed after the postings that explain it.
+    if added > 0 {
+        audit::append(
+            &transaction,
+            now,
+            actor,
+            "open_items_rebuilt",
+            "seller",
+            &seller_id.to_string(),
+            json!({
+                "added": added,
+                "present": present,
+                "unmatched": &unmatched,
+            }),
+        )?;
+    }
+    transaction.commit()?;
+
+    Ok(RebuildReport {
+        added,
+        present,
+        unmatched,
     })
 }

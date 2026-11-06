@@ -1189,6 +1189,21 @@ findings grow stable codes. Setting up the chart is still `bonk ledger setup`: a
 GUI button that writes accounts would need its own audit story, which belongs with
 the A5 pilot rather than here.
 
+**Status, 2026-11-06 (the subledger can be repaired).** An archive posted before
+migration 0013 has entries and no open items, so its control accounts cannot be
+reconciled and re-posting cannot help: posting is idempotent per document, and the
+entry it finds is the one that lacks an item. `bonk ledger rebuild-open-items`
+closes that gap. It asks the same function posting uses (`posting::open_item_for_document`)
+what each posted document creates, so the rebuilt item is what the posting would
+have written rather than a second opinion — gross, signed by document type, dated
+by issue and due date, with the counterparty the document knows. It only adds: an
+item that already exists is never rewritten, because allocations may point at it.
+A document the posting could not name a counterparty for is listed rather than
+skipped, since it is exactly what would keep the control account unexplained. A
+run that writes nothing leaves no event; a run that writes items appends
+`open_items_rebuilt` with the counts, because the subledger changed after the
+postings that explain it.
+
 ---
 
 ## 5. First two weeks, concretely

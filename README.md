@@ -241,6 +241,7 @@ bonk ledger reverse VK:2026-0001 --reason "wrong customer" --date 2026-04-02
 bonk ledger vat-return --year 2026 --month 3            # preview the aangifte
 bonk ledger vat-return --year 2026 --month 3 --prepare  # store it, with its basis
 bonk ledger open-items                                  # what customers still owe
+bonk ledger rebuild-open-items                          # fill the subledger of an older archive
 bonk ledger open-items --kind payable --aging --as-of 2026-03-31
 bonk ledger bank add --name "Zakelijk" --iban NL91ABNA0417164300
 bonk ledger bank import ./statements/feb.camt.xml     # CAMT.053

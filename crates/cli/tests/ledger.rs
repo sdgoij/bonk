@@ -386,6 +386,22 @@ fn a_bank_statement_settles_an_invoice_end_to_end() {
 }
 
 #[test]
+fn the_subledger_can_be_rebuilt_after_the_fact() {
+    let archive = Archive::new();
+    archive.run(&["ledger", "setup"]);
+    archive.run(&["ledger", "post"]);
+
+    // Posting already wrote this invoice's item, so the rebuild is a no-op that
+    // says so. The command exists for archives posted before items did.
+    let said = archive.run(&["ledger", "rebuild-open-items"]);
+    assert!(said.contains("open items: 0 added, 1 already present"), "{said}");
+    assert!(said.contains("every posted document has a subledger item"), "{said}");
+
+    let said = archive.run(&["ledger", "open-items"]);
+    assert!(said.contains("2026-0001"), "{said}");
+}
+
+#[test]
 fn an_evidence_bundle_carries_the_books_the_invoice_landed_in() {
     let archive = Archive::new();
     archive.run(&["ledger", "setup"]);

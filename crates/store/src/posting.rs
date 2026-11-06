@@ -228,6 +228,18 @@ pub fn post_inbound_document(
     )
 }
 
+/// The subledger item a stored document creates, if its counterparty is known.
+///
+/// Posting uses this through [`open_item_for`]; it is public so a repair can
+/// write exactly what the posting would have written instead of a second
+/// opinion that could disagree with it.
+pub fn open_item_for_document(
+    conn: &Connection,
+    document_id: DocumentId,
+) -> Result<Option<crate::open_items::NewOpenItem>, StoreError> {
+    Ok(open_item_for(&load_document(conn, document_id)?))
+}
+
 /// The subledger entry a document creates, if its counterparty is known.
 ///
 /// A credit note is negative: it reduces what is owed rather than creating a

@@ -281,6 +281,83 @@ fn an_open_item_cannot_be_edited_or_deleted() {
 }
 
 #[test]
+fn a_rebuild_writes_the_items_an_older_archive_never_wrote() {
+    let mut books = Books::open();
+    let invoice = books.issue(1_000, "2026-01-10", Some("2026-02-09"));
+    post_outbound_document(books.database.connection(), invoice, "ada", NOW).unwrap();
+    let purchase = books.receive(400, "2026-01-12", "SUP-1");
+    post_document(books.database.connection(), purchase, "ada", NOW).unwrap();
+
+    // A credit note as well, so the sign the posting used is rebuilt too.
+    let draft = store::credit_note_for(
+        books.database.connection(),
+        books.seller,
+        "2026-0001",
+        date("2026-01-31"),
+    )
+    .unwrap()
+    .unwrap();
+    store::insert_draft(books.database.connection(), &draft, NOW).unwrap();
+    let note = issue_draft(
+        books.database.connection_mut(),
+        IssueRequest {
+            draft_id: draft.id,
+            actor: "ada",
+            device: "test",
+            renderer_version: "test",
+            now: NOW,
+        },
+        |_| Ok(b"<CreditNote/>".to_vec()),
+    )
+    .unwrap();
+    post_outbound_document(books.database.connection(), note.id, "ada", NOW).unwrap();
+
+    // An archive from before 0013 has the entries and no rows. The delete trigger
+    // is exactly what stops that state from being made now, so the fixture removes
+    // it before emptying the table.
+    let connection = books.database.connection();
+    connection.execute("DROP TRIGGER open_item_no_delete", []).unwrap();
+    connection.execute("DELETE FROM open_item", []).unwrap();
+
+    let report = store::rebuild_open_items(connection, books.seller, "ada", NOW).unwrap();
+    assert_eq!(report.added, 3, "two invoices and a purchase");
+    assert_eq!(report.present, 0);
+    assert!(report.is_complete());
+
+    let receivable = list(connection, books.seller, OpenItemKind::Receivable).unwrap();
+    assert_eq!(receivable.len(), 2);
+    assert_eq!(receivable[0].amount, euros(1_210), "the gross, as posting wrote it");
+    assert_eq!(receivable[0].due_date, Some(date("2026-02-09")));
+    assert_eq!(receivable[0].original_date, date("2026-01-10"));
+    assert_eq!(receivable[0].source, invoice);
+    assert_eq!(receivable[1].amount, euros(-1_210), "the credit note keeps its sign");
+    assert_eq!(
+        total(connection, books.seller, OpenItemKind::Receivable).unwrap(),
+        euros(0)
+    );
+    let payable = list(connection, books.seller, OpenItemKind::Payable).unwrap();
+    assert_eq!(payable.len(), 1);
+    assert_eq!(payable[0].amount, euros(484));
+
+    // The subledger changed after the postings that explain it, so the chain says
+    // who rebuilt it and how much it wrote.
+    let events: i64 = connection
+        .query_row(
+            "SELECT count(*) FROM audit_event WHERE kind = 'open_items_rebuilt'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(events, 1);
+
+    // Running it again adds nothing: the items are there, so they are left alone.
+    let again = store::rebuild_open_items(connection, books.seller, "ada", NOW).unwrap();
+    assert_eq!(again.added, 0);
+    assert_eq!(again.present, 3);
+    assert_eq!(again.unmatched, Vec::<String>::new());
+}
+
+#[test]
 fn a_document_without_a_counterparty_has_no_open_item() {
     let books = Books::open();
     let net = euros(100);
@@ -351,4 +428,11 @@ fn a_document_without_a_counterparty_has_no_open_item() {
             .is_empty(),
         "the books cannot say who is owed, so there is nothing to reconcile"
     );
+
+    // A rebuild cannot invent the party either, so it names the document instead
+    // of quietly leaving the control account unexplained.
+    let report = store::rebuild_open_items(books.database.connection(), books.seller, "ada", NOW).unwrap();
+    assert_eq!(report.added, 0);
+    assert_eq!(report.unmatched, vec!["UNMATCHED-1".to_owned()]);
+    assert!(!report.is_complete());
 }

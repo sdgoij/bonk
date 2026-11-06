@@ -566,6 +566,18 @@ enum LedgerCommand {
         #[arg(long)]
         as_of: Option<String>,
     },
+    /// Write the subledger for documents posted before it existed.
+    ///
+    /// An archive posted before migration 0013 has journal entries but no open
+    /// items, so the debtors and creditors accounts cannot be reconciled, and
+    /// re-posting does not help because posting is idempotent per document.
+    /// This fills the gap from the documents. It only adds: an item that already
+    /// exists is never rewritten, because allocations may point at it.
+    #[command(name = "rebuild-open-items")]
+    RebuildOpenItems {
+        #[arg(long, default_value = "cli")]
+        actor: String,
+    },
     /// Reverse one entry, naming it `VK:2026-0001` or by identifier.
     Reverse {
         /// Journal and number, or the entry identifier.
@@ -1876,6 +1888,26 @@ fn ledger(access: &Access, database: &Path, keystore: &Path, command: LedgerComm
             Ok(())
         }
         LedgerCommand::Bank { command } => bank(session.database(), owner, command, &now),
+        LedgerCommand::RebuildOpenItems { actor } => {
+            let report = store::rebuild_open_items(connection, owner, &actor, &now)?;
+            if report.added == 0 && report.present == 0 {
+                println!("nothing to rebuild: no document has been posted");
+                return Ok(());
+            }
+            println!("open items: {} added, {} already present", report.added, report.present);
+            if report.is_complete() {
+                println!("every posted document has a subledger item");
+            } else {
+                println!(
+                    "{} posted document(s) cannot appear in the subledger, having no counterparty:",
+                    report.unmatched.len()
+                );
+                for number in &report.unmatched {
+                    println!("  {number}");
+                }
+            }
+            Ok(())
+        }
         LedgerCommand::OpenItems { kind, aging, as_of } => {
             let as_of = parse_date_or(as_of, LocalDate::today_utc())?;
             let kind = match kind.as_deref() {
