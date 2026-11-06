@@ -512,9 +512,10 @@ periodic, deeper run (threat model O4).
 harness for an hour: 36 090 001 executions for `ubl`, 21 592 052 for `cii`, and
 5 696 111 for `pdf` — 63.4 million in all — with no crash, timeout,
 out-of-memory report, or leak, and `fuzz/artifacts/` empty. That closes the M3
-exit criterion. The working corpus is ignored (a run writes thousands of inputs);
-the hand-picked starting points live in `fuzz/seeds/<target>/`, and `just fuzz`
-copies them in.
+exit criterion. A second run the next day repeated it from the corpus the first
+left behind: 8 613 623, 19 828 456, and 3 751 385 executions, again clean. The
+working corpus is ignored (a run writes thousands of inputs); the hand-picked
+starting points live in `fuzz/seeds/<target>/`, and `just fuzz` copies them in.
 
 M3.5 is in as well. `bonk received` lists inbound documents with supplier, dates,
 amount, and status; `bonk approve` and `bonk mark-paid` move a document forward.
@@ -645,7 +646,9 @@ header or `[]`, not an error. `SearchHit.status` now comes from the latest event
 or, when there is none, from `document.state`, so an issued invoice reads as
 `issued` rather than borrowing the register's initial `received`.
 
-Remaining in M5: the window redesign described below, and the i18n pass.
+Remaining in M5: nothing. Both follow-ups named here landed: the window is the
+three-tab shell with the icon rail described below, and every module in `text`
+carries a Dutch column, which `no_string_falls_back_to_english` enforces.
 
 **The find panel is in the workspace.** The Search tab holds the query, a side filter, a status filter, and Clear; Ctrl+F switches to it and focuses the field. Every change — typing, a filter, clearing — re-runs the query, so there is no Search button; a blank query lists what the filters allow, so the panel doubles as a browse view. The results are a continuous table with resizable headers that sort on click (a second click reverses the order), and it always spans the window rather than a fixed panel. The empty states are distinct — "nothing in this archive" and "nothing matches, every word has to appear" — because the two mean different things. Clicking a row folds that row open with the stored document: parties as snapshotted on the day, lines with their stored amounts, totals, status history, and artefact hashes. One row is open at a time, and clicking it again closes it. It is read-only because the archive is write-once, and `store::archive::load` rebuilds it from those rows rather than from today's customer table — a rename after issue must not rewrite what the invoice says. `SearchView` keeps the state apart from the drawing code, so a unit test drives the panel against a real database, and a headless egui frame proves every tab draws without panicking, including with a result open.
 
@@ -993,7 +996,8 @@ indistinguishable from the original without an outside record of a head; an
 unlocked archive is readable by anything running as the user; and a recovery key
 stored beside the archive turns two credentials into one.
 
-Remaining in M6: nothing. The threat model lists O4 as open: fuzz targets.
+Remaining in M6: nothing. O4 is closed: three libFuzzer targets have run an hour
+per parser, twice, with no crash and no artefacts (see M3).
 
 Exit criteria:
 

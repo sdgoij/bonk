@@ -6,10 +6,10 @@
 //! notes, customer names — is theirs and never comes from here.
 //!
 //! The `_` parameter on each function is the language it will be selected by;
-//! the call sites do not change when a table grows. The Dutch column exists for
-//! the shell, the find screen, customers, and settings; the invoice editor and
-//! the security panels still answer in English, and the interface does not offer
-//! the choice yet, which is what keeps a half-translated window impossible.
+//! the call sites do not change when a table grows. Every module below carries a
+//! Dutch column — the shell, find, customers, settings, the editor, health, and
+//! security — and `no_string_falls_back_to_english` refuses an arm that copies
+//! the English one, so a half-translated window cannot compile.
 
 use crate::strength::{Reason, Strength};
 
