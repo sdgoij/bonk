@@ -322,3 +322,65 @@ fn the_vat_return_is_read_from_the_ledger_and_then_prepared() {
     let said = archive.fail(&["ledger", "vat-return", "--month", "13"]);
     assert!(said.contains("not 1-12"), "{said}");
 }
+
+#[test]
+fn a_bank_statement_settles_an_invoice_end_to_end() {
+    let archive = Archive::new();
+    archive.run(&["ledger", "setup"]);
+    archive.run(&["ledger", "post"]);
+    archive.run(&[
+        "ledger",
+        "bank",
+        "add",
+        "--name",
+        "Zakelijk",
+        "--iban",
+        "NL91ABNA0417164300",
+    ]);
+
+    let statement = archive.dir.path().join("feb.camt.xml");
+    std::fs::write(
+        &statement,
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns="urn:iso:std:iso:20022:tech:xsd:camt.053.001.02">
+  <BkToCstmrStmt>
+    <Stmt>
+      <Id>FEB-2026</Id>
+      <Acct><Id><IBAN>NL91ABNA0417164300</IBAN></Id><Ccy>EUR</Ccy></Acct>
+      <Ntry>
+        <Amt Ccy="EUR">121.00</Amt>
+        <CdtDbtInd>CRDT</CdtDbtInd>
+        <BookgDt><Dt>2026-02-20</Dt></BookgDt>
+        <NtryDtls><TxDtls>
+          <RltdPties><Dbtr><Nm>Klant BV</Nm></Dbtr></RltdPties>
+          <RmtInf><Ustrd>Betaling factuur 2026-0001</Ustrd></RmtInf>
+        </TxDtls></NtryDtls>
+      </Ntry>
+    </Stmt>
+  </BkToCstmrStmt>
+</Document>"#,
+    )
+    .expect("statement");
+
+    let said = archive.run(&["ledger", "bank", "import", statement.to_str().expect("utf-8")]);
+    assert!(said.contains("1 imported"), "{said}");
+    let said = archive.run(&["ledger", "bank", "import", statement.to_str().expect("utf-8")]);
+    assert!(said.contains("already imported"), "{said}");
+
+    let said = archive.run(&["ledger", "bank", "auto-match"]);
+    assert!(said.contains("matched 2026-0001"), "{said}");
+
+    let said = archive.run(&["ledger", "open-items"]);
+    assert!(said.contains("no open receivable"), "{said}");
+
+    // The payment is in the books and the reconciliation is still happy.
+    let said = archive.run(&["ledger", "trial-balance", "--from", "2026-01-01", "--to", "2026-12-31"]);
+    assert!(said.contains("1100"), "the bank moved: {said}");
+    assert!(said.trim_end().ends_with("balanced"), "{said}");
+    let said = archive.run(&["ledger", "vat-return", "--year", "2026", "--month", "2"]);
+    assert!(said.contains("fileable:    yes"), "{said}");
+
+    // The transaction now reports as matched.
+    let said = archive.run(&["ledger", "bank", "transactions", "--status", "matched"]);
+    assert!(said.contains("Klant BV"), "{said}");
+}

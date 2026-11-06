@@ -9,9 +9,9 @@ CREATE TEMP TABLE bank_rollback_guard (
 INSERT INTO bank_rollback_guard (statements) SELECT count(*) FROM bank_statement;
 DROP TABLE bank_rollback_guard;
 
-DROP TRIGGER allocation_no_delete;
-DROP TRIGGER allocation_no_update;
-DROP TRIGGER bank_transaction_no_delete;
+DROP TRIGGER IF EXISTS allocation_no_delete;
+DROP TRIGGER IF EXISTS allocation_no_update;
+DROP TRIGGER IF EXISTS bank_transaction_no_delete;
 
 DROP TABLE allocation;
 DROP TABLE bank_transaction;

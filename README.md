@@ -242,6 +242,10 @@ bonk ledger vat-return --year 2026 --month 3            # preview the aangifte
 bonk ledger vat-return --year 2026 --month 3 --prepare  # store it, with its basis
 bonk ledger open-items                                  # what customers still owe
 bonk ledger open-items --kind payable --aging --as-of 2026-03-31
+bonk ledger bank add --name "Zakelijk" --iban NL91ABNA0417164300
+bonk ledger bank import ./statements/feb.camt.xml     # CAMT.053
+bonk ledger bank auto-match                           # where the payment names the invoice
+bonk ledger bank transactions --status new            # the unmatched queue
 ```
 
 Entry numbers are per journal and year (`VK 2026-0001`), which is why a reversal
@@ -255,7 +259,14 @@ can always be explained; preparing again supersedes the earlier return and keeps
 it. Preparing is refused while a check is red: every document dated in the period
 has to be posted, the VAT posted per document has to equal the VAT on that
 document, and the trial balance has to net to zero. The AR and AP control accounts are
-compared against the open items behind them.
+compared against the open items behind them, which bank payments settle.
+
+A bank statement is imported once, whatever range the bank sends it in: the file
+is stored by hash and each payment by a fingerprint of what identifies it, so an
+overlapping statement adds only what is new. Matching settles an open item and
+posts the payment in one step — the only match that happens without asking is one
+where the remittance names the invoice *and* the amount agrees; anything else is a
+proposal for a person. Unmatching appends its reversal rather than deleting.
 One box is not produced: reverse-charged *goods* (4b) cannot be told apart from
 reverse-charged *services* (4a) in the archive.
 

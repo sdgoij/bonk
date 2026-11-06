@@ -1137,6 +1137,24 @@ box it could not check. The CLI exposes the whole path: `ledger setup`, `post`, 
 `trial-balance`, `profit-and-loss`, `balance-sheet`, `reverse`, and `vat-return`
 with `--prepare`.
 
+**Status, 2026-11-06 (A4 started).** Bank statements import. Migration 0014 adds
+`bank_account`, `bank_statement`, `bank_transaction`, and `allocation`; 0015 gives
+allocations a sign so a settlement is negative and unmatching appends its
+positive opposite. A statement is keyed by the hash of its bytes and a payment by
+a fingerprint of date, amount, currency, counterparty, and remittance, so
+importing the same file twice is a no-op and an overlapping range adds only what
+is new; a statement whose balances disagree with its entries is refused whole.
+The CAMT.053 reader sits in `import` beside the invoice readers with the same
+guards (no DTD, bounded size and depth) and returns the store's parsed types.
+Matching is deliberately short: a payment that names the invoice and agrees on
+the amount is matched automatically, an exact amount alone is proposed, and a tie
+is never resolved. A match posts the settlement entry in the same transaction as
+the allocation, keyed by the transaction so matching twice cannot pay twice;
+unmatching appends a reversal and leaves the history intact. The control-account
+check now compares against what is still outstanding. Still missing from A4:
+MT940 and CSV profiles, group matching, rule-based classification, and the
+keyboard-first queue (which is UI).
+
 ---
 
 ## 5. First two weeks, concretely

@@ -450,6 +450,30 @@ enum BankCommand {
         #[arg(long)]
         status: Option<String>,
     },
+    /// Show what a transaction could settle.
+    Propose {
+        /// The transaction identifier.
+        transaction: String,
+    },
+    /// Match every payment whose remittance names the invoice.
+    ///
+    /// Only a reference-and-amount match is automatic; an amount that fits two
+    /// invoices is left for a person.
+    #[command(name = "auto-match")]
+    AutoMatch,
+    /// Match one transaction to one open item.
+    Match {
+        /// The transaction identifier.
+        transaction: String,
+        /// The open item identifier, as `open-items` prints it.
+        #[arg(long = "item")]
+        item: String,
+    },
+    /// Undo a match, appending its reversal.
+    Unmatch {
+        /// The allocation identifier, as a match reports it.
+        allocation: String,
+    },
 }
 
 /// Subcommands of [`Command::Ledger`].
@@ -1890,7 +1914,10 @@ fn ledger(access: &Access, database: &Path, keystore: &Path, command: LedgerComm
                 return Ok(());
             }
 
-            let items = store::open_items(connection, owner, kind)?;
+            let items: Vec<store::OpenItem> = store::open_items(connection, owner, kind)?
+                .into_iter()
+                .filter(store::OpenItem::is_open)
+                .collect();
             if items.is_empty() {
                 println!("no open {}", kind.as_str());
                 return Ok(());
@@ -2022,6 +2049,67 @@ fn bank(database: &store::Database, owner: SellerId, command: BankCommand, now: 
                 }
             }
             println!("imported: {total}");
+            Ok(())
+        }
+        BankCommand::Propose { transaction } => {
+            let candidates = store::proposals(connection, owner, &transaction)?;
+            if candidates.is_empty() {
+                println!("nothing to propose for {transaction}");
+                return Ok(());
+            }
+            for candidate in &candidates {
+                println!(
+                    "{:<14} {:>14} {:<14} {}",
+                    candidate.number,
+                    amount_text(candidate.applies.micros(), candidate.applies.currency())?,
+                    candidate.method.as_str(),
+                    candidate.reason
+                );
+                println!("  item {}", candidate.open_item_id);
+            }
+            Ok(())
+        }
+        BankCommand::AutoMatch => {
+            let matched = store::auto_match(connection, owner, "cli", now)?;
+            if matched.is_empty() {
+                println!("nothing matched automatically");
+                return Ok(());
+            }
+            for report in &matched {
+                println!(
+                    "matched {} to transaction {}: {}",
+                    report.number,
+                    report.transaction_id,
+                    amount_text(report.settled.micros(), report.settled.currency())?
+                );
+                println!("  allocation {}", report.allocation_id);
+            }
+            println!("matched: {}", matched.len());
+            Ok(())
+        }
+        BankCommand::Match { transaction, item } => {
+            let report = store::allocate(
+                connection,
+                owner,
+                &transaction,
+                &item,
+                store::MatchMethod::Manual,
+                "cli",
+                now,
+            )?;
+            println!("matched {} to {}", report.number, report.transaction_id);
+            println!(
+                "settled:    {}",
+                amount_text(report.settled.micros(), report.settled.currency())?
+            );
+            println!("entry:      BNK {}", report.entry_id);
+            println!("allocation: {}", report.allocation_id);
+            Ok(())
+        }
+        BankCommand::Unmatch { allocation } => {
+            store::unmatch(connection, owner, &allocation, "cli", now)?;
+            println!("unmatched allocation {allocation}");
+            println!("the invoice is open again and the reversal is on the record");
             Ok(())
         }
         BankCommand::Transactions { status } => {

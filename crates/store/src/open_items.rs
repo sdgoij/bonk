@@ -192,15 +192,17 @@ pub(crate) fn insert(
     Ok(())
 }
 
-/// Every open item of one kind, oldest first.
+/// Every item of one kind, oldest first, settled ones included.
 ///
-/// "Open" here means every item, because nothing settles one yet: allocations
-/// arrive with bank reconciliation, and until then the outstanding amount is the
-/// original amount.
+/// Settled items are returned because a quarter's subledger has to be explainable
+/// after the fact; callers that want the work queue filter on [`OpenItem::is_open`].
 pub fn list(conn: &Connection, seller_id: SellerId, kind: OpenItemKind) -> Result<Vec<OpenItem>, StoreError> {
     let mut statement = conn.prepare(
         "SELECT o.id, o.kind, o.party_id, o.source_id, d.number, o.amount_micros, o.currency,
-                o.due_date_local, o.original_date_local
+                o.due_date_local, o.original_date_local,
+                o.amount_micros + COALESCE(
+                    (SELECT sum(a.amount_micros) FROM allocation a WHERE a.open_item_id = o.id), 0
+                ) AS outstanding
          FROM open_item o
          JOIN document d ON d.id = o.source_id
          WHERE o.seller_id = ?1 AND o.kind = ?2
@@ -231,19 +233,19 @@ pub fn list(conn: &Connection, seller_id: SellerId, kind: OpenItemKind) -> Resul
                 .transpose()
                 .map_err(|error| StoreError::Data(error.to_string()))?,
             original_date: LocalDate::parse_iso(&original).map_err(|error| StoreError::Data(error.to_string()))?,
-            // Nothing allocates against an item yet; when allocations exist this
-            // becomes `amount - sum(allocations)` and every caller keeps working.
-            outstanding: amount,
+            outstanding: Money::from_micros(row.get(9)?, currency),
         });
     }
     Ok(items)
 }
 
-/// Signed total outstanding of one kind.
+/// Signed total still outstanding of one kind, allocations included.
 pub fn total(conn: &Connection, seller_id: SellerId, kind: OpenItemKind) -> Result<Money, StoreError> {
     let currency = crate::report::reporting_currency(conn, seller_id)?;
     let total: Option<i64> = conn.query_row(
-        "SELECT sum(amount_micros) FROM open_item WHERE seller_id = ?1 AND kind = ?2",
+        "SELECT sum(o.amount_micros + COALESCE(
+                    (SELECT sum(a.amount_micros) FROM allocation a WHERE a.open_item_id = o.id), 0))
+         FROM open_item o WHERE o.seller_id = ?1 AND o.kind = ?2",
         params![seller_id.to_string(), kind.as_str()],
         |row| row.get(0),
     )?;

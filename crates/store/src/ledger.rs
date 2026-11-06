@@ -418,7 +418,9 @@ pub enum PostingSource {
     OutboundDocument(DocumentId),
     /// An invoice we received and recorded.
     InboundDocument(DocumentId),
-    /// A bank statement line.
+    /// A bank statement line, by identifier.
+    BankTransaction(DocumentId),
+    /// A bank entry with no source fact, such as an opening statement balance.
     Bank,
     /// An opening balance at the accounting start date.
     Opening,
@@ -431,6 +433,7 @@ impl PostingSource {
             Self::Manual => "manual",
             Self::OutboundDocument(_) => "outbound_document",
             Self::InboundDocument(_) => "inbound_document",
+            Self::BankTransaction(_) => "bank",
             Self::Bank => "bank",
             Self::Opening => "opening",
         }
@@ -439,7 +442,7 @@ impl PostingSource {
     /// The identifier of the fact, when it has one.
     pub fn id(self) -> Option<String> {
         match self {
-            Self::OutboundDocument(id) | Self::InboundDocument(id) => Some(id.to_string()),
+            Self::OutboundDocument(id) | Self::InboundDocument(id) | Self::BankTransaction(id) => Some(id.to_string()),
             Self::Manual | Self::Bank | Self::Opening => None,
         }
     }
