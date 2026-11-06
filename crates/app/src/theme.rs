@@ -273,6 +273,8 @@ pub enum Icon {
     Create,
     /// The party list.
     Customers,
+    /// The books.
+    Ledger,
     /// Archive settings.
     Settings,
     /// Leave the archive locked.
@@ -384,6 +386,28 @@ fn draw_icon(painter: &Painter, rect: Rect, icon: Icon, colour: Color32) {
                     stroke,
                 );
                 painter.circle_filled(pos2(centre.x + knob * radius, y), radius * 0.15, colour);
+            }
+        }
+        Icon::Ledger => {
+            // A bound ledger: an upright book with a spine and ruled lines.
+            let book = Rect::from_center_size(centre, vec2(radius * 1.16, radius * 1.34));
+            painter.rect_stroke(book, 2.0, stroke, StrokeKind::Middle);
+            painter.line_segment(
+                [
+                    pos2(book.left() + radius * 0.30, book.top()),
+                    pos2(book.left() + radius * 0.30, book.bottom()),
+                ],
+                stroke,
+            );
+            for step in 0..3 {
+                let y = book.top() + radius * (0.34 + step as f32 * 0.33);
+                painter.line_segment(
+                    [
+                        pos2(book.left() + radius * 0.50, y),
+                        pos2(book.right() - radius * 0.22, y),
+                    ],
+                    Stroke::new(1.2, colour),
+                );
             }
         }
         Icon::Lock => {

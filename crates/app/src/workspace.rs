@@ -57,7 +57,7 @@ const WATCH_QUIET: Duration = Duration::from_secs(5);
 /// How many of the most recent drops the card remembers.
 const WATCH_RECENT: usize = 4;
 
-/// The three places the window can be.
+/// The four places the window can be.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 enum Tab {
     /// Find and read documents, and write a new one.
@@ -65,6 +65,8 @@ enum Tab {
     Search,
     /// The party list.
     Customers,
+    /// The books the archive has produced.
+    Ledger,
     /// Archive health, backups, and credentials.
     Settings,
 }
@@ -123,6 +125,8 @@ pub struct Workspace {
     message: Option<Message>,
     search: SearchView,
     security: SecurityForm,
+    /// The books, read-only.
+    ledger: LedgerView,
     /// Interface language, chosen once per workspace.
     language: Language,
     health: Option<Health>,
@@ -225,6 +229,192 @@ impl CustomerEdit {
             },
         }
     }
+}
+
+/// Which slice of the books the ledger tab shows.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+enum LedgerSection {
+    /// The chart of accounts.
+    Chart,
+    /// Every account that moved, with both columns.
+    #[default]
+    TrialBalance,
+    /// Revenue and expenses.
+    ProfitAndLoss,
+    /// Assets, liabilities, and equity at a date.
+    BalanceSheet,
+    /// The Dutch VAT form, its readiness, and the stored return.
+    Vat,
+    /// Debtors and creditors still open.
+    OpenItems,
+    /// Bank transactions nothing has settled yet.
+    Bank,
+}
+
+impl LedgerSection {
+    const ALL: [Self; 7] = [
+        Self::Chart,
+        Self::TrialBalance,
+        Self::ProfitAndLoss,
+        Self::BalanceSheet,
+        Self::Vat,
+        Self::OpenItems,
+        Self::Bank,
+    ];
+
+    fn label(self, language: Language) -> &'static str {
+        match self {
+            Self::Chart => text::ledger::chart(language),
+            Self::TrialBalance => text::ledger::trial_balance(language),
+            Self::ProfitAndLoss => text::ledger::profit_and_loss(language),
+            Self::BalanceSheet => text::ledger::balance_sheet(language),
+            Self::Vat => text::ledger::vat(language),
+            Self::OpenItems => text::ledger::open_items(language),
+            Self::Bank => text::ledger::bank(language),
+        }
+    }
+
+    /// The column shares its table starts with. The VAT form is a grid, not a
+    /// table, because its order is fixed by the form and must not be sortable.
+    fn weights(self) -> &'static [f32] {
+        match self {
+            Self::Chart => &[1.0, 3.0, 1.2, 0.8],
+            Self::TrialBalance => &[1.0, 3.0, 1.4, 1.4, 1.4],
+            Self::ProfitAndLoss | Self::BalanceSheet => &[1.0, 3.4, 1.4],
+            Self::Vat => &[],
+            Self::OpenItems => &[0.9, 1.0, 1.1, 2.2, 1.1, 1.3],
+            Self::Bank => &[1.2, 1.2, 2.2, 2.6, 1.4, 1.3],
+        }
+    }
+}
+
+/// What the ledger tab last asked the store for.
+///
+/// Loading is keyed on this rather than run per frame: a report is a scan over
+/// the journal, and redrawing one sixty times a second would make the window
+/// feel like the archive is slow.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum LedgerRequest {
+    Chart,
+    TrialBalance { from: LocalDate, to: LocalDate },
+    ProfitAndLoss { from: LocalDate, to: LocalDate },
+    BalanceSheet { as_of: LocalDate },
+    Vat { year: i32, period: u8 },
+    OpenItems { as_of: LocalDate },
+    Bank,
+}
+
+/// One open item with the party name resolved, so a row can be sorted on it.
+struct OpenRow {
+    item: store::OpenItem,
+    party: String,
+}
+
+/// Receivables and payables still open, with their aging at the same date.
+struct OpenItemsData {
+    rows: Vec<OpenRow>,
+    receivable: Money,
+    payable: Money,
+    receivable_aging: store::Aging,
+    payable_aging: store::Aging,
+}
+
+/// The answer to one [`LedgerRequest`].
+enum LedgerData {
+    Chart(Vec<store::Account>),
+    TrialBalance(store::TrialBalance),
+    ProfitAndLoss(store::ProfitAndLoss),
+    BalanceSheet(store::BalanceSheet),
+    Vat {
+        readiness: Box<store::Readiness>,
+        prepared: Option<store::PreparedReturn>,
+    },
+    OpenItems(Box<OpenItemsData>),
+    Bank(Vec<store::BankTransactionRow>),
+}
+
+/// What the ledger tab holds between frames.
+struct LedgerView {
+    section: LedgerSection,
+    from: String,
+    to: String,
+    as_of: String,
+    year: String,
+    month: String,
+    table: Table,
+    data: Option<LedgerData>,
+    /// The request `data` answers, so a redraw does not re-run the query.
+    loaded: Option<LedgerRequest>,
+    error: Option<String>,
+    date_popup: Option<DatePopup>,
+}
+
+impl Default for LedgerView {
+    fn default() -> Self {
+        let today = LocalDate::today_utc();
+        let year = today.as_date().year();
+        Self {
+            section: LedgerSection::default(),
+            from: format!("{year}-01-01"),
+            to: format!("{year}-12-31"),
+            as_of: today.to_iso_string(),
+            year: year.to_string(),
+            month: u8::from(today.as_date().month()).to_string(),
+            table: Table::new(LedgerSection::default().weights()),
+            data: None,
+            loaded: None,
+            error: None,
+            date_popup: None,
+        }
+    }
+}
+
+impl LedgerView {
+    /// The request the current fields describe, or why they do not describe one.
+    fn request(&self, language: Language) -> Result<LedgerRequest, String> {
+        match self.section {
+            LedgerSection::Chart => Ok(LedgerRequest::Chart),
+            LedgerSection::Bank => Ok(LedgerRequest::Bank),
+            LedgerSection::TrialBalance | LedgerSection::ProfitAndLoss => {
+                let from = ledger_date(&self.from, language)?;
+                let to = ledger_date(&self.to, language)?;
+                if self.section == LedgerSection::TrialBalance {
+                    Ok(LedgerRequest::TrialBalance { from, to })
+                } else {
+                    Ok(LedgerRequest::ProfitAndLoss { from, to })
+                }
+            }
+            LedgerSection::BalanceSheet | LedgerSection::OpenItems => {
+                let as_of = ledger_date(&self.as_of, language)?;
+                if self.section == LedgerSection::BalanceSheet {
+                    Ok(LedgerRequest::BalanceSheet { as_of })
+                } else {
+                    Ok(LedgerRequest::OpenItems { as_of })
+                }
+            }
+            LedgerSection::Vat => {
+                let year: i32 = self
+                    .year
+                    .trim()
+                    .parse()
+                    .map_err(|_| text::ledger::bad_year(language).to_owned())?;
+                let period: u8 = self
+                    .month
+                    .trim()
+                    .parse()
+                    .map_err(|_| text::ledger::bad_month(language).to_owned())?;
+                if !(1..=12).contains(&period) {
+                    return Err(text::ledger::bad_month(language).to_owned());
+                }
+                Ok(LedgerRequest::Vat { year, period })
+            }
+        }
+    }
+}
+
+/// A date field's value, or the sentence that says why it is not one.
+fn ledger_date(value: &str, language: Language) -> Result<LocalDate, String> {
+    LocalDate::parse_iso(value.trim()).map_err(|_| text::ledger::bad_date(language, value.trim()))
 }
 
 impl SearchView {
@@ -656,6 +846,9 @@ enum DateField {
     Issue,
     Due,
     Delivery,
+    LedgerFrom,
+    LedgerTo,
+    LedgerAsOf,
 }
 
 impl DateField {
@@ -665,6 +858,9 @@ impl DateField {
             Self::Issue => "issue_date",
             Self::Due => "due_date",
             Self::Delivery => "delivery_date",
+            Self::LedgerFrom => "ledger.from",
+            Self::LedgerTo => "ledger.to",
+            Self::LedgerAsOf => "ledger.as_of",
         }
     }
 }
@@ -919,6 +1115,7 @@ impl Workspace {
             message: None,
             search: SearchView::default(),
             security: SecurityForm::default(),
+            ledger: LedgerView::default(),
             language: Language::default(),
             health: Health::snapshot(session.database(), session.database_path()).ok(),
         };
@@ -965,6 +1162,8 @@ impl Workspace {
                 } else if input.key_pressed(egui::Key::Num2) {
                     requested = Some(Tab::Customers);
                 } else if input.key_pressed(egui::Key::Num3) {
+                    requested = Some(Tab::Ledger);
+                } else if input.key_pressed(egui::Key::Num4) {
                     requested = Some(Tab::Settings);
                 }
             }
@@ -1004,6 +1203,7 @@ impl Workspace {
                 match self.tab {
                     Tab::Search => self.search_ui(ui, session, focus.as_deref()),
                     Tab::Customers => self.customers_ui(ui, session, focus.as_deref()),
+                    Tab::Ledger => self.ledger_ui(ui, session),
                     Tab::Settings => {
                         self.settings_ui(ui, session, appearance, language, &store::device::Keychain);
                     }
@@ -1037,6 +1237,7 @@ impl Workspace {
         let tabs = [
             (Tab::Search, theme::Icon::Search, text::tabs::search(language)),
             (Tab::Customers, theme::Icon::Customers, text::tabs::customers(language)),
+            (Tab::Ledger, theme::Icon::Ledger, text::tabs::ledger(language)),
             (Tab::Settings, theme::Icon::Settings, text::tabs::settings(language)),
         ];
         for (tab, icon, label) in tabs {
@@ -1067,6 +1268,7 @@ impl Workspace {
         let title = match self.tab {
             Tab::Search => text::tabs::search(language),
             Tab::Customers => text::tabs::customers(language),
+            Tab::Ledger => text::tabs::ledger(language),
             Tab::Settings => text::tabs::settings(language),
         };
         ui.horizontal(|ui| {
@@ -1542,6 +1744,148 @@ impl Workspace {
         if export && let Some(path) = dialog::save("Export customer list", "customers.csv", "csv") {
             self.export_customers(&path);
         }
+    }
+
+    /// Draws the books: a section picker, the window it applies to, and the
+    /// report itself.
+    fn ledger_ui(&mut self, ui: &mut egui::Ui, session: &Session) {
+        let language = self.language;
+        let Some(seller) = self.seller.as_ref().map(|seller| seller.id) else {
+            return;
+        };
+        let tokens = *theme::palette(ui.ctx());
+
+        ui.horizontal_wrapped(|ui| {
+            for section in LedgerSection::ALL {
+                if ui
+                    .selectable_label(self.ledger.section == section, section.label(language))
+                    .clicked()
+                {
+                    self.ledger.section = section;
+                }
+            }
+        });
+        ui.weak(text::ledger::note(language));
+        self.ledger_filters_ui(ui, language);
+        self.load_ledger(session, seller);
+
+        if let Some(error) = self.ledger.error.as_deref() {
+            ui.colored_label(tokens.error, error);
+            return;
+        }
+
+        let width = (ui.available_width() - ui.spacing().scroll.bar_width).max(320.0);
+        let Some(data) = self.ledger.data.as_ref() else {
+            return;
+        };
+        let table = &mut self.ledger.table;
+        match data {
+            LedgerData::Chart(accounts) => chart_table(table, ui, language, accounts, width),
+            LedgerData::TrialBalance(report) => trial_table(table, ui, language, report, width),
+            LedgerData::ProfitAndLoss(report) => profit_table(table, ui, language, report, width),
+            LedgerData::BalanceSheet(report) => sheet_table(table, ui, language, report, width),
+            LedgerData::Vat { readiness, prepared } => vat_panel(ui, language, readiness, prepared),
+            LedgerData::OpenItems(data) => open_items_panel(table, ui, language, data, width),
+            LedgerData::Bank(rows) => bank_table(table, ui, language, rows, width),
+        }
+    }
+
+    /// The date or period a section is asked about.
+    fn ledger_filters_ui(&mut self, ui: &mut egui::Ui, language: Language) {
+        ui.horizontal(|ui| match self.ledger.section {
+            LedgerSection::TrialBalance | LedgerSection::ProfitAndLoss => {
+                ui.label(text::ledger::from_label(language));
+                date_field(
+                    ui,
+                    language,
+                    &mut self.ledger.from,
+                    &mut self.ledger.date_popup,
+                    DateField::LedgerFrom,
+                    false,
+                    None,
+                );
+                ui.label(text::ledger::to_label(language));
+                date_field(
+                    ui,
+                    language,
+                    &mut self.ledger.to,
+                    &mut self.ledger.date_popup,
+                    DateField::LedgerTo,
+                    false,
+                    None,
+                );
+            }
+            LedgerSection::BalanceSheet | LedgerSection::OpenItems => {
+                ui.label(text::ledger::as_of_label(language));
+                date_field(
+                    ui,
+                    language,
+                    &mut self.ledger.as_of,
+                    &mut self.ledger.date_popup,
+                    DateField::LedgerAsOf,
+                    false,
+                    None,
+                );
+            }
+            LedgerSection::Vat => {
+                ui.label(text::ledger::year_label(language));
+                ui.add(egui::TextEdit::singleline(&mut self.ledger.year).desired_width(56.0));
+                ui.label(text::ledger::month_label(language));
+                ui.add(egui::TextEdit::singleline(&mut self.ledger.month).desired_width(36.0));
+            }
+            LedgerSection::Chart | LedgerSection::Bank => {}
+        });
+
+        let mut outcome = CalendarOutcome::Keep;
+        if let Some(popup) = self.ledger.date_popup.as_mut() {
+            outcome = date_picker(ui.ctx(), language, popup);
+        }
+        match outcome {
+            CalendarOutcome::Keep => {}
+            CalendarOutcome::Close => self.ledger.date_popup = None,
+            CalendarOutcome::Pick(day) => {
+                match self.ledger.date_popup.map(|popup| popup.field) {
+                    Some(DateField::LedgerFrom) => self.ledger.from = day,
+                    Some(DateField::LedgerTo) => self.ledger.to = day,
+                    Some(DateField::LedgerAsOf) => self.ledger.as_of = day,
+                    _ => {}
+                }
+                self.ledger.date_popup = None;
+            }
+        }
+    }
+
+    /// Loads the report the fields describe, once per request.
+    fn load_ledger(&mut self, session: &Session, seller: SellerId) {
+        let language = self.language;
+        let request = match self.ledger.request(language) {
+            Ok(request) => request,
+            Err(error) => {
+                self.ledger.error = Some(error);
+                self.ledger.data = None;
+                self.ledger.loaded = None;
+                return;
+            }
+        };
+        if self.ledger.loaded == Some(request) {
+            return;
+        }
+
+        let result = ledger_data(session.database(), seller, request, &self.customers);
+        match result {
+            Ok(data) => {
+                self.ledger.data = Some(data);
+                self.ledger.error = None;
+            }
+            Err(error) => {
+                self.ledger.data = None;
+                self.ledger.error = Some(error.to_string());
+            }
+        }
+        self.ledger.loaded = Some(request);
+        // A new report has its own columns; keeping the previous widths would put
+        // them on the wrong columns.
+        self.ledger.table = Table::new(self.ledger.section.weights());
     }
 
     /// The new-customer form, shown inside the customer tab.
@@ -3164,7 +3508,8 @@ impl Workspace {
                         Some(DateField::Issue) => editor.issue_date = day,
                         Some(DateField::Due) => editor.due_date = day,
                         Some(DateField::Delivery) => editor.delivery_date = day,
-                        None => {}
+                        // The ledger's calendars live in their own popup holder.
+                        Some(DateField::LedgerFrom | DateField::LedgerTo | DateField::LedgerAsOf) | None => {}
                     }
                     editor.date_popup = None;
                 }
@@ -3786,6 +4131,548 @@ impl Workspace {
             Err(error) => self.message = Some(Message::error(error.to_string())),
         }
     }
+}
+
+/// Runs one ledger request against the archive.
+///
+/// Every number is derived here from the posted entries; nothing is cached in a
+/// table, so a report can never disagree with the journal it claims to summarise.
+fn ledger_data(
+    database: &store::Database,
+    seller: SellerId,
+    request: LedgerRequest,
+    customers: &[CustomerRecord],
+) -> Result<LedgerData, StoreError> {
+    let connection = database.connection();
+    Ok(match request {
+        LedgerRequest::Chart => LedgerData::Chart(store::ledger::list_accounts(connection)?),
+        LedgerRequest::TrialBalance { from, to } => {
+            LedgerData::TrialBalance(store::report::trial_balance(connection, seller, from, to)?)
+        }
+        LedgerRequest::ProfitAndLoss { from, to } => {
+            LedgerData::ProfitAndLoss(store::report::profit_and_loss(connection, seller, from, to)?)
+        }
+        LedgerRequest::BalanceSheet { as_of } => {
+            LedgerData::BalanceSheet(store::report::balance_sheet(connection, seller, as_of)?)
+        }
+        LedgerRequest::Vat { year, period } => LedgerData::Vat {
+            readiness: Box::new(store::readiness(connection, seller, year, period)?),
+            prepared: store::vat::prepared(connection, seller, year, period)?,
+        },
+        LedgerRequest::OpenItems { as_of } => {
+            let mut rows = Vec::new();
+            for kind in [store::OpenItemKind::Receivable, store::OpenItemKind::Payable] {
+                for item in store::open_items::list(connection, seller, kind)?
+                    .into_iter()
+                    .filter(store::OpenItem::is_open)
+                {
+                    let party = customers
+                        .iter()
+                        .find(|customer| customer.id == item.party_id)
+                        .map(|customer| customer.party.legal_name.clone())
+                        .unwrap_or_else(|| "—".to_owned());
+                    rows.push(OpenRow { item, party });
+                }
+            }
+            let receivable = store::open_item_total(connection, seller, store::OpenItemKind::Receivable)?;
+            let payable = store::open_item_total(connection, seller, store::OpenItemKind::Payable)?;
+            LedgerData::OpenItems(Box::new(OpenItemsData {
+                rows,
+                receivable,
+                payable,
+                receivable_aging: store::aging(connection, seller, store::OpenItemKind::Receivable, as_of)?,
+                payable_aging: store::aging(connection, seller, store::OpenItemKind::Payable, as_of)?,
+            }))
+        }
+        LedgerRequest::Bank => {
+            let mut rows = store::list_transactions(connection, seller, Some("new"))?;
+            rows.extend(store::list_transactions(connection, seller, Some("partially_matched"))?);
+            LedgerData::Bank(rows)
+        }
+    })
+}
+
+/// An amount with its currency, for a cell or a fact line.
+fn amount_text(micros: i64, currency: Currency) -> String {
+    money_text(Money::from_micros(micros, currency))
+}
+
+/// A right-aligned amount cell, blank when nothing moved.
+fn amount_cell(micros: i64, currency: Currency) -> Cell {
+    if micros == 0 {
+        Cell::right("").muted()
+    } else {
+        Cell::right(amount_text(micros, currency))
+    }
+}
+
+/// A right-aligned amount in a grid row.
+fn grid_amount(ui: &mut egui::Ui, micros: i64, currency: Currency) {
+    let text = if micros == 0 {
+        String::new()
+    } else {
+        amount_text(micros, currency)
+    };
+    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        theme::value_mono(ui, &text);
+    });
+}
+
+/// Sorts account rows the way the clicked header asks, if one was clicked.
+fn sort_balances(rows: &mut [&store::AccountBalance], sort: Option<(usize, bool)>) {
+    let Some((column, descending)) = sort else {
+        return;
+    };
+    rows.sort_by(|left, right| {
+        let order = match column {
+            0 => left.code.as_str().cmp(right.code.as_str()),
+            1 => left.name.cmp(&right.name),
+            2 => left.debit_micros.cmp(&right.debit_micros),
+            3 => left.credit_micros.cmp(&right.credit_micros),
+            _ => left.balance_micros().cmp(&right.balance_micros()),
+        };
+        if descending { order.reverse() } else { order }
+    });
+}
+
+fn account_cells(row: &store::AccountBalance, currency: Currency) -> [Cell; 3] {
+    [
+        Cell::left(row.code.as_str()),
+        Cell::left(row.name.as_str()),
+        amount_cell(row.balance_micros(), currency),
+    ]
+}
+
+fn chart_table(table: &mut Table, ui: &mut egui::Ui, language: Language, accounts: &[store::Account], width: f32) {
+    table.header(ui, "ledger-chart", &text::ledger::chart_columns(language), width);
+    if accounts.is_empty() {
+        ui.add_space(10.0);
+        ui.weak(text::ledger::empty_chart(language));
+        return;
+    }
+
+    let mut rows: Vec<&store::Account> = accounts.iter().collect();
+    if let Some((column, descending)) = table.sort {
+        rows.sort_by(|left, right| {
+            let order = match column {
+                0 => left.code.as_str().cmp(right.code.as_str()),
+                1 => left.name.cmp(&right.name),
+                2 => left.kind.as_str().cmp(right.kind.as_str()),
+                _ => left.is_control.cmp(&right.is_control),
+            };
+            if descending { order.reverse() } else { order }
+        });
+    }
+
+    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+        ui.set_width(width);
+        for (index, account) in rows.iter().enumerate() {
+            let cells = [
+                Cell::left(account.code.as_str()),
+                Cell::left(account.name.as_str()),
+                Cell::left(text::ledger::account_kind(language, account.kind)),
+                Cell::left(if account.is_control { "✓" } else { "" }).muted(),
+            ];
+            table.row(ui, width, &cells, false, index % 2 == 1);
+        }
+        ui.add_space(8.0);
+        ui.weak(text::ledger::account_count(language, rows.len()));
+    });
+}
+
+fn trial_table(table: &mut Table, ui: &mut egui::Ui, language: Language, report: &store::TrialBalance, width: f32) {
+    table.header(ui, "ledger-trial", &text::ledger::trial_columns(language), width);
+    if report.rows.is_empty() {
+        ui.add_space(10.0);
+        ui.weak(text::ledger::empty_window(language));
+        return;
+    }
+
+    let currency = report.currency;
+    let mut rows: Vec<&store::AccountBalance> = report.rows.iter().collect();
+    sort_balances(&mut rows, table.sort);
+
+    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+        ui.set_width(width);
+        for (index, row) in rows.iter().enumerate() {
+            let cells = [
+                Cell::left(row.code.as_str()),
+                Cell::left(row.name.as_str()),
+                amount_cell(row.debit_micros, currency),
+                amount_cell(row.credit_micros, currency),
+                amount_cell(row.balance_micros(), currency),
+            ];
+            table.row(ui, width, &cells, false, index % 2 == 1);
+        }
+        let total = [
+            Cell::left(""),
+            Cell::left(text::ledger::total_label(language)).strong(),
+            amount_cell(report.debit_total_micros, currency).strong(),
+            amount_cell(report.credit_total_micros, currency).strong(),
+            Cell::right(""),
+        ];
+        table.row(ui, width, &total, false, false);
+        ui.add_space(8.0);
+        if report.balances() {
+            ui.weak(text::ledger::balanced(language));
+        } else {
+            let tokens = *theme::palette(ui.ctx());
+            let difference = amount_text(report.difference_micros(), currency);
+            ui.colored_label(tokens.error, text::ledger::off_by(language, &difference));
+        }
+    });
+}
+
+fn profit_table(table: &mut Table, ui: &mut egui::Ui, language: Language, report: &store::ProfitAndLoss, width: f32) {
+    table.header(ui, "ledger-profit", &text::ledger::profit_columns(language), width);
+    if report.revenue.is_empty() && report.expenses.is_empty() {
+        ui.add_space(10.0);
+        ui.weak(text::ledger::empty_window(language));
+        return;
+    }
+
+    let currency = report.currency;
+    let mut revenue: Vec<&store::AccountBalance> = report.revenue.iter().collect();
+    let mut expenses: Vec<&store::AccountBalance> = report.expenses.iter().collect();
+    sort_balances(&mut revenue, table.sort);
+    sort_balances(&mut expenses, table.sort);
+
+    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+        ui.set_width(width);
+        let mut striped = false;
+        for row in &revenue {
+            table.row(ui, width, &account_cells(row, currency), false, striped);
+            striped = !striped;
+        }
+        let revenue_total = [
+            Cell::left(""),
+            Cell::left(text::ledger::revenue_label(language)).strong(),
+            Cell::right(amount_text(report.revenue_micros, currency)).strong(),
+        ];
+        table.row(ui, width, &revenue_total, false, false);
+
+        striped = false;
+        for row in &expenses {
+            table.row(ui, width, &account_cells(row, currency), false, striped);
+            striped = !striped;
+        }
+        let expense_total = [
+            Cell::left(""),
+            Cell::left(text::ledger::expenses_label(language)).strong(),
+            Cell::right(amount_text(report.expense_micros, currency)).strong(),
+        ];
+        table.row(ui, width, &expense_total, false, false);
+
+        let result = [
+            Cell::left(""),
+            Cell::left(text::ledger::result_label(language)).strong(),
+            Cell::right(amount_text(report.result_micros(), currency)).strong(),
+        ];
+        table.row(ui, width, &result, false, false);
+    });
+}
+
+fn sheet_table(table: &mut Table, ui: &mut egui::Ui, language: Language, report: &store::BalanceSheet, width: f32) {
+    table.header(ui, "ledger-sheet", &text::ledger::sheet_columns(language), width);
+    if report.assets.is_empty() && report.liabilities.is_empty() && report.equity.is_empty() {
+        ui.add_space(10.0);
+        ui.weak(text::ledger::empty_window(language));
+        return;
+    }
+
+    let currency = report.currency;
+    let mut assets: Vec<&store::AccountBalance> = report.assets.iter().collect();
+    let mut liabilities: Vec<&store::AccountBalance> = report.liabilities.iter().collect();
+    let mut equity: Vec<&store::AccountBalance> = report.equity.iter().collect();
+    for group in [&mut assets, &mut liabilities, &mut equity] {
+        sort_balances(group, table.sort);
+    }
+
+    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+        ui.set_width(width);
+        let groups = [
+            (&assets, report.assets_micros, text::ledger::assets_label(language)),
+            (
+                &liabilities,
+                report.liabilities_micros,
+                text::ledger::liabilities_label(language),
+            ),
+            (&equity, report.equity_micros, text::ledger::equity_label(language)),
+        ];
+        for (rows, total_micros, heading) in groups {
+            let mut striped = false;
+            for row in rows {
+                table.row(ui, width, &account_cells(row, currency), false, striped);
+                striped = !striped;
+            }
+            let total = [
+                Cell::left(""),
+                Cell::left(heading).strong(),
+                Cell::right(amount_text(total_micros, currency)).strong(),
+            ];
+            table.row(ui, width, &total, false, false);
+        }
+
+        let result = [
+            Cell::left(""),
+            Cell::left(text::ledger::result_label(language)).strong(),
+            Cell::right(amount_text(report.result_micros, currency)).strong(),
+        ];
+        table.row(ui, width, &result, false, false);
+        ui.add_space(8.0);
+        if report.balances() {
+            ui.weak(text::ledger::balanced(language));
+        } else {
+            let tokens = *theme::palette(ui.ctx());
+            let difference = amount_text(report.difference_micros(), currency);
+            ui.colored_label(tokens.error, text::ledger::off_by(language, &difference));
+        }
+    });
+}
+
+fn vat_panel(
+    ui: &mut egui::Ui,
+    language: Language,
+    readiness: &store::Readiness,
+    prepared: &Option<store::PreparedReturn>,
+) {
+    let tokens = *theme::palette(ui.ctx());
+    let checks = [
+        (text::ledger::CheckName::LedgerToReturn, &readiness.ledger_to_return),
+        (text::ledger::CheckName::InvoiceToLedger, &readiness.invoice_to_ledger),
+        (text::ledger::CheckName::BalanceSheet, &readiness.balance_sheet),
+        (text::ledger::CheckName::ControlAccounts, &readiness.control_accounts),
+    ];
+
+    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+        egui::Grid::new("ledger-vat-checks")
+            .num_columns(2)
+            .spacing([18.0, 6.0])
+            .show(ui, |ui| {
+                for (name, check) in checks {
+                    ui.label(text::ledger::check(language, name));
+                    match check {
+                        store::reconcile::Check::Passed => {
+                            ui.colored_label(tokens.success, text::ledger::check_passed(language));
+                        }
+                        store::reconcile::Check::Failed(problems) => {
+                            ui.colored_label(tokens.error, text::ledger::check_failed(language, problems.len()));
+                        }
+                        store::reconcile::Check::NotChecked(_) => {
+                            ui.weak(text::ledger::check_not_checked(language));
+                        }
+                    }
+                    ui.end_row();
+                }
+
+                ui.label(text::ledger::fileable(language));
+                let colour = if readiness.is_ready() {
+                    tokens.success
+                } else {
+                    tokens.error
+                };
+                let answer = if readiness.is_ready() {
+                    text::ledger::yes(language)
+                } else {
+                    text::ledger::no(language)
+                };
+                ui.colored_label(colour, answer);
+                ui.end_row();
+            });
+
+        // The store's own sentences: they name the account or document that
+        // failed, which is the part a reader needs. They are not translated.
+        for (_, check) in checks {
+            for problem in check.failures() {
+                ui.colored_label(tokens.error, problem.as_str());
+            }
+        }
+
+        ui.add_space(6.0);
+        match prepared {
+            Some(stored) => {
+                ui.weak(text::ledger::mapping(language, store::vat::MAPPING_VERSION));
+                let payable = amount_text(stored.computed.payable_micros(), stored.computed.currency);
+                ui.label(format!("{payable} — {}", text::ledger::result_label(language)));
+                let basis = short_hash(&stored.basis_hash);
+                ui.weak(text::ledger::prepared(language, &stored.prepared_at, &basis));
+            }
+            None => {
+                ui.weak(text::ledger::not_prepared(language));
+            }
+        }
+
+        ui.add_space(8.0);
+        if readiness.report.is_empty() {
+            ui.weak(text::ledger::empty_window(language));
+            return;
+        }
+        egui::Grid::new("ledger-vat-boxes")
+            .num_columns(3)
+            .spacing([18.0, 6.0])
+            .show(ui, |ui| {
+                for title in text::ledger::vat_columns(language) {
+                    ui.strong(title);
+                }
+                ui.end_row();
+                for rubriek in store::Rubriek::ALL {
+                    let Some(line) = readiness.report.line(rubriek) else {
+                        continue;
+                    };
+                    ui.label(format!(
+                        "{} {}",
+                        rubriek.code(),
+                        text::ledger::box_label(language, rubriek)
+                    ));
+                    grid_amount(ui, line.base_micros, readiness.report.currency);
+                    grid_amount(ui, line.vat_micros, readiness.report.currency);
+                    ui.end_row();
+                }
+            });
+    });
+}
+
+/// One aging bucket's amount.
+fn aging_micros(aging: &store::Aging, bucket: text::ledger::Bucket) -> i64 {
+    match bucket {
+        text::ledger::Bucket::Current => aging.current.micros(),
+        text::ledger::Bucket::Days1To30 => aging.days_1_30.micros(),
+        text::ledger::Bucket::Days31To60 => aging.days_31_60.micros(),
+        text::ledger::Bucket::Days61To90 => aging.days_61_90.micros(),
+        text::ledger::Bucket::Over90 => aging.over_90.micros(),
+        text::ledger::Bucket::Total => aging.total().map(Money::micros).unwrap_or(0),
+    }
+}
+
+fn open_items_panel(table: &mut Table, ui: &mut egui::Ui, language: Language, data: &OpenItemsData, width: f32) {
+    if data.rows.is_empty() {
+        ui.add_space(10.0);
+        ui.weak(text::ledger::empty_open_items(language));
+        return;
+    }
+
+    egui::Grid::new("ledger-aging")
+        .num_columns(3)
+        .spacing([18.0, 6.0])
+        .show(ui, |ui| {
+            ui.strong("");
+            ui.strong(text::ledger::receivable(language));
+            ui.strong(text::ledger::payable(language));
+            ui.end_row();
+            for bucket in [
+                text::ledger::Bucket::Current,
+                text::ledger::Bucket::Days1To30,
+                text::ledger::Bucket::Days31To60,
+                text::ledger::Bucket::Days61To90,
+                text::ledger::Bucket::Over90,
+                text::ledger::Bucket::Total,
+            ] {
+                ui.label(text::ledger::bucket(language, bucket));
+                grid_amount(
+                    ui,
+                    aging_micros(&data.receivable_aging, bucket),
+                    data.receivable.currency(),
+                );
+                grid_amount(ui, aging_micros(&data.payable_aging, bucket), data.payable.currency());
+                ui.end_row();
+            }
+        });
+    ui.add_space(8.0);
+
+    table.header(ui, "ledger-open", &text::ledger::open_columns(language), width);
+    let mut rows: Vec<&OpenRow> = data.rows.iter().collect();
+    if let Some((column, descending)) = table.sort {
+        rows.sort_by(|left, right| {
+            let order = match column {
+                0 => left.item.kind.as_str().cmp(right.item.kind.as_str()),
+                1 => left.item.original_date.cmp(&right.item.original_date),
+                2 => left.item.number.cmp(&right.item.number),
+                3 => left.party.cmp(&right.party),
+                4 => left.item.due_date.cmp(&right.item.due_date),
+                _ => left.item.outstanding.micros().cmp(&right.item.outstanding.micros()),
+            };
+            if descending { order.reverse() } else { order }
+        });
+    }
+
+    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+        ui.set_width(width);
+        for (index, row) in rows.iter().enumerate() {
+            let item = &row.item;
+            let kind = match item.kind {
+                store::OpenItemKind::Receivable => text::ledger::receivable(language),
+                store::OpenItemKind::Payable => text::ledger::payable(language),
+            };
+            let cells = [
+                Cell::left(kind),
+                Cell::left(item.original_date.to_iso_string()),
+                Cell::left(item.number.as_str()),
+                Cell::left(row.party.as_str()),
+                Cell::left(
+                    item.due_date
+                        .map(|due| due.to_iso_string())
+                        .unwrap_or_else(|| "—".to_owned()),
+                )
+                .muted(),
+                Cell::right(money_text(item.outstanding)),
+            ];
+            table.row(ui, width, &cells, false, index % 2 == 1);
+        }
+        ui.add_space(8.0);
+        ui.weak(text::ledger::open_count(language, rows.len()));
+    });
+}
+
+fn bank_table(
+    table: &mut Table,
+    ui: &mut egui::Ui,
+    language: Language,
+    rows: &[store::BankTransactionRow],
+    width: f32,
+) {
+    table.header(ui, "ledger-bank", &text::ledger::bank_columns(language), width);
+    if rows.is_empty() {
+        ui.add_space(10.0);
+        ui.weak(text::ledger::empty_bank(language));
+        return;
+    }
+
+    let mut rows: Vec<&store::BankTransactionRow> = rows.iter().collect();
+    if let Some((column, descending)) = table.sort {
+        rows.sort_by(|left, right| {
+            let order = match column {
+                0 => left.booking_date.cmp(&right.booking_date),
+                1 => left.account_name.cmp(&right.account_name),
+                2 => left.counterparty_name.cmp(&right.counterparty_name),
+                3 => left.remittance_info.cmp(&right.remittance_info),
+                4 => left.amount.micros().cmp(&right.amount.micros()),
+                _ => left.status.cmp(&right.status),
+            };
+            if descending { order.reverse() } else { order }
+        });
+    }
+
+    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+        ui.set_width(width);
+        for (index, row) in rows.iter().enumerate() {
+            let cells = [
+                Cell::left(row.booking_date.to_iso_string()),
+                Cell::left(row.account_name.as_str()),
+                Cell::left(row.counterparty_name.as_deref().unwrap_or("—")),
+                Cell::left(row.remittance_info.as_deref().unwrap_or("—")).muted(),
+                Cell::right(money_text(row.amount)),
+                Cell::left(text::ledger::bank_status(language, &row.status)).muted(),
+            ];
+            table.row(ui, width, &cells, false, index % 2 == 1);
+        }
+        ui.add_space(8.0);
+        ui.weak(text::ledger::bank_count(language, rows.len()));
+    });
+}
+
+/// The first characters of a hash, enough to compare two of them by eye.
+fn short_hash(hash: &str) -> String {
+    hash.chars().take(12).collect()
 }
 
 /// The file extension an artefact kind is written with.
@@ -4972,7 +5859,7 @@ mod tests {
         workspace.watch.folder = Some(drop_folder);
         workspace.start_watch_with(Duration::ZERO, Duration::ZERO);
 
-        for tab in [Tab::Search, Tab::Customers, Tab::Settings] {
+        for tab in [Tab::Search, Tab::Customers, Tab::Ledger, Tab::Settings] {
             workspace.tab = tab;
             let context = egui::Context::default();
             let mut appearance = egui::ThemePreference::System;
@@ -5076,6 +5963,10 @@ mod tests {
             |_| Ok(b"<Invoice/>".to_vec()),
         )
         .unwrap();
+        // Post it, so the ledger tab has a filled table to lay out rather than an
+        // empty-state message.
+        store::seed_starter_chart(session.database().connection(), NOW).unwrap();
+        store::post_document(session.database().connection(), issued.id, "test", NOW).unwrap();
 
         let mut workspace = Workspace::new(&session).unwrap();
         // Fold the result open and ask for it, so the Search tab draws its panel.
@@ -5083,7 +5974,7 @@ mod tests {
         workspace.search.opened = store::archive::load(session.database().connection(), issued.id).unwrap();
 
         let minimum = egui::vec2(900.0, 560.0);
-        for tab in [Tab::Search, Tab::Customers, Tab::Settings] {
+        for tab in [Tab::Search, Tab::Customers, Tab::Ledger, Tab::Settings] {
             let unscaled = draw_at(&mut workspace, &mut session, tab, minimum, 1.0);
             assert!(!unscaled.is_empty(), "{tab:?} has to draw something to be measured");
             let baseline = worst_overflow(&unscaled);
@@ -6317,6 +7208,93 @@ mod tests {
             .collect();
         for expected in ["approved", "paid"] {
             assert!(events.contains(&expected), "{expected} missing from {events:?}");
+        }
+    }
+
+    /// An archive with posted books, for the ledger tab.
+    fn posted_session() -> (tempfile::TempDir, Session, SellerRecord) {
+        let (dir, session, seller) = session_with_one_issued();
+        store::seed_starter_chart(session.database().connection(), NOW).unwrap();
+        // The document is dated today, so its number depends on the clock; the
+        // search result is the stable way to name it.
+        let mut view = SearchView::default();
+        view.run(session.database(), seller.id).unwrap();
+        let id = view.results[0].id;
+        store::post_document(session.database().connection(), id, "test", NOW).unwrap();
+        (dir, session, seller)
+    }
+
+    #[test]
+    fn the_ledger_tab_reads_the_posted_books() {
+        let (_dir, session, seller) = posted_session();
+        let mut workspace = Workspace::new(&session).unwrap();
+        workspace.tab = Tab::Ledger;
+        // The view starts on the trial balance of the current year, which is where
+        // the invoice was dated.
+        workspace.load_ledger(&session, seller.id);
+
+        let Some(LedgerData::TrialBalance(report)) = workspace.ledger.data.as_ref() else {
+            panic!("the trial balance did not load: {:?}", workspace.ledger.error);
+        };
+        assert!(report.balances(), "the posted entry has two sides");
+        assert!(
+            report.rows.iter().any(|row| row.code.as_str() == "1300"),
+            "the debtor is in the report"
+        );
+
+        // The chart is the starter chart, and the VAT section computes the month.
+        workspace.ledger.section = LedgerSection::Chart;
+        workspace.load_ledger(&session, seller.id);
+        match workspace.ledger.data.as_ref() {
+            Some(LedgerData::Chart(accounts)) => assert_eq!(accounts.len(), 18, "the shipped starter chart"),
+            _ => panic!("the chart did not load: {:?}", workspace.ledger.error),
+        }
+
+        workspace.ledger.section = LedgerSection::Vat;
+        workspace.load_ledger(&session, seller.id);
+        match workspace.ledger.data.as_ref() {
+            Some(LedgerData::Vat { readiness, prepared }) => {
+                assert!(
+                    readiness.report.line(store::Rubriek::HighRate).is_some(),
+                    "the sale is in 1a"
+                );
+                assert!(prepared.is_none(), "nothing has been filed for this month");
+            }
+            _ => panic!("the VAT return did not load: {:?}", workspace.ledger.error),
+        }
+    }
+
+    #[test]
+    fn a_ledger_window_that_cannot_be_read_says_so() {
+        let (_dir, session, seller) = posted_session();
+        let mut workspace = Workspace::new(&session).unwrap();
+        workspace.ledger.from = "last monday".to_owned();
+        workspace.load_ledger(&session, seller.id);
+
+        assert!(workspace.ledger.data.is_none());
+        let error = workspace
+            .ledger
+            .error
+            .clone()
+            .expect("a date that is not one is reported");
+        assert!(error.contains("last monday"), "{error}");
+    }
+
+    #[test]
+    fn the_ledger_tab_draws_every_section() {
+        let (_dir, mut session, seller) = posted_session();
+        let mut workspace = Workspace::new(&session).unwrap();
+        workspace.tab = Tab::Ledger;
+
+        for section in LedgerSection::ALL {
+            workspace.ledger.section = section;
+            workspace.load_ledger(&session, seller.id);
+            let context = egui::Context::default();
+            let mut appearance = egui::ThemePreference::System;
+            let output = context.run_ui(egui::RawInput::default(), |ui| {
+                let _ = workspace.ui(ui, &mut session, &mut appearance, &mut Language::default());
+            });
+            output.drop_without_applying_deltas();
         }
     }
 }

@@ -298,9 +298,10 @@ typing it at the lock screen is the only way in, and **Remember this device** is
 the supported shortcut for repeat use. Auto-unlocking from a flag or
 `BONK_PASSPHRASE` would turn an unattended launch into an open archive.
 
-The window is a three-tab shell: a thin icon rail on the left switches **Search**,
-**Customers**, and **Settings**, with the content inset from the rail so tables do
-not start against it. Search is a continuous table over the archive; typing or
+The window is a four-tab shell: a thin icon rail on the left switches **Search**,
+**Customers**, **Ledger**, and **Settings**, with the content inset from the rail so
+tables do not start against it. Search is a continuous table over the archive;
+typing or
 changing a filter re-runs it, a row opens in place with the stored document, and
 headings sort when clicked and resize when dragged. **New invoice** in the footer
 opens the composer over the list — the list stays underneath — and a saved draft
@@ -317,6 +318,15 @@ uses — the window draws the same pages the PDF writer receives — and fits th
 page to the width of the window, centred, so a wide window shows a larger sheet.
 What the preview shows is what gets filed; after issuing, the panel offers the
 PDF and the UBL again.
+
+Ledger is read-only: the chart, the trial balance, profit and loss, the balance
+sheet, the Dutch VAT form with its readiness checks, the open receivables and
+payables with their aging, and the bank transactions nothing has settled yet.
+Each report is keyed on the window (a date range, a date, or a return period) and
+re-queried only when that key changes, so scrolling a report does not re-scan the
+journal. A report whose two sides disagree says so and by how much; nothing is
+rounded into agreement. The window never posts, reverses, or files — those stay
+in the archive's own commands, where they leave the audit trail they must leave.
 
 Every document chooses its own currency from a picker beside the customer; the
 seller's currency is only the default, and the line amounts are parsed in the

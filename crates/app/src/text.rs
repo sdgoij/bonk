@@ -308,9 +308,456 @@ pub mod tabs {
         sentence!(language, "Customers", "Klanten")
     }
 
+    /// The books derived from the archive.
+    pub fn ledger(language: Language) -> &'static str {
+        sentence!(language, "Ledger", "Grootboek")
+    }
+
     /// Archive settings.
     pub fn settings(language: Language) -> &'static str {
         sentence!(language, "Settings", "Instellingen")
+    }
+}
+
+/// The ledger tab: the books, read-only.
+///
+/// Every number is a query over the posted entries. Nothing on this tab writes,
+/// because the window is where a bookkeeper looks, not where a posting is
+/// invented; corrections belong in the archive's own commands so they leave the
+/// audit trail they are supposed to leave.
+pub mod ledger {
+    use super::Language;
+
+    /// The tab title.
+    pub fn title(language: Language) -> &'static str {
+        sentence!(language, "Ledger", "Grootboek")
+    }
+
+    /// The note under the section buttons.
+    pub fn note(language: Language) -> &'static str {
+        sentence!(
+            language,
+            "Read-only: these figures are computed from the posted entries.",
+            "Alleen lezen: deze cijfers volgen uit de geboekte mutaties."
+        )
+    }
+
+    /// The chart of accounts.
+    pub fn chart(language: Language) -> &'static str {
+        sentence!(language, "Chart", "Rekeningschema")
+    }
+
+    /// Trial balance.
+    pub fn trial_balance(language: Language) -> &'static str {
+        sentence!(language, "Trial balance", "Proefbalans")
+    }
+
+    /// Profit and loss.
+    pub fn profit_and_loss(language: Language) -> &'static str {
+        sentence!(language, "Profit and loss", "Winst en verlies")
+    }
+
+    /// Balance sheet.
+    pub fn balance_sheet(language: Language) -> &'static str {
+        sentence!(language, "Balance sheet", "Balans")
+    }
+
+    /// The VAT return.
+    pub fn vat(language: Language) -> &'static str {
+        sentence!(language, "VAT return", "Btw-aangifte")
+    }
+
+    /// Outstanding debtors and creditors.
+    pub fn open_items(language: Language) -> &'static str {
+        sentence!(language, "Open items", "Openstaande posten")
+    }
+
+    /// Bank transactions nothing has settled yet.
+    pub fn bank(language: Language) -> &'static str {
+        sentence!(language, "Unmatched bank", "Ongekoppelde bank")
+    }
+
+    /// Start of a window.
+    pub fn from_label(language: Language) -> &'static str {
+        sentence!(language, "From", "Van")
+    }
+
+    /// End of a window.
+    pub fn to_label(language: Language) -> &'static str {
+        sentence!(language, "To", "Tot")
+    }
+
+    /// A single date.
+    pub fn as_of_label(language: Language) -> &'static str {
+        sentence!(language, "As of", "Per")
+    }
+
+    /// The return's year.
+    pub fn year_label(language: Language) -> &'static str {
+        sentence!(language, "Year", "Jaar")
+    }
+
+    /// The return's month.
+    pub fn month_label(language: Language) -> &'static str {
+        sentence!(language, "Month", "Maand")
+    }
+
+    /// A date that could not be read.
+    pub fn bad_date(language: Language, value: &str) -> String {
+        sentence!(
+            language,
+            format!("{value:?} is not a date in YYYY-MM-DD form"),
+            format!("{value:?} is geen datum in de vorm JJJJ-MM-DD")
+        )
+    }
+
+    /// A month outside 1–12.
+    pub fn bad_month(language: Language) -> &'static str {
+        sentence!(language, "the month must be 1 to 12", "de maand moet 1 tot 12 zijn")
+    }
+
+    /// A year that is not a number.
+    pub fn bad_year(language: Language) -> &'static str {
+        sentence!(language, "the year must be a number", "het jaar moet een getal zijn")
+    }
+
+    /// What kind of account a row is.
+    pub fn account_kind(language: Language, kind: crux::AccountKind) -> &'static str {
+        match kind {
+            crux::AccountKind::Asset => sentence!(language, "Asset", "Activa"),
+            crux::AccountKind::Liability => sentence!(language, "Liability", "Schuld"),
+            crux::AccountKind::Equity => sentence!(language, "Equity", "Vermogen"),
+            crux::AccountKind::Revenue => sentence!(language, "Revenue", "Omzet"),
+            crux::AccountKind::Expense => sentence!(language, "Expense", "Kosten"),
+        }
+    }
+
+    /// The column titles of the chart.
+    pub fn chart_columns(language: Language) -> [&'static str; 4] {
+        sentence!(
+            language,
+            ["Code", "Account", "Kind", "Control"],
+            ["Code", "Rekening", "Soort", "Controle"]
+        )
+    }
+
+    /// The column titles of the trial balance.
+    pub fn trial_columns(language: Language) -> [&'static str; 5] {
+        sentence!(
+            language,
+            ["Code", "Account", "Debit", "Credit", "Balance"],
+            ["Code", "Rekening", "Debet", "Credit", "Saldo"]
+        )
+    }
+
+    /// The column titles of the profit and loss.
+    pub fn profit_columns(language: Language) -> [&'static str; 3] {
+        sentence!(language, ["Code", "Account", "Amount"], ["Code", "Rekening", "Bedrag"])
+    }
+
+    /// The column titles of the balance sheet.
+    pub fn sheet_columns(language: Language) -> [&'static str; 3] {
+        sentence!(language, ["Code", "Account", "Amount"], ["Code", "Rekening", "Bedrag"])
+    }
+
+    /// The column titles of the open items.
+    pub fn open_columns(language: Language) -> [&'static str; 6] {
+        sentence!(
+            language,
+            ["Kind", "Date", "Document", "Party", "Due", "Outstanding"],
+            ["Soort", "Datum", "Document", "Relatie", "Vervalt", "Openstaand"]
+        )
+    }
+
+    /// The column titles of the bank queue.
+    pub fn bank_columns(language: Language) -> [&'static str; 6] {
+        sentence!(
+            language,
+            ["Date", "Account", "Counterparty", "Remittance", "Amount", "Status"],
+            ["Datum", "Rekening", "Tegenpartij", "Omschrijving", "Bedrag", "Status"]
+        )
+    }
+
+    /// The column titles of the VAT boxes.
+    pub fn vat_columns(language: Language) -> [&'static str; 3] {
+        sentence!(language, ["Box", "Base", "VAT"], ["Rubriek", "Grondslag", "Btw"])
+    }
+
+    /// A box's name, short enough for a grid cell.
+    ///
+    /// The official wording is printed on the form and is far too long for a
+    /// column; the code still says exactly which box a row is.
+    pub fn box_label(language: Language, rubriek: store::Rubriek) -> &'static str {
+        match rubriek {
+            store::Rubriek::HighRate => sentence!(language, "High rate", "Hoog tarief"),
+            store::Rubriek::LowRate => sentence!(language, "Low rate", "Laag tarief"),
+            store::Rubriek::OtherRate => sentence!(language, "Other rates", "Overige tarieven"),
+            store::Rubriek::PrivateUse => sentence!(language, "Private use", "Privegebruik"),
+            store::Rubriek::ZeroOrExempt => sentence!(language, "Zero or exempt", "0% of vrijgesteld"),
+            store::Rubriek::EuAcquisitions => sentence!(language, "EU acquisitions", "EU-verwervingen"),
+            store::Rubriek::EuSupplies => sentence!(language, "EU supplies", "EU-leveringen"),
+            store::Rubriek::Exports => sentence!(language, "Exports", "Uitvoer"),
+            store::Rubriek::ReverseChargeServices => {
+                sentence!(language, "Reverse charge, services", "Verlegd, diensten")
+            }
+            store::Rubriek::ReverseChargeGoods => {
+                sentence!(language, "Reverse charge, goods", "Verlegd, goederen")
+            }
+            store::Rubriek::VatDue => sentence!(language, "VAT due", "Af te dragen"),
+            store::Rubriek::VatDeductible => sentence!(language, "Deductible VAT", "Voorbelasting"),
+            store::Rubriek::VatPayable => sentence!(language, "Payable or refundable", "Te betalen of terug"),
+        }
+    }
+
+    /// A receivable.
+    pub fn receivable(language: Language) -> &'static str {
+        sentence!(language, "Receivable", "Vordering")
+    }
+
+    /// A payable.
+    pub fn payable(language: Language) -> &'static str {
+        sentence!(language, "Payable", "Schuld")
+    }
+
+    /// The accounts totals row.
+    pub fn total_label(language: Language) -> &'static str {
+        sentence!(language, "Total", "Totaal")
+    }
+
+    /// The profit and loss result.
+    pub fn result_label(language: Language) -> &'static str {
+        sentence!(language, "Result", "Resultaat")
+    }
+
+    /// Total expenses on the profit and loss.
+    pub fn expenses_label(language: Language) -> &'static str {
+        sentence!(language, "Expenses", "Kosten")
+    }
+
+    /// Total revenue on the profit and loss.
+    pub fn revenue_label(language: Language) -> &'static str {
+        sentence!(language, "Revenue", "Omzet")
+    }
+
+    /// Assets on the balance sheet.
+    pub fn assets_label(language: Language) -> &'static str {
+        sentence!(language, "Assets", "Activa")
+    }
+
+    /// Liabilities on the balance sheet.
+    pub fn liabilities_label(language: Language) -> &'static str {
+        sentence!(language, "Liabilities", "Schulden")
+    }
+
+    /// Equity on the balance sheet.
+    pub fn equity_label(language: Language) -> &'static str {
+        sentence!(language, "Equity", "Eigen vermogen")
+    }
+
+    /// The books add up.
+    pub fn balanced(language: Language) -> &'static str {
+        sentence!(language, "balanced", "in balans")
+    }
+
+    /// The books do not add up, by the given amount.
+    pub fn off_by(language: Language, amount: &str) -> String {
+        sentence!(
+            language,
+            format!("out of balance by {amount}"),
+            format!("niet in balans, verschil {amount}")
+        )
+    }
+
+    /// Nothing in the chart yet.
+    pub fn empty_chart(language: Language) -> &'static str {
+        sentence!(
+            language,
+            "There is no chart of accounts yet, so there is nothing to post to.",
+            "Er is nog geen rekeningschema, dus er valt niets te boeken."
+        )
+    }
+
+    /// No entries in the window.
+    pub fn empty_window(language: Language) -> &'static str {
+        sentence!(
+            language,
+            "Nothing was posted in this window.",
+            "In deze periode is niets geboekt."
+        )
+    }
+
+    /// No outstanding items.
+    pub fn empty_open_items(language: Language) -> &'static str {
+        sentence!(language, "Every item is settled.", "Alle posten zijn afgeletterd.")
+    }
+
+    /// No bank transactions waiting.
+    pub fn empty_bank(language: Language) -> &'static str {
+        sentence!(
+            language,
+            "No bank transaction is waiting to be matched.",
+            "Er wacht geen bankmutatie op aflettering."
+        )
+    }
+
+    /// How many accounts the chart holds.
+    pub fn account_count(language: Language, count: usize) -> String {
+        sentence!(language, format!("{count} account(s)"), format!("{count} rekening(en)"))
+    }
+
+    /// How many documents the open item lists hold.
+    pub fn open_count(language: Language, count: usize) -> String {
+        sentence!(
+            language,
+            format!("{count} open item(s)"),
+            format!("{count} openstaande post(en)")
+        )
+    }
+
+    /// How many bank transactions wait.
+    pub fn bank_count(language: Language, count: usize) -> String {
+        sentence!(
+            language,
+            format!("{count} transaction(s)"),
+            format!("{count} mutatie(s)")
+        )
+    }
+
+    /// An age bucket of the subledger.
+    pub fn bucket(language: Language, bucket: Bucket) -> &'static str {
+        match bucket {
+            Bucket::Current => sentence!(language, "Not yet due", "Nog niet vervallen"),
+            Bucket::Days1To30 => sentence!(language, "1 to 30 days", "1 tot 30 dagen"),
+            Bucket::Days31To60 => sentence!(language, "31 to 60 days", "31 tot 60 dagen"),
+            Bucket::Days61To90 => sentence!(language, "61 to 90 days", "61 tot 90 dagen"),
+            Bucket::Over90 => sentence!(language, "Over 90 days", "Meer dan 90 dagen"),
+            Bucket::Total => sentence!(language, "Total", "Totaal"),
+        }
+    }
+
+    /// An age bucket the grid draws.
+    #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+    pub enum Bucket {
+        /// Not past its due date.
+        Current,
+        /// 1–30 days late.
+        Days1To30,
+        /// 31–60 days late.
+        Days31To60,
+        /// 61–90 days late.
+        Days61To90,
+        /// More than 90 days late.
+        Over90,
+        /// The sum of the buckets.
+        Total,
+    }
+
+    /// A readiness check of the VAT return.
+    pub fn check(language: Language, check: CheckName) -> &'static str {
+        match check {
+            CheckName::LedgerToReturn => {
+                sentence!(language, "Every VAT line has a box", "Elke btw-regel heeft een rubriek")
+            }
+            CheckName::InvoiceToLedger => sentence!(
+                language,
+                "The VAT on each document is the VAT posted",
+                "De btw per document is de geboekte btw"
+            ),
+            CheckName::BalanceSheet => sentence!(
+                language,
+                "The books balance up to the period end",
+                "De boeken sluiten tot het einde van de periode"
+            ),
+            CheckName::ControlAccounts => sentence!(
+                language,
+                "Control accounts match the subledger",
+                "Grootboekrekeningen sluiten op het subgrootboek"
+            ),
+        }
+    }
+
+    /// A readiness check the window can report.
+    #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+    pub enum CheckName {
+        /// Every VAT-bearing line found a rubriek.
+        LedgerToReturn,
+        /// Each document's VAT equals the VAT posted for it.
+        InvoiceToLedger,
+        /// Debits equal credits to the period end.
+        BalanceSheet,
+        /// Debtors and creditors against their open items.
+        ControlAccounts,
+    }
+
+    /// A check that found nothing.
+    pub fn check_passed(language: Language) -> &'static str {
+        sentence!(language, "passed", "geslaagd")
+    }
+
+    /// A check that found problems.
+    pub fn check_failed(language: Language, count: usize) -> String {
+        match language {
+            Language::English if count == 1 => "1 problem".to_owned(),
+            Language::English => format!("{count} problems"),
+            Language::Dutch if count == 1 => "1 probleem".to_owned(),
+            Language::Dutch => format!("{count} problemen"),
+        }
+    }
+
+    /// A check that could not run.
+    pub fn check_not_checked(language: Language) -> &'static str {
+        sentence!(language, "not checked", "niet gecontroleerd")
+    }
+
+    /// Whether the return may be filed.
+    pub fn fileable(language: Language) -> &'static str {
+        sentence!(language, "Fileable", "Indienbaar")
+    }
+
+    /// Yes.
+    pub fn yes(language: Language) -> &'static str {
+        sentence!(language, "yes", "ja")
+    }
+
+    /// No.
+    pub fn no(language: Language) -> &'static str {
+        sentence!(language, "no", "nee")
+    }
+
+    /// The return as stored, or the fact that none is.
+    pub fn prepared(language: Language, at: &str, basis: &str) -> String {
+        sentence!(
+            language,
+            format!("prepared {at}, basis {basis}"),
+            format!("vastgesteld {at}, basis {basis}")
+        )
+    }
+
+    /// No return has been prepared for this period.
+    pub fn not_prepared(language: Language) -> &'static str {
+        sentence!(
+            language,
+            "No return has been prepared for this period.",
+            "Voor deze periode is nog geen aangifte vastgesteld."
+        )
+    }
+
+    /// The mapping that produced the return.
+    pub fn mapping(language: Language, version: &str) -> String {
+        sentence!(
+            language,
+            format!("rubriek mapping {version}"),
+            format!("rubriekmapping {version}")
+        )
+    }
+
+    /// The state of a bank transaction.
+    pub fn bank_status(language: Language, status: &str) -> &'static str {
+        match status {
+            "partially_matched" => sentence!(language, "partly matched", "deels afgeletterd"),
+            "matched" => sentence!(language, "matched", "afgeletterd"),
+            _ => sentence!(language, "unmatched", "niet afgeletterd"),
+        }
     }
 }
 

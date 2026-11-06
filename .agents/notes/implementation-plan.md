@@ -1171,6 +1171,24 @@ check 5a and 5c. A forger who rewrites a line and rebuilds every manifest hash
 still has to rewrite the chain, which is recomputed. The ledger fields are
 optional in the manifest, so a bundle written before this still verifies.
 
+**Status, 2026-11-06 (the window can read the books).** The window gained a fourth
+tab beside Search, Customers, and Settings. It is deliberately read-only: the
+chart, the trial balance, profit and loss, the balance sheet, the Dutch VAT form
+with its four readiness checks and the stored return, the open receivables and
+payables with their aging, and the bank transactions waiting to be matched.
+Nothing on it posts, reverses, or files — those stay in the CLI, where the audit
+event they write is the point. Loading is keyed on the window (a date range, a
+date, or a return period) so scrolling does not re-scan the journal, and the
+charts and lists use the same resizable, sortable table as the search screen. A
+report whose two sides disagree is drawn in the error colour with the difference
+named, because a balance that is quietly rounded into agreement is worse than one
+that is visibly wrong. The VAT box labels are short forms rather than the form's
+official wording, which does not fit a column; the store's failure sentences are
+shown verbatim, so a Dutch window still carries English detail there until the
+findings grow stable codes. Setting up the chart is still `bonk ledger setup`: a
+GUI button that writes accounts would need its own audit story, which belongs with
+the A5 pilot rather than here.
+
 ---
 
 ## 5. First two weeks, concretely
