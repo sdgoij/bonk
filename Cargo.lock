@@ -318,7 +318,7 @@ checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 name = "app"
 version = "0.0.0"
 dependencies = [
- "conformance",
+ "application",
  "crux",
  "eframe",
  "egui",
@@ -343,6 +343,21 @@ dependencies = [
  "keyring-core",
  "log",
  "security-framework",
+]
+
+[[package]]
+name = "application"
+version = "0.0.0"
+dependencies = [
+ "conformance",
+ "crux",
+ "render",
+ "serde_json",
+ "sha2 0.10.9",
+ "store",
+ "syntax",
+ "tempfile",
+ "zeroize",
 ]
 
 [[package]]
@@ -1073,6 +1088,7 @@ name = "cli"
 version = "0.1.0"
 dependencies = [
  "app",
+ "application",
  "clap",
  "crux",
  "import",
@@ -1779,11 +1795,14 @@ checksum = "b97b65636e5b9ef369943878ac74335ba1c55c1cb6adbf1e2c293c624248d693"
 name = "ffi"
 version = "0.0.0"
 dependencies = [
+ "application",
  "argon2",
  "crux",
  "render",
  "sha2 0.10.9",
+ "store",
  "syntax",
+ "tempfile",
  "thiserror 2.0.21",
  "uniffi",
  "zeroize",

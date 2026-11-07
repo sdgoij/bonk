@@ -16,7 +16,23 @@ module and the AGP 9 compatibility flags `android.builtInKotlin=false` and
 
 ## Generate the bindings and native libraries
 
-From the repository root:
+The Gradle build can regenerate both. With `ANDROID_NDK_HOME` set and
+`cargo-ndk` installed:
+
+```sh
+cd mobile
+./gradlew :composeApp:assembleDebug -Pnative
+```
+
+`-Pnative` makes `preBuild` depend on `cargoNdk` and `uniffiBindings`. The
+bindings are generated from the arm64 library that `cargoNdk` produced, so no
+separate host build is needed. On Windows the tasks go through
+`tools/cargo-strawberry.sh`, which is what OpenSSL's build needs.
+
+Without `-Pnative` the build uses the libraries already in
+`src/androidMain/jniLibs`.
+
+The equivalent manual steps, from the repository root, are:
 
 ```sh
 cargo build -p ffi

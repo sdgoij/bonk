@@ -1,3 +1,4 @@
+import org.gradle.api.tasks.Exec
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
@@ -76,4 +77,44 @@ android {
             )
         }
     }
+}
+
+// Native build and binding generation.
+//
+// `-Pnative` makes `preBuild` depend on both tasks, so one command regenerates
+// the bindings and the per-ABI libraries. Without the flag the build uses what
+// is already in `jniLibs`, which lets a developer without the NDK compile Kotlin.
+val repoRoot = rootProject.projectDir.parentFile
+val cargoCommand = if (System.getProperty("os.name").startsWith("Windows", ignoreCase = true)) {
+    listOf("sh", "tools/cargo-strawberry.sh")
+} else {
+    listOf("cargo")
+}
+
+val cargoNdk = tasks.register<Exec>("cargoNdk") {
+    workingDir = repoRoot
+    commandLine(
+        cargoCommand + listOf(
+            "ndk", "--platform", "26",
+            "-t", "arm64-v8a", "-t", "x86_64",
+            "-o", "mobile/composeApp/src/androidMain/jniLibs",
+            "build", "--release", "-p", "ffi",
+        ),
+    )
+}
+
+val uniffiBindings = tasks.register<Exec>("uniffiBindings") {
+    dependsOn(cargoNdk)
+    workingDir = repoRoot
+    commandLine(
+        cargoCommand + listOf(
+            "run", "-p", "ffi", "--features", "cli", "--bin", "uniffi-bindgen", "--",
+            "generate", "--library", "target/aarch64-linux-android/release/libbonkc.so",
+            "--language", "kotlin", "--out-dir", "mobile/composeApp/build/generated/uniffi",
+        ),
+    )
+}
+
+if (providers.gradleProperty("native").isPresent) {
+    tasks.named("preBuild") { dependsOn(uniffiBindings) }
 }

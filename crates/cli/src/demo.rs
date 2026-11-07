@@ -10,7 +10,7 @@
 //! same options produce the same numbers, dates, and amounts. Document
 //! identifiers are random, as they are everywhere else.
 
-use app::Session;
+use application::{Archive as Session, render_issue};
 use crux::{
     Address, CountryCode, Currency, CustomerId, DocumentId, DraftLine, InvoiceDraft, LineId, LocalDate, Money, Party,
     Quantity, SavedSearchId, SellerId, TaxTreatment, UnitCode, VatRate, calculate_totals,
@@ -314,7 +314,7 @@ fn seed_inbound(
             customer: &us,
             totals: &totals,
         };
-        let bytes = app::render_issue(&view)?;
+        let bytes = render_issue(&view)?;
 
         let imported_at = at(earliest(today, date.plus_days(1)?), 8, 30);
         let path = format!("demo/inbound/{number}.xml");
@@ -388,7 +388,7 @@ fn issue(session: &mut Session, draft: &InvoiceDraft, now: &str) -> Result<store
             renderer_version: RENDERER,
             now,
         },
-        app::render_issue,
+        render_issue,
     )?;
     Ok(record)
 }

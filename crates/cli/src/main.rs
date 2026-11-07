@@ -4,7 +4,11 @@
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use app::{Session, strength, text};
+use app::text;
+use application::{
+    Archive as Session, DocumentLanguage, default_template, export, invoice_pdf, load_templates,
+    passphrase as strength, render_issue,
+};
 use clap::{Parser, Subcommand};
 use crux::{
     AccountCode, Address, CountryCode, Currency, CustomerId, DocumentId, DraftLine, Finding, InvoiceDraft, Journal,
@@ -1241,7 +1245,7 @@ fn run(cli: Cli) -> Result<(), CliError> {
             // A name that matches no file is refused here rather than drawn with
             // something else: the point of naming a layout is that it is used.
             if let Some(name) = template.as_deref() {
-                let (templates, _) = app::load_templates(session.database_path());
+                let (templates, _) = load_templates(session.database_path());
                 if !templates.iter().any(|template| template.name == name) {
                     return Err(CliError::Input(format!(
                         "no template named {name}; the archive holds {}",
@@ -1573,8 +1577,8 @@ fn run(cli: Cli) -> Result<(), CliError> {
                 },
             )?;
             let rendered = match format.as_str() {
-                "json" => app::export::to_json(&hits)?,
-                _ => app::export::to_csv(&hits)?,
+                "json" => export::to_json(&hits)?,
+                _ => export::to_csv(&hits)?,
             };
             match out {
                 Some(path) => {
@@ -1618,9 +1622,9 @@ fn run(cli: Cli) -> Result<(), CliError> {
             let seller = load_seller(session.database().connection(), loaded.seller_id)?;
             let customer = load_customer(session.database().connection(), loaded.customer_id)?;
             let language = match language.as_deref() {
-                Some("nl") => app::DocumentLanguage::Dutch,
-                Some("en") => app::DocumentLanguage::English,
-                _ => app::DocumentLanguage::from_locale(&seller.default_locale),
+                Some("nl") => DocumentLanguage::Dutch,
+                Some("en") => DocumentLanguage::English,
+                _ => DocumentLanguage::from_locale(&seller.default_locale),
             };
 
             let findings = validate_draft(&loaded, &seller.party, &customer.party);
@@ -1640,7 +1644,7 @@ fn run(cli: Cli) -> Result<(), CliError> {
                     now: &store::now_rfc3339(),
                 },
                 |view| {
-                    let bytes = app::render_issue(view)?;
+                    let bytes = render_issue(view)?;
                     rendered = Some(bytes.clone());
                     Ok(bytes)
                 },
@@ -1666,7 +1670,7 @@ fn run(cli: Cli) -> Result<(), CliError> {
             // The draft names the layout it was written for. A name the archive no
             // longer holds falls through to the default, and the artefact records
             // the digest of whichever layout really drew it.
-            let (templates, problems) = app::load_templates(session.database_path());
+            let (templates, problems) = load_templates(session.database_path());
             for problem in &problems {
                 eprintln!("template ignored: {problem}");
             }
@@ -1679,12 +1683,12 @@ fn run(cli: Cli) -> Result<(), CliError> {
                         // layout that really drew the PDF.
                         eprintln!("warning: template {name} is not in this archive; the default draws instead");
                     }
-                    named.or_else(|| app::default_template(&templates))
+                    named.or_else(|| default_template(&templates))
                 }
-                None => app::default_template(&templates),
+                None => default_template(&templates),
             };
 
-            match app::invoice_pdf(
+            match invoice_pdf(
                 &issued.number,
                 &loaded,
                 &seller,

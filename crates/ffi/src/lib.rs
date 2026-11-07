@@ -9,6 +9,7 @@
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+use application::Archive as AppArchive;
 use argon2::{Algorithm, Argon2, Params, Version};
 use crux::{
     Address, CountryCode, Currency, DocType, DraftLine, LineId, LocalDate, Money, Party, Quantity, TaxTreatment,
@@ -36,6 +37,17 @@ pub enum AppError {
     /// The UBL or PDF artefact pipeline failed.
     #[error("artefact: {detail}")]
     Artefact { detail: String },
+    /// The archive has been closed.
+    #[error("the archive is closed")]
+    Closed,
+}
+
+impl From<store::StoreError> for AppError {
+    fn from(error: store::StoreError) -> Self {
+        Self::Store {
+            detail: error.to_string(),
+        }
+    }
 }
 
 /// The platform credential-store port.
@@ -51,6 +63,131 @@ pub trait DeviceSecretStore: Send + Sync {
     fn get(&self, account: String) -> Result<Option<Vec<u8>>, AppError>;
     /// Removes an entry; false when there was nothing to remove.
     fn delete(&self, account: String) -> Result<bool, AppError>;
+}
+
+/// What the dashboard shows for an opened archive.
+#[derive(uniffi::Record)]
+pub struct ArchiveSummary {
+    /// Number of seller records.
+    pub sellers: i64,
+    /// Number of drafts.
+    pub drafts: i64,
+    /// Applied schema version.
+    pub schema_version: i64,
+}
+
+/// An unlocked archive, owned by the caller and closed explicitly.
+///
+/// Every method takes `&self`; the mutex serialises access, matching SQLite's
+/// single-writer model. Hosts must call these off the UI thread.
+#[derive(uniffi::Object)]
+pub struct Archive {
+    inner: Mutex<Option<AppArchive>>,
+}
+
+#[uniffi::export]
+impl Archive {
+    /// Creates a new encrypted archive. Refuses to overwrite either file.
+    #[uniffi::constructor]
+    pub fn create(database_path: String, keystore_path: String, passphrase: String) -> Result<Arc<Self>, AppError> {
+        let archive = AppArchive::create(database_path, keystore_path, &passphrase)?;
+        Ok(Arc::new(Self {
+            inner: Mutex::new(Some(archive)),
+        }))
+    }
+
+    /// Opens an existing archive with a passphrase.
+    #[uniffi::constructor]
+    pub fn open(database_path: String, keystore_path: String, passphrase: String) -> Result<Arc<Self>, AppError> {
+        let archive = AppArchive::unlock(database_path, keystore_path, &passphrase)?;
+        Ok(Arc::new(Self {
+            inner: Mutex::new(Some(archive)),
+        }))
+    }
+
+    /// Opens an existing archive with the key the device kept.
+    #[uniffi::constructor]
+    pub fn open_with_device(
+        database_path: String,
+        keystore_path: String,
+        device: Box<dyn DeviceSecretStore>,
+    ) -> Result<Arc<Self>, AppError> {
+        let adapter = DeviceAdapter(device);
+        let archive = AppArchive::unlock_with_device(database_path, keystore_path, &adapter)?;
+        Ok(Arc::new(Self {
+            inner: Mutex::new(Some(archive)),
+        }))
+    }
+
+    /// Dashboard data for the open archive.
+    pub fn summary(&self) -> Result<ArchiveSummary, AppError> {
+        let guard = self.inner.lock().map_err(|_| AppError::Closed)?;
+        let archive = guard.as_ref().ok_or(AppError::Closed)?;
+        let summary = archive.summary()?;
+        Ok(ArchiveSummary {
+            sellers: summary.sellers,
+            drafts: summary.drafts,
+            schema_version: summary.schema_version,
+        })
+    }
+
+    /// Keeps the archive key in the platform store for later device unlocks.
+    pub fn remember_device(&self, passphrase: String, device: Box<dyn DeviceSecretStore>) -> Result<(), AppError> {
+        let adapter = DeviceAdapter(device);
+        let guard = self.inner.lock().map_err(|_| AppError::Closed)?;
+        let archive = guard.as_ref().ok_or(AppError::Closed)?;
+        archive.remember_device(&passphrase, &adapter)?;
+        Ok(())
+    }
+
+    /// Removes the device key; false when there was none.
+    pub fn forget_device(&self, device: Box<dyn DeviceSecretStore>) -> Result<bool, AppError> {
+        let adapter = DeviceAdapter(device);
+        let guard = self.inner.lock().map_err(|_| AppError::Closed)?;
+        let archive = guard.as_ref().ok_or(AppError::Closed)?;
+        Ok(archive.forget_device(&adapter)?)
+    }
+
+    /// Drops the archive and zeroizes the data key. Later calls return `Closed`.
+    pub fn lock(&self) {
+        if let Ok(mut guard) = self.inner.lock() {
+            *guard = None;
+        }
+    }
+
+    /// The database file this archive was opened from.
+    pub fn database_path(&self) -> Result<String, AppError> {
+        let guard = self.inner.lock().map_err(|_| AppError::Closed)?;
+        let archive = guard.as_ref().ok_or(AppError::Closed)?;
+        Ok(archive.database_path().display().to_string())
+    }
+}
+
+/// True when this device holds a key for the archive at this keystore path.
+#[uniffi::export]
+pub fn device_ready(keystore_path: String, device: Box<dyn DeviceSecretStore>) -> bool {
+    AppArchive::device_ready(keystore_path, &DeviceAdapter(device))
+}
+
+/// Adapts the host callback to the store's `DeviceStore` port.
+struct DeviceAdapter(Box<dyn DeviceSecretStore>);
+
+impl store::DeviceStore for DeviceAdapter {
+    fn put(&self, account: &str, secret: &[u8]) -> Result<(), store::StoreError> {
+        self.0.put(account.to_owned(), secret.to_vec()).map_err(device_error)
+    }
+
+    fn get(&self, account: &str) -> Result<Option<Vec<u8>>, store::StoreError> {
+        self.0.get(account.to_owned()).map_err(device_error)
+    }
+
+    fn delete(&self, account: &str) -> Result<bool, store::StoreError> {
+        self.0.delete(account.to_owned()).map_err(device_error)
+    }
+}
+
+fn device_error(error: AppError) -> store::StoreError {
+    store::StoreError::Keychain(error.to_string())
 }
 
 /// The result of the S4 KDF benchmark.
@@ -484,6 +621,24 @@ mod tests {
         );
         assert_eq!(hashes.ubl_len, 4305);
         assert_eq!(hashes.pdf_len, 25846);
+    }
+
+    #[test]
+    fn an_archive_opens_summarises_and_closes() {
+        let directory = tempfile::TempDir::new().expect("a temporary directory");
+        let database = directory.path().join("bonk.db").display().to_string();
+        let keystore = directory.path().join("keystore.bin").display().to_string();
+
+        let archive =
+            Archive::create(database.clone(), keystore.clone(), "passphrase".to_owned()).expect("a new archive");
+        assert_eq!(archive.summary().expect("a summary").schema_version, 17);
+        assert_eq!(archive.database_path().expect("a path"), database);
+
+        archive.lock();
+        assert!(matches!(archive.summary(), Err(AppError::Closed)));
+
+        let reopened = Archive::open(database, keystore, "passphrase".to_owned()).expect("an existing archive");
+        assert_eq!(reopened.summary().expect("a summary").sellers, 0);
     }
 
     #[test]

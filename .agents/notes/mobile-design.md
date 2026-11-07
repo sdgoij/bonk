@@ -1298,14 +1298,18 @@ single place to update progress; the tables stay as the plan.
 
 #### M11.1 — Foundation (3 weeks)
 
-- [ ] `crates/application` created with the session, issue, import, export, and health services
-- [ ] `render_issue`, `invoice_pdf`, `pdf_data`, `customers`, `export`, `health`, `templates`, and `strength` moved out of `app`
-- [ ] `app` and `cli` delegate to `application`; desktop `just gate` green; CLI output unchanged
-- [ ] `app::Session` moved to `application::Archive`; `DeviceStore` injected instead of hardcoded `Keychain`
-- [ ] `crates/ffi` skeleton: `Archive`, `AppError`, `DeviceSecretStore`, `uniffi-bindgen`
-- [ ] `mobile/` Gradle + Compose Multiplatform project builds
-- [ ] Gradle `cargoNdk` and `uniffiBindings` tasks wired
-- [ ] CI `mobile-rust` job green
+- [x] `crates/application` created with the session, issue, export, health, customer, template, and passphrase services
+- [x] `render_issue`, `invoice_pdf`, `pdf_data`, `customers`, `export`, `health`, `templates`, and `strength` moved out of `app`
+- [x] `app` and `cli` delegate to `application`; `just gate` green; the CLI integration suite is unchanged
+- [x] `app::Session` moved to `application::Archive`; `DeviceStore` is a parameter of the session methods
+- [x] `crates/ffi` skeleton: `Archive`, `AppError`, `DeviceSecretStore`, `uniffi-bindgen`
+- [x] `mobile/` Gradle + Compose Multiplatform project builds
+- [x] Gradle `cargoNdk` and `uniffiBindings` tasks wired (opt in with `-Pnative`)
+- [x] CI `mobile-rust` host-tests job added
+- [ ] Import service extraction (bytes to received document) remains
+- [ ] `BonkApp` still names `Keychain` at the two device-toggle call sites; inject a `Box<dyn DeviceStore>` with the mobile lock screen
+- [ ] Two-module `shared` + `androidApp` split required by AGP 9
+- [ ] Android cross-build job in CI
 - [ ] DTOs frozen for M11.2
 
 #### M11.2 — Unlock and security (2 weeks)

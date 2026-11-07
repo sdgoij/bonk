@@ -158,6 +158,11 @@ terminated explicitly.
    `expect/actual` wrapper is for.
 8. **The manifest starts from a safe baseline:** `allowBackup=false`, no
    `INTERNET` permission, no exported components beyond the launcher activity.
+9. **Do not export a method named `close`.** UniFFI 0.32.2 gives every object a
+   Kotlin `AutoCloseable.close()`; a Rust `close()` generates a duplicate
+   declaration and the bindings do not compile. The archive method is `lock()`.
+   This is the same collision class as the error field that had to be renamed
+   from `message` to `detail`.
 
 ## Decision
 

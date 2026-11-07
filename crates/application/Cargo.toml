@@ -1,0 +1,30 @@
+[package]
+name = "application"
+description = "UI-agnostic application services: archive session, issuing, export, health"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[features]
+default = ["cipher"]
+# Production: SQLCipher page encryption.
+cipher = ["store/sqlcipher"]
+# Test-only fallback for hosts without a working OpenSSL/Perl toolchain.
+plain = ["store/plain"]
+
+[dependencies]
+conformance.workspace = true
+crux.workspace = true
+render.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+store = { path = "../store", default-features = false }
+syntax.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

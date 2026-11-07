@@ -71,6 +71,23 @@ jobs:
       - name: Test
         run: cargo test --workspace
 
+  mobile-rust:
+    name: mobile Rust
+    needs: [checks, deny]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+      - uses: Swatinem/rust-cache@v2
+
+      # Host tests only. The Android cross-build is a separate job because it
+      # needs the NDK and a Perl/OpenSSL toolchain, and a failure there should
+      # name the native build rather than the application logic.
+      - name: Application and FFI tests
+        run: cargo test -p application -p ffi
+
   plain:
     name: unencrypted fallback builds
     needs: [checks, deny]

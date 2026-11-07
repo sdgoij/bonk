@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = [
+    "crates/application",
     "crates/crux",
     "crates/conformance",
     "crates/conformance-official",
@@ -25,6 +26,7 @@ license = "MIT OR Apache-2.0"
 publish = false
 
 [workspace.dependencies]
+application = { path = "crates/application", default-features = false }
 crux = { path = "crates/crux" }
 conformance = { path = "crates/conformance" }
 syntax = { path = "crates/syntax" }

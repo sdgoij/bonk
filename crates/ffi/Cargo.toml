@@ -11,15 +11,21 @@ name = "bonkc"
 crate-type = ["lib", "cdylib", "staticlib"]
 
 [features]
-default = []
+default = ["cipher"]
+# Production: SQLCipher page encryption, through the application layer.
+cipher = ["application/cipher"]
+# Test-only fallback for hosts without a working OpenSSL/Perl toolchain.
+plain = ["application/plain"]
 # Only the binding generator needs the CLI; the mobile library never links it.
 cli = ["uniffi/cli"]
 
 [dependencies]
+application.workspace = true
 argon2.workspace = true
 crux.workspace = true
 render.workspace = true
 sha2.workspace = true
+store = { path = "../store", default-features = false }
 syntax.workspace = true
 uniffi.workspace = true
 thiserror.workspace = true
@@ -29,6 +35,9 @@ zeroize.workspace = true
 name = "uniffi-bindgen"
 path = "src/bin/uniffi-bindgen.rs"
 required-features = ["cli"]
+
+[dev-dependencies]
+tempfile.workspace = true
 
 [lints]
 workspace = true

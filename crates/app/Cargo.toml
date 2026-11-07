@@ -9,16 +9,15 @@ publish = false
 [features]
 default = ["cipher"]
 # Production: SQLCipher page encryption.
-cipher = ["store/sqlcipher", "import/cipher"]
+cipher = ["application/cipher", "store/sqlcipher", "import/cipher"]
 # Test-only fallback for hosts without a working OpenSSL/Perl toolchain.
 # The UI shows a permanent warning and the CLI refuses to init silently.
-plain = ["store/plain", "import/plain"]
+plain = ["application/plain", "store/plain", "import/plain"]
 
 [dependencies]
+application.workspace = true
 crux.workspace = true
 store = { path = "../store", default-features = false }
-conformance.workspace = true
-syntax.workspace = true
 render.workspace = true
 import = { path = "../import", default-features = false }
 time.workspace = true
@@ -27,10 +26,11 @@ egui.workspace = true
 rfd.workspace = true
 
 serde_json.workspace = true
-sha2.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
+sha2.workspace = true
+syntax.workspace = true
 tempfile.workspace = true
 
 [lints]
