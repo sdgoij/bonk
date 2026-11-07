@@ -25,8 +25,8 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
-    // The .so files are produced by `cargoNdk` at the repository root.
-    sourceSets.getByName("main").jniLibs.srcDir("src/main/jniLibs")
+    // The .so files are produced by `cargoNdk` into the default
+    // `src/main/jniLibs` directory.
 
     buildTypes {
         release {
