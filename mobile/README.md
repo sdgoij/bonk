@@ -76,21 +76,30 @@ cargo ndk --platform 26 -t x86_64 -t arm64-v8a \
 On Linux/macOS the host cdylib is `target/debug/libbonkc.so` or
 `target/debug/libbonkc.dylib`; use that path for `uniffi-bindgen`.
 
-## M11.1 archive probe
+## Lock and create flow
 
-The **Archive create/lock/open** button creates a real encrypted archive in the
-app's private storage, reads its summary, locks it, reopens it with the
-passphrase, and deletes the files. It exercises SQLCipher, the keystore, the
-`application` layer, UniFFI, and JNA in one call. On the API 37 x86_64 AVD the
-result was:
+On first launch the app offers **Create your archive**; the passphrase is typed
+twice. Creating it opens the archive and shows seller, draft, and schema counts.
+**Lock** drops the key and returns to the unlock screen. Relaunching checks for
+the two files and offers the unlock screen rather than create again.
 
-```
-create=ok schema=17 locked open=ok drafts=0
-```
+The Android actual maps UniFFI error variants to user text, because a fieldless
+error variant generates an empty Kotlin `message`: a wrong passphrase becomes
+"Wrong passphrase. Try again.", and an existing archive becomes "An archive
+already exists on this device." The passphrase stays in Compose state only and
+is cleared after use. The archive handle lives in `MobileArchiveHost` and is
+closed when the activity is destroyed, so a configuration change locks it.
+
+The content is capped at 560 dp and centered on wide screens, and fills the
+phone width otherwise. It was checked on the AVD at 1080×2400 (phone) and
+1600×2560 at 320 dpi (800×1280 dp).
+
+The S3/S4/S5 probes moved into a collapsed **Diagnostics** section below the
+unlocked card.
 
 ## S4 Argon2 benchmark
 
-The **Bench Argon2 (64 MiB)** button times the exact keystore KDF parameters
+The **Bench Argon2 (64 MiB)** diagnostic times the exact keystore KDF parameters
 (Argon2id, 64 MiB, t=3, p=1) twice and reports cold/warm milliseconds plus the
 process peak RSS. The call runs on `Dispatchers.IO`, so the progress text stays
 visible while it works. On the 2-vCPU AVD the result was 428 ms cold,
@@ -98,7 +107,7 @@ visible while it works. On the 2-vCPU AVD the result was 428 ms cold,
 
 ## S5 artefact determinism
 
-The **Hash UBL + PDF** button calls `artefact_hashes()` from `crates/ffi`, which
+The **Hash UBL + PDF** diagnostic calls `artefact_hashes()` from `crates/ffi`, which
 builds a fixed sample invoice through `calculate_totals`, `write_invoice`, and
 the PDF renderer, then hashes both artefacts:
 
@@ -123,7 +132,7 @@ linked in) produced the same four values on the emulator.
 
 ## S3 Keystore probe
 
-The **Run S3 Keystore test** button drives put/get/invalidate/forget through the
+The **Run S3 Keystore test** diagnostic drives put/get/invalidate/forget through the
 Rust `DeviceSecretStore` callback. The prompt allows biometrics or the device
 credential, so a headless emulator needs a PIN:
 

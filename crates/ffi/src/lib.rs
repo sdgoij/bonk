@@ -40,12 +40,39 @@ pub enum AppError {
     /// The archive has been closed.
     #[error("the archive is closed")]
     Closed,
+    /// The passphrase did not decrypt the archive key.
+    #[error("wrong passphrase")]
+    WrongPassphrase,
+    /// An archive already exists at the requested paths.
+    #[error("an archive already exists at these paths")]
+    ArchiveExists,
+    /// The keystore has no recovery wrap.
+    #[error("this archive has no recovery key")]
+    NoRecoveryKey,
+    /// The recovery key is malformed.
+    #[error("the recovery key is not valid")]
+    InvalidRecoveryKey,
+    /// The keystore file is corrupt or from a newer version.
+    #[error("the keystore is corrupt or unsupported")]
+    InvalidKeystore,
+    /// A filesystem operation failed.
+    #[error("I/O error: {detail}")]
+    Io { detail: String },
 }
 
 impl From<store::StoreError> for AppError {
     fn from(error: store::StoreError) -> Self {
-        Self::Store {
-            detail: error.to_string(),
+        match error {
+            store::StoreError::WrongPassphrase => Self::WrongPassphrase,
+            store::StoreError::NoRecoveryKey => Self::NoRecoveryKey,
+            store::StoreError::InvalidRecoveryKey => Self::InvalidRecoveryKey,
+            store::StoreError::InvalidKeystore => Self::InvalidKeystore,
+            store::StoreError::Io(error) => Self::Io {
+                detail: error.to_string(),
+            },
+            other => Self::Store {
+                detail: other.to_string(),
+            },
         }
     }
 }
@@ -90,6 +117,9 @@ impl Archive {
     /// Creates a new encrypted archive. Refuses to overwrite either file.
     #[uniffi::constructor]
     pub fn create(database_path: String, keystore_path: String, passphrase: String) -> Result<Arc<Self>, AppError> {
+        if std::path::Path::new(&database_path).exists() || std::path::Path::new(&keystore_path).exists() {
+            return Err(AppError::ArchiveExists);
+        }
         let archive = AppArchive::create(database_path, keystore_path, &passphrase)?;
         Ok(Arc::new(Self {
             inner: Mutex::new(Some(archive)),
@@ -167,6 +197,12 @@ impl Archive {
 #[uniffi::export]
 pub fn device_ready(keystore_path: String, device: Box<dyn DeviceSecretStore>) -> bool {
     AppArchive::device_ready(keystore_path, &DeviceAdapter(device))
+}
+
+/// True when both files of an archive exist at these paths.
+#[uniffi::export]
+pub fn archive_exists(database_path: String, keystore_path: String) -> bool {
+    std::path::Path::new(&database_path).exists() && std::path::Path::new(&keystore_path).exists()
 }
 
 /// Adapts the host callback to the store's `DeviceStore` port.
@@ -629,13 +665,24 @@ mod tests {
         let database = directory.path().join("bonk.db").display().to_string();
         let keystore = directory.path().join("keystore.bin").display().to_string();
 
+        assert!(!archive_exists(database.clone(), keystore.clone()));
         let archive =
             Archive::create(database.clone(), keystore.clone(), "passphrase".to_owned()).expect("a new archive");
+        assert!(archive_exists(database.clone(), keystore.clone()));
         assert_eq!(archive.summary().expect("a summary").schema_version, 17);
         assert_eq!(archive.database_path().expect("a path"), database);
 
         archive.lock();
         assert!(matches!(archive.summary(), Err(AppError::Closed)));
+
+        assert!(matches!(
+            Archive::open(database.clone(), keystore.clone(), "wrong".to_owned()),
+            Err(AppError::WrongPassphrase)
+        ));
+        assert!(matches!(
+            Archive::create(database.clone(), keystore.clone(), "passphrase".to_owned()),
+            Err(AppError::ArchiveExists)
+        ));
 
         let reopened = Archive::open(database, keystore, "passphrase".to_owned()).expect("an existing archive");
         assert_eq!(reopened.summary().expect("a summary").sellers, 0);

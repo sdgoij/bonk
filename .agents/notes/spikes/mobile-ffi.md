@@ -169,6 +169,11 @@ terminated explicitly.
     application module has no Kotlin, and `MainActivity` stays in `shared` with
     the manifest in `androidApp` naming it. The archive probe creates, locks,
     and reopens a SQLCipher archive on the emulator.
+11. **Fieldless error variants carry an empty Kotlin `message`.** `#[error("...")]`
+    on a variant without fields generates `override val message get() = ""`, so
+    the front end must map the variant to words. The Android actual does that for
+    `WrongPassphrase`, `ArchiveExists`, and the other lock-screen failures; the
+    variant name is the stable code.
 
 ## Decision
 

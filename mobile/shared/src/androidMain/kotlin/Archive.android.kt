@@ -1,0 +1,94 @@
+package com.github.sdgoij.bonk
+
+import android.content.Context
+import uniffi.bonkc.AppException
+import uniffi.bonkc.Archive
+import uniffi.bonkc.archiveExists
+import java.io.File
+
+/**
+ * Holds the one open [Archive] handle. The activity supplies the context; the
+ * paths are app-private and fixed for the lifetime of the install.
+ */
+object MobileArchiveHost {
+    private var context: Context? = null
+    private var archive: Archive? = null
+
+    fun attach(context: Context) {
+        this.context = context.applicationContext
+    }
+
+    fun detach() {
+        archive?.close()
+        archive = null
+        context = null
+    }
+
+    fun exists(): Boolean {
+        val (database, keystore) = paths()
+        return archiveExists(database, keystore)
+    }
+
+    fun create(passphrase: String): ArchiveSummary {
+        require(passphrase.isNotEmpty()) { "choose a passphrase" }
+        val (database, keystore) = paths()
+        archive?.close()
+        val opened = Archive.create(database, keystore, passphrase)
+        archive = opened
+        return opened.summary().toCommon()
+    }
+
+    fun open(passphrase: String): ArchiveSummary {
+        require(passphrase.isNotEmpty()) { "enter the passphrase" }
+        val (database, keystore) = paths()
+        archive?.close()
+        val opened = Archive.open(database, keystore, passphrase)
+        archive = opened
+        return opened.summary().toCommon()
+    }
+
+    fun lock() {
+        archive?.lock()
+        archive?.close()
+        archive = null
+    }
+
+    private fun paths(): Pair<String, String> {
+        val base = context ?: error("the archive host is not attached")
+        val directory = File(base.filesDir, "archive").apply { mkdirs() }
+        return File(directory, "bonk.db").absolutePath to File(directory, "keystore.bin").absolutePath
+    }
+}
+
+private fun uniffi.bonkc.ArchiveSummary.toCommon() =
+    ArchiveSummary(sellers = sellers, drafts = drafts, schemaVersion = schemaVersion)
+
+actual fun archiveExists(): Boolean = MobileArchiveHost.exists()
+
+actual fun createArchive(passphrase: String): ArchiveSummary = try {
+    MobileArchiveHost.create(passphrase)
+} catch (error: AppException) {
+    throw ArchiveException(error.toUserMessage())
+}
+
+actual fun openArchive(passphrase: String): ArchiveSummary = try {
+    MobileArchiveHost.open(passphrase)
+} catch (error: AppException) {
+    throw ArchiveException(error.toUserMessage())
+}
+
+actual fun lockArchive() = MobileArchiveHost.lock()
+
+private fun AppException.toUserMessage(): String = when (this) {
+    is AppException.WrongPassphrase -> "Wrong passphrase. Try again."
+    is AppException.ArchiveExists -> "An archive already exists on this device."
+    is AppException.InvalidKeystore -> "The archive keystore is damaged or from a newer version."
+    is AppException.NoRecoveryKey -> "This archive has no recovery key."
+    is AppException.InvalidRecoveryKey -> "That recovery key is not valid."
+    is AppException.Io -> "Storage error: $detail"
+    is AppException.Store -> detail
+    is AppException.Artefact -> "Rendering failed: $detail"
+    is AppException.AuthFailed -> "Authentication failed: $detail"
+    is AppException.Invalidated -> "The device secret was invalidated."
+    is AppException.Closed -> "The archive is locked."
+}

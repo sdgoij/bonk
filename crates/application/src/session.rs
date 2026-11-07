@@ -10,16 +10,7 @@ use std::path::Path;
 use store::{Database, KdfParams, KeyStore, StoreError};
 use zeroize::Zeroizing;
 
-/// What the dashboard shows.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct Summary {
-    /// Number of seller records.
-    pub sellers: i64,
-    /// Number of drafts.
-    pub drafts: i64,
-    /// Applied schema version.
-    pub schema_version: i64,
-}
+use crate::dto::Summary;
 
 /// An unlocked application session: one database, one keystore.
 pub struct Archive {

@@ -1311,16 +1311,20 @@ single place to update progress; the tables stay as the plan.
 - [ ] Import service extraction (bytes to received document) remains
 - [ ] `BonkApp` still names `Keychain` at the two device-toggle call sites; inject a `Box<dyn DeviceStore>` with the mobile lock screen
 - [ ] Android cross-build job in CI
-- [ ] DTOs frozen for M11.2
+- [x] DTO module with the summary shape and the money/date/id rules; the mobile lock screen consumes it
+- [ ] Draft, finding, and issue DTOs frozen for M11.2
 
 #### M11.2 — Unlock and security (2 weeks)
 
-- [ ] Create/open/reset with a passphrase
+- [x] Create and open with a passphrase; create twice-checks the phrase, and a wrong passphrase is reported by variant
+- [ ] Passphrase reset with the recovery key
 - [ ] Recovery-key flow (show once, reset, rotate)
 - [ ] Biometric remember-device, passphrase fallback, invalidation handling
-- [ ] Auto-lock, DEK zeroization, back-stack clear
-- [ ] Manifest: `allowBackup=false`, data extraction rules, `FLAG_SECURE`, recents snapshot off
-- [ ] Cloud backup excluded for the database and keystore
+- [x] Lock drops the archive and zeroizes the DEK; activity destruction closes the handle
+- [ ] Idle auto-lock and back-stack clear
+- [x] Manifest `allowBackup=false`
+- [ ] Data extraction rules, `FLAG_SECURE`, recents snapshot off
+- [ ] Cloud backup excluded explicitly for the database and keystore
 - [ ] Canary scan of DB/WAL on a device
 - [ ] Audit events for device trust, forget, and passphrase reset
 
