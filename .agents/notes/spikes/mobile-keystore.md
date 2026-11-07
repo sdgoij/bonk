@@ -121,14 +121,21 @@ adb install -r composeApp/build/outputs/apk/release/composeApp-release.apk
    decide the policy before release.
 6. **The release measurement is still comfortable.** 3.0 MB with biometric and
    fragment dependencies is far below the 30 MB budget.
+7. **M11.2 wired the store to the archive.** The create screen's **Remember this
+   device** checkbox calls `Archive::remember_device`, and the unlock screen calls
+   `Archive::open_with_device`. On the API 37 AVD the prompt used the device-PIN
+   path: create + remember, lock, device unlock, and forget all succeeded; forget
+   recorded the audit event. The prompt now says "Unlock Bonk" rather than the S3
+   probe wording. A physical fingerprint and enrolment change remain.
 
 ## Decision
 
 S3 passes for the device store. Keep `KeystoreDeviceStore`, the callback, and
-the invalidation signal. M11.1 adapts the store to the archive's
-`DeviceStore`/`Application` layer, decides the biometric-vs-device-credential
-policy in ADR-025, and adds the physical fingerprint and enrolment-change tests.
-The iOS Keychain path stays optional and follows the same callback contract.
+the invalidation signal. M11.2 adapted the store to the archive's
+`DeviceStore`/`Application` layer; ADR-025 still owns the
+biometric-vs-device-credential policy, and the physical fingerprint and
+enrolment-change tests remain. The iOS Keychain path stays optional and follows
+the same callback contract.
 
 ## Emulator instance used
 

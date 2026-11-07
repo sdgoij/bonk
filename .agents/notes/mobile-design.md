@@ -1319,14 +1319,16 @@ single place to update progress; the tables stay as the plan.
 - [x] Create and open with a passphrase; create twice-checks the phrase, and a wrong passphrase is reported by variant
 - [ ] Passphrase reset with the recovery key
 - [ ] Recovery-key flow (show once, reset, rotate)
-- [ ] Biometric remember-device, passphrase fallback, invalidation handling
+- [x] Remember-device through the Android Keystore; passphrase fallback, and forget records the audit event
+- [ ] Physical fingerprint and enrolment-change invalidation on a device
 - [x] Lock drops the archive and zeroizes the DEK; activity destruction closes the handle
-- [ ] Idle auto-lock and back-stack clear
+- [x] Five-minute auto-lock while the archive is unlocked
+- [ ] Back-stack clear and input-sensitive idle timer
 - [x] Manifest `allowBackup=false`
-- [ ] Data extraction rules, `FLAG_SECURE`, recents snapshot off
-- [ ] Cloud backup excluded explicitly for the database and keystore
+- [x] `FLAG_SECURE` and recents screenshot disabled
+- [ ] Data extraction rules review and explicit backup/restore
 - [ ] Canary scan of DB/WAL on a device
-- [ ] Audit events for device trust, forget, and passphrase reset
+- [x] Audit events for device trust and forget
 
 #### M11.3 — Customers and drafts (3 weeks)
 

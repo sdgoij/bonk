@@ -4,6 +4,7 @@ import android.content.Context
 import uniffi.bonkc.AppException
 import uniffi.bonkc.Archive
 import uniffi.bonkc.archiveExists
+import uniffi.bonkc.deviceReady as ffiDeviceReady
 import java.io.File
 
 /**
@@ -53,6 +54,29 @@ object MobileArchiveHost {
         archive = null
     }
 
+    fun deviceReady(): Boolean {
+        val (_, keystore) = paths()
+        return ffiDeviceReady(keystore, KeystoreHost.deviceStore())
+    }
+
+    fun openWithDevice(): ArchiveSummary {
+        val (database, keystore) = paths()
+        archive?.close()
+        val opened = Archive.openWithDevice(database, keystore, KeystoreHost.deviceStore())
+        archive = opened
+        return opened.summary().toCommon()
+    }
+
+    fun rememberDevice(passphrase: String) {
+        val opened = archive ?: error("the archive is not open")
+        opened.rememberDevice(passphrase, KeystoreHost.deviceStore())
+    }
+
+    fun forgetDevice(): Boolean {
+        val opened = archive ?: error("the archive is not open")
+        return opened.forgetDevice(KeystoreHost.deviceStore())
+    }
+
     private fun paths(): Pair<String, String> {
         val base = context ?: error("the archive host is not attached")
         val directory = File(base.filesDir, "archive").apply { mkdirs() }
@@ -71,13 +95,31 @@ actual fun createArchive(passphrase: String): ArchiveSummary = try {
     throw ArchiveException(error.toUserMessage())
 }
 
-actual fun openArchive(passphrase: String): ArchiveSummary = try {
+actual fun openArchive(passphrase: String): ArchiveSummary = withUserError {
     MobileArchiveHost.open(passphrase)
-} catch (error: AppException) {
-    throw ArchiveException(error.toUserMessage())
+}
+
+actual fun deviceReady(): Boolean = runCatching { MobileArchiveHost.deviceReady() }.getOrDefault(false)
+
+actual fun openArchiveWithDevice(): ArchiveSummary = withUserError {
+    MobileArchiveHost.openWithDevice()
+}
+
+actual fun rememberDevice(passphrase: String) = withUserError {
+    MobileArchiveHost.rememberDevice(passphrase)
+}
+
+actual fun forgetDevice(): Boolean = withUserError {
+    MobileArchiveHost.forgetDevice()
 }
 
 actual fun lockArchive() = MobileArchiveHost.lock()
+
+private inline fun <T> withUserError(block: () -> T): T = try {
+    block()
+} catch (error: AppException) {
+    throw ArchiveException(error.toUserMessage())
+}
 
 private fun AppException.toUserMessage(): String = when (this) {
     is AppException.WrongPassphrase -> "Wrong passphrase. Try again."

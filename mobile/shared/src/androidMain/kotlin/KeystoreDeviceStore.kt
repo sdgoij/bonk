@@ -212,8 +212,8 @@ class KeystoreDeviceStore(private val activity: FragmentActivity) : DeviceSecret
                 },
             )
             val info = BiometricPrompt.PromptInfo.Builder()
-                .setTitle("Unlock device secret")
-                .setSubtitle("S3 Keystore probe")
+                .setTitle("Unlock Bonk")
+                .setSubtitle("Use your fingerprint, face, or device PIN")
                 .setAllowedAuthenticators(
                     BiometricManager.Authenticators.BIOMETRIC_STRONG or
                         BiometricManager.Authenticators.DEVICE_CREDENTIAL,

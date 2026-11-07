@@ -20,6 +20,8 @@ object KeystoreHost {
         store = KeystoreDeviceStore(activity)
     }
 
+    fun deviceStore(): KeystoreDeviceStore = store ?: throw IllegalStateException("the Keystore store is not attached")
+
     fun detach() {
         store = null
     }

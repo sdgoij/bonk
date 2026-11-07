@@ -97,6 +97,24 @@ phone width otherwise. It was checked on the AVD at 1080×2400 (phone) and
 The S3/S4/S5 probes moved into a collapsed **Diagnostics** section below the
 unlocked card.
 
+## Remember this device
+
+The create screen has a **Remember this device** checkbox, off by default. With
+it on, the archive key is wrapped by the Android Keystore and stored in
+`noBackupFilesDir`; creating the archive shows the system prompt. Later launches
+offer **Unlock with device** beside the passphrase field, and the unlocked
+screen offers **Forget this device**, which removes the key and records the
+audit event.
+
+On the API 37 x86_64 AVD, with no fingerprint enrolled, the prompt used the
+device-PIN path: create + remember succeeded, lock → device unlock succeeded,
+and forget removed the button. A physical fingerprint and a real
+enrolment-change invalidation remain in the device matrix.
+
+The archive also locks five minutes after unlock. The activity sets
+`FLAG_SECURE` and disables the recents screenshot, and a configuration change
+destroys the activity and closes the handle.
+
 ## S4 Argon2 benchmark
 
 The **Bench Argon2 (64 MiB)** diagnostic times the exact keystore KDF parameters

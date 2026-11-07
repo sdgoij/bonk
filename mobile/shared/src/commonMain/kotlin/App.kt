@@ -15,8 +15,10 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -34,6 +36,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -66,14 +69,32 @@ fun App() {
     var passphrase by remember { mutableStateOf("") }
     var confirmation by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
+    var notice by remember { mutableStateOf<String?>(null) }
+    var deviceAvailable by remember { mutableStateOf(false) }
+    var rememberOnCreate by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
     LaunchedEffect(Unit) {
-        val exists = withContext(Dispatchers.IO) {
-            runCatching { archiveExists() }.getOrElse { false }
+        val state = withContext(Dispatchers.IO) {
+            val exists = runCatching { archiveExists() }.getOrDefault(false)
+            val device = exists && runCatching { deviceReady() }.getOrDefault(false)
+            exists to device
         }
-        screen = if (exists) Screen.Unlock else Screen.Create
+        deviceAvailable = state.second
+        screen = if (state.first) Screen.Unlock else Screen.Create
+    }
+
+    // Lock after five minutes unlocked. A configuration change also closes the
+    // handle through the activity's onDestroy.
+    LaunchedEffect(screen) {
+        if (screen is Screen.Unlocked) {
+            delay(5 * 60 * 1000L)
+            lockArchive()
+            passphrase = ""
+            confirmation = ""
+            screen = Screen.Unlock
+        }
     }
 
     fun fail(message: Throwable) {
@@ -108,16 +129,54 @@ fun App() {
             error = "The passphrases do not match."
             return
         }
+        val chosen = passphrase
+        busy = true
+        error = null
+        notice = null
+        scope.launch {
+            val result = withContext(Dispatchers.IO) { runCatching { createArchive(chosen) } }
+            if (result.isSuccess) {
+                if (rememberOnCreate) {
+                    val remembered = withContext(Dispatchers.IO) { runCatching { rememberDevice(chosen) } }
+                    if (remembered.isSuccess) {
+                        deviceAvailable = true
+                    } else {
+                        notice = "The archive was created, but this device was not remembered: " +
+                            (remembered.exceptionOrNull()?.message ?: "unknown error")
+                    }
+                }
+                passphrase = ""
+                confirmation = ""
+                screen = Screen.Unlocked(result.getOrThrow())
+            } else {
+                fail(result.exceptionOrNull() ?: IllegalStateException("unknown error"))
+            }
+            busy = false
+        }
+    }
+
+    fun unlockWithDevice() {
         busy = true
         error = null
         scope.launch {
-            val result = withContext(Dispatchers.IO) { runCatching { createArchive(passphrase) } }
+            val result = withContext(Dispatchers.IO) { runCatching { openArchiveWithDevice() } }
             result.onSuccess {
                 passphrase = ""
                 confirmation = ""
                 screen = Screen.Unlocked(it)
             }.onFailure(::fail)
             busy = false
+        }
+    }
+
+    fun forgetDeviceKey() {
+        notice = null
+        scope.launch {
+            val result = withContext(Dispatchers.IO) { runCatching { forgetDevice() } }
+            result.onSuccess {
+                deviceAvailable = false
+                notice = if (it) "This device no longer opens the archive." else "No device key was stored."
+            }.onFailure { notice = it.message ?: it.toString() }
         }
     }
 
@@ -157,6 +216,7 @@ fun App() {
                                 Screen.Create -> CreateForm(
                                     passphrase = passphrase,
                                     confirmation = confirmation,
+                                    remember = rememberOnCreate,
                                     busy = busy,
                                     error = error,
                                     onPassphrase = {
@@ -167,10 +227,12 @@ fun App() {
                                         confirmation = it
                                         error = null
                                     },
+                                    onRemember = { rememberOnCreate = it },
                                     onSubmit = ::create,
                                 )
                                 Screen.Unlock -> UnlockForm(
                                     passphrase = passphrase,
+                                    deviceAvailable = deviceAvailable,
                                     busy = busy,
                                     error = error,
                                     onPassphrase = {
@@ -178,15 +240,19 @@ fun App() {
                                         error = null
                                     },
                                     onSubmit = ::unlock,
+                                    onUnlockWithDevice = ::unlockWithDevice,
                                 )
                                 is Screen.Unlocked -> Unlocked(
                                     summary = current.summary,
+                                    deviceAvailable = deviceAvailable,
+                                    notice = notice,
                                     onLock = {
                                         lockArchive()
                                         passphrase = ""
                                         error = null
                                         screen = Screen.Unlock
                                     },
+                                    onForgetDevice = ::forgetDeviceKey,
                                 )
                             }
                         }
@@ -206,10 +272,12 @@ fun App() {
 private fun CreateForm(
     passphrase: String,
     confirmation: String,
+    remember: Boolean,
     busy: Boolean,
     error: String?,
     onPassphrase: (String) -> Unit,
     onConfirmation: (String) -> Unit,
+    onRemember: (Boolean) -> Unit,
     onSubmit: () -> Unit,
 ) {
     Text("Create your archive", style = MaterialTheme.typography.titleLarge)
@@ -226,6 +294,19 @@ private fun CreateForm(
     Spacer(Modifier.height(8.dp))
     ErrorText(error)
     Spacer(Modifier.height(8.dp))
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Checkbox(checked = remember, onCheckedChange = onRemember, enabled = !busy)
+        Text("Remember this device", style = MaterialTheme.typography.bodyMedium)
+    }
+    Text(
+        text = "Unlocks with your fingerprint, face, or device PIN next time.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    Spacer(Modifier.height(8.dp))
     Button(
         onClick = onSubmit,
         enabled = !busy,
@@ -238,10 +319,12 @@ private fun CreateForm(
 @Composable
 private fun UnlockForm(
     passphrase: String,
+    deviceAvailable: Boolean,
     busy: Boolean,
     error: String?,
     onPassphrase: (String) -> Unit,
     onSubmit: () -> Unit,
+    onUnlockWithDevice: () -> Unit,
 ) {
     Text("Unlock your archive", style = MaterialTheme.typography.titleLarge)
     Spacer(Modifier.height(8.dp))
@@ -262,10 +345,32 @@ private fun UnlockForm(
     ) {
         Text(if (busy) "Unlocking..." else "Unlock")
     }
+    if (deviceAvailable) {
+        Spacer(Modifier.height(12.dp))
+        OutlinedButton(
+            onClick = onUnlockWithDevice,
+            enabled = !busy,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text("Unlock with device")
+        }
+        Spacer(Modifier.height(6.dp))
+        Text(
+            text = "Uses your fingerprint, face, or device PIN.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
 }
 
 @Composable
-private fun Unlocked(summary: ArchiveSummary, onLock: () -> Unit) {
+private fun Unlocked(
+    summary: ArchiveSummary,
+    deviceAvailable: Boolean,
+    notice: String?,
+    onLock: () -> Unit,
+    onForgetDevice: () -> Unit,
+) {
     Text("Unlocked", style = MaterialTheme.typography.titleLarge)
     Spacer(Modifier.height(16.dp))
     Row(
@@ -276,12 +381,26 @@ private fun Unlocked(summary: ArchiveSummary, onLock: () -> Unit) {
         Metric("Drafts", summary.drafts)
         Metric("Schema", summary.schemaVersion)
     }
+    if (notice != null) {
+        Spacer(Modifier.height(12.dp))
+        Text(
+            text = notice,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
     Spacer(Modifier.height(20.dp))
     Button(
         onClick = onLock,
         modifier = Modifier.fillMaxWidth(),
     ) {
         Text("Lock")
+    }
+    if (deviceAvailable) {
+        Spacer(Modifier.height(4.dp))
+        TextButton(onClick = onForgetDevice, modifier = Modifier.fillMaxWidth()) {
+            Text("Forget this device")
+        }
     }
 }
 
