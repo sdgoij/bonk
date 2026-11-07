@@ -8,10 +8,15 @@ plugins {
 kotlin {
     jvmToolchain(17)
 
-    androidLibrary {
+    android {
         namespace = "com.github.sdgoij.bonk.shared"
         compileSdk = 37
         minSdk = 26
+
+        // Connect commonTest to an Android host-test compilation. Without a
+        // test target the KMP plugin leaves commonTest unused, which Android
+        // Studio reports on every sync.
+        withHostTestBuilder {}.configure {}
     }
 
     sourceSets {
