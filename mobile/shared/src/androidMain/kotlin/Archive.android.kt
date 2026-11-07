@@ -8,21 +8,21 @@ import uniffi.bonkc.deviceReady as ffiDeviceReady
 import java.io.File
 
 /**
- * Holds the one open [Archive] handle. The activity supplies the context; the
- * paths are app-private and fixed for the lifetime of the install.
+ * Holds the one open [Archive] handle. The activity supplies the archive
+ * directory; the host keeps the derived [File], not the Context.
  */
 object MobileArchiveHost {
-    private var context: Context? = null
+    private var directory: File? = null
     private var archive: Archive? = null
 
     fun attach(context: Context) {
-        this.context = context.applicationContext
+        directory = File(context.filesDir, "archive")
     }
 
     fun detach() {
         archive?.close()
         archive = null
-        context = null
+        directory = null
     }
 
     fun exists(): Boolean {
@@ -78,9 +78,9 @@ object MobileArchiveHost {
     }
 
     private fun paths(): Pair<String, String> {
-        val base = context ?: error("the archive host is not attached")
-        val directory = File(base.filesDir, "archive").apply { mkdirs() }
-        return File(directory, "bonk.db").absolutePath to File(directory, "keystore.bin").absolutePath
+        val base = directory ?: error("the archive host is not attached")
+        base.mkdirs()
+        return File(base, "bonk.db").absolutePath to File(base, "keystore.bin").absolutePath
     }
 }
 
