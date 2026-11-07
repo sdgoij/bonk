@@ -9,6 +9,7 @@ architecture may depend on the product name).
 | [threat-model.md](threat-model.md) | Assets, trust boundaries, threats, mitigation, residual risks, and the tests behind each claim. |
 | [accounting-design.md](accounting-design.md) | v1.1 accounting layer: general ledger, VAT return preparation, bank reconciliation. |
 | [implementation-plan.md](implementation-plan.md) | Milestones, effort estimates, release trains, quality gates, first-two-weeks task list. |
+| [mobile-design.md](mobile-design.md) | Proposed Android-first mobile client: Kotlin/Compose Multiplatform, UniFFI, application layer, adaptive UI, mobile security, build and milestones. |
 | [adr/](adr/README.md) | Architecture decision records 001–017. |
 | [spikes/](spikes/README.md) | Time-boxed investigations and their findings. |
 

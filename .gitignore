@@ -14,3 +14,10 @@ Thumbs.db
 
 # Release SBOMs, generated per tag by `cargo cyclonedx`.
 *.cdx.json
+
+# Mobile build outputs, generated bindings and native libraries, and local SDK paths.
+mobile/.gradle/
+mobile/**/build/
+mobile/.kotlin/
+mobile/local.properties
+mobile/**/jniLibs/

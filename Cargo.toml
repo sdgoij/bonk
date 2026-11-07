@@ -9,6 +9,7 @@ members = [
     "crates/render",
     "crates/import",
     "crates/bridge",
+    "crates/ffi",
     "crates/sync",
     "crates/app",
     "crates/cli",
@@ -60,6 +61,7 @@ clap = { version = "4", features = ["derive"] }
 rpassword = "7"
 quick-xml = "0.42"
 lopdf = "0.46"
+uniffi = "0.32.2"
 
 # Layout and PDF. `krilla` is the writer Typst itself uses; the invoice layout
 # above it is ours. `harfrust` is the maintained HarfBuzz port (out of the
