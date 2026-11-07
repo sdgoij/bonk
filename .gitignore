@@ -17,7 +17,11 @@ Thumbs.db
 
 # Mobile build outputs, generated bindings and native libraries, and local SDK paths.
 mobile/.gradle/
+mobile/.idea/
 mobile/**/build/
 mobile/.kotlin/
 mobile/local.properties
 mobile/**/jniLibs/
+# Android Studio's generated Gradle daemon JVM criteria (it can pin a different
+# JDK than the project's toolchain).
+mobile/gradle/gradle-daemon-jvm.properties
