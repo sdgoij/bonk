@@ -14,4 +14,5 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "bonk-mobile"
-include(":composeApp")
+include(":shared")
+include(":androidApp")

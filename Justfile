@@ -75,6 +75,18 @@ test:
 test-plain:
     {{cargo}} test --workspace --no-default-features --features plain
 
+# Host tests for the crates the mobile client is built from.
+mobile-test:
+    {{cargo}} test -p application -p ffi
+
+# Android debug build. `-Pnative` rebuilds the Rust library and the bindings.
+mobile-android:
+    cd mobile && ./gradlew :androidApp:assembleDebug -Pnative
+
+# Android release build with R8; same native prerequisites.
+mobile-release:
+    cd mobile && ./gradlew :androidApp:assembleRelease -Pnative
+
 # Test one crate: `just test-crate store`.
 test-crate crate:
     {{cargo}} test -p {{crate}}

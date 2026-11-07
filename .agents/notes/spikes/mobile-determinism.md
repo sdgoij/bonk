@@ -30,6 +30,10 @@ The PDF hash is the stronger result: UBL is string assembly over integer money,
 whereas the PDF exercises `harfrust` shaping, the bundled DejaVu fonts, `krilla`
 serialisation, and the layout engine. All of those agree across the two targets.
 
+Re-verified on 2026-11-07 after M11.1: the rebuilt library, now with
+`application` and SQLCipher linked in, returned the same four values on the
+emulator. Adding the archive layer did not move the renderer or the writer.
+
 ## Measurement path
 
 `crates/ffi/src/lib.rs` exports `artefact_hashes()`, which builds one fixed
@@ -94,6 +98,7 @@ suspecting money arithmetic.
 | AVD | Serial | ABI | API | PID | State |
 |---|---|---|---|---|---|
 | `Medium_Phone` | `emulator-5556` | x86_64 | 37 | 11536 | stopped 2026-11-07 |
+| `Medium_Phone` | `emulator-5556` | x86_64 | 37 | 56220 | stopped 2026-11-07 (M11.1 re-check) |
 
 `adb -s emulator-5556 emu kill` was followed by an explicit check; the launcher
 PID was gone and the helper processes left by `emu kill` exited on their own.

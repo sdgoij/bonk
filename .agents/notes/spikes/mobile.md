@@ -142,6 +142,17 @@ This is a local-host workaround, not a product dependency. On Linux the Perl is
 already Unix-like and has MakeMaker, so a CI cross-build should not need any of
 it. The mobile pipeline should run the cross-build on Ubuntu, not Windows.
 
+M11.1 put the recipe in `tools/cargo-android.sh`, with two refinements:
+
+- `MSYS2_ENV_CONV_EXCL=PERL5LIB` is narrower than `MSYS_NO_PATHCONV=1`: it stops
+the path rewrite for Perl without changing how `adb` arguments are handled.
+- OpenSSL's generated Makefile embeds `$(PERL)` unquoted, so `PERL` is set to
+the 8.3 short form (`C:/PROGRA~1/Git/usr/bin/perl.exe`). The normal Git path
+contains a space and `make depend` fails with `C:/Program: No such file`.
+
+`tools/strip-android.sh` then removes symbols from both ABIs, because AGP's own
+strip step cannot handle `libbonkc.so`.
+
 ## Findings that affect the plan
 
 1. **Vendored OpenSSL is viable.** No switch to a prebuilt SQLCipher, and no

@@ -41,6 +41,9 @@ expect fun runArgon2Benchmark(): String
 /** Hashes the fixed sample invoice's UBL and PDF output. */
 expect fun runArtefactHashes(): String
 
+/** Creates, locks, and reopens an encrypted archive through the FFI. */
+expect fun runArchiveProbe(): String
+
 @Composable
 fun App() {
     var name by remember { mutableStateOf("Android") }
@@ -51,6 +54,8 @@ fun App() {
     var argonBusy by remember { mutableStateOf(false) }
     var artefactResult by remember { mutableStateOf("not run") }
     var artefactBusy by remember { mutableStateOf(false) }
+    var archiveResult by remember { mutableStateOf("not run") }
+    var archiveBusy by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
     MaterialTheme {
@@ -147,6 +152,28 @@ fun App() {
                 Spacer(Modifier.height(12.dp))
                 Text(
                     text = artefactResult,
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Spacer(Modifier.height(16.dp))
+                Button(
+                    onClick = {
+                        archiveBusy = true
+                        archiveResult = "creating, locking, reopening..."
+                        scope.launch {
+                            archiveResult = withContext(Dispatchers.IO) {
+                                runCatching { runArchiveProbe() }
+                                    .getOrElse { it.message ?: it.toString() }
+                            }
+                            archiveBusy = false
+                        }
+                    },
+                    enabled = !archiveBusy,
+                ) {
+                    Text("Archive create/lock/open")
+                }
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    text = archiveResult,
                     style = MaterialTheme.typography.bodyMedium,
                 )
             }

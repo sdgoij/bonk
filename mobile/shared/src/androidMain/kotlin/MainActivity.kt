@@ -9,12 +9,14 @@ class MainActivity : FragmentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         KeystoreHost.attach(this)
+        ArchiveProbe.attach(this)
         enableEdgeToEdge()
         setContent { App() }
     }
 
     override fun onDestroy() {
         KeystoreHost.detach()
+        ArchiveProbe.detach()
         super.onDestroy()
     }
 }

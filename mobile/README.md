@@ -1,10 +1,19 @@
-# Mobile S2 spike
+# Mobile (M11.0 spikes and M11.1 foundation)
 
-This is the S2 proof, not the production layout. It uses a single `composeApp`
-module and the AGP 9 compatibility flags `android.builtInKotlin=false` and
-`android.newDsl=false`. M11.1 splits it into `shared` (KMP library) +
-`androidApp` (application); see `.agents/notes/spikes/mobile-ffi.md` and
-`.agents/notes/mobile-design.md` §6.1.
+The project is split into two Gradle modules, which is what AGP 9 requires when
+Kotlin Multiplatform and Compose are involved:
+
+- `shared` — the KMP library: `commonMain` Compose UI, `androidMain` platform
+  `expect`/`actual` implementations, and the generated UniFFI bindings.
+- `androidApp` — the application shell: application id, manifest, native
+  libraries, and R8. It has no Kotlin of its own; `MainActivity` lives in the
+  shared library and the manifest names it.
+
+This replaces the S2 single-module `composeApp`. The AGP 9 compatibility flags
+(`android.builtInKotlin=false`, `android.newDsl=false`) are gone. The shared
+module uses the `com.android.kotlin.multiplatform.library` plugin, because AGP 9
+rejects the legacy `com.android.library` and `com.android.application` plugins
+alongside the KMP plugin.
 
 ## Prerequisites
 
@@ -13,24 +22,42 @@ module and the AGP 9 compatibility flags `android.builtInKotlin=false` and
 - NDK r30 (`ANDROID_NDK_HOME`)
 - `cargo-ndk`
 - `ANDROID_HOME` pointing at the SDK
+- On Windows, Git Bash's Perl and Strawberry Perl's pure-Perl modules, which
+  `tools/cargo-android.sh` stages automatically.
 
-## Generate the bindings and native libraries
-
-The Gradle build can regenerate both. With `ANDROID_NDK_HOME` set and
-`cargo-ndk` installed:
+## Build
 
 ```sh
 cd mobile
-./gradlew :composeApp:assembleDebug -Pnative
+./gradlew :androidApp:assembleDebug
+./gradlew :androidApp:assembleRelease
 ```
 
-`-Pnative` makes `preBuild` depend on `cargoNdk` and `uniffiBindings`. The
-bindings are generated from the arm64 library that `cargoNdk` produced, so no
-separate host build is needed. On Windows the tasks go through
-`tools/cargo-strawberry.sh`, which is what OpenSSL's build needs.
+The release build is signed with the debug key in this spike so it can be
+installed. The generated bindings and `jniLibs` are gitignored.
+
+## Regenerate the bindings and native libraries
+
+With `ANDROID_NDK_HOME` set and `cargo-ndk` installed:
+
+```sh
+cd mobile
+./gradlew :androidApp:assembleDebug -Pnative
+```
+
+`-Pnative` wires the root tasks into the build:
+
+- `cargoNdk` builds `libbonkc.so` for `arm64-v8a` and `x86_64` into
+  `androidApp/src/main/jniLibs`. On Windows it runs through
+  `tools/cargo-android.sh`, which gives OpenSSL the Unix-path Perl it needs.
+- `uniffiBindings` generates the Kotlin bindings from the arm64 library into
+  `shared/build/generated/uniffi`.
+- `stripNdk` runs `llvm-strip` on both libraries; AGP's own strip cannot handle
+  the Rust `.so`.
 
 Without `-Pnative` the build uses the libraries already in
-`src/androidMain/jniLibs`.
+`androidApp/src/main/jniLibs` and the bindings already in
+`shared/build/generated/uniffi`.
 
 The equivalent manual steps, from the repository root, are:
 
@@ -39,50 +66,39 @@ cargo build -p ffi
 cargo run -p ffi --features cli --bin uniffi-bindgen -- \
   generate target/debug/bonkc.dll --language kotlin --out-dir target/uniffi-kotlin
 
-mkdir -p mobile/composeApp/build/generated/uniffi
-cp -r target/uniffi-kotlin/uniffi mobile/composeApp/build/generated/uniffi/
+mkdir -p mobile/shared/build/generated/uniffi
+cp -r target/uniffi-kotlin/uniffi mobile/shared/build/generated/uniffi/
 
-cargo ndk --platform 26 -t x86_64 -t arm64-v8a build --release -p ffi
-mkdir -p mobile/composeApp/src/androidMain/jniLibs/x86_64
-mkdir -p mobile/composeApp/src/androidMain/jniLibs/arm64-v8a
-cp target/x86_64-linux-android/release/libbonkc.so \
-  mobile/composeApp/src/androidMain/jniLibs/x86_64/
-cp target/aarch64-linux-android/release/libbonkc.so \
-  mobile/composeApp/src/androidMain/jniLibs/arm64-v8a/
+cargo ndk --platform 26 -t x86_64 -t arm64-v8a \
+  -o mobile/androidApp/src/main/jniLibs build --release -p ffi
 ```
 
 On Linux/macOS the host cdylib is `target/debug/libbonkc.so` or
 `target/debug/libbonkc.dylib`; use that path for `uniffi-bindgen`.
 
-Strip the Android libraries before a size measurement (the exact `llvm-strip`
-path depends on the NDK install):
+## M11.1 archive probe
 
-```sh
-llvm-strip --strip-unneeded mobile/composeApp/src/androidMain/jniLibs/*/libbonkc.so
+The **Archive create/lock/open** button creates a real encrypted archive in the
+app's private storage, reads its summary, locks it, reopens it with the
+passphrase, and deletes the files. It exercises SQLCipher, the keystore, the
+`application` layer, UniFFI, and JNA in one call. On the API 37 x86_64 AVD the
+result was:
+
 ```
-
-## Build
-
-```sh
-cd mobile
-./gradlew :composeApp:assembleDebug
-./gradlew :composeApp:assembleRelease
+create=ok schema=17 locked open=ok drafts=0
 ```
-
-The release build is signed with the debug key in this spike so it can be
-installed. The generated bindings and `jniLibs` are gitignored.
 
 ## S4 Argon2 benchmark
 
-The "Bench Argon2 (64 MiB)" button times the exact keystore KDF parameters
+The **Bench Argon2 (64 MiB)** button times the exact keystore KDF parameters
 (Argon2id, 64 MiB, t=3, p=1) twice and reports cold/warm milliseconds plus the
 process peak RSS. The call runs on `Dispatchers.IO`, so the progress text stays
 visible while it works. On the 2-vCPU AVD the result was 428 ms cold,
 143–299 ms warm, with a 272 224 KiB peak.
 
-## S5 Artefact determinism
+## S5 artefact determinism
 
-The "Hash UBL + PDF" button calls `artefact_hashes()` from `crates/ffi`, which
+The **Hash UBL + PDF** button calls `artefact_hashes()` from `crates/ffi`, which
 builds a fixed sample invoice through `calculate_totals`, `write_invoice`, and
 the PDF renderer, then hashes both artefacts:
 
@@ -102,11 +118,12 @@ cargo run -p ffi --example artefact_probe
 Both must match the Android output exactly; see
 `.agents/notes/spikes/mobile-determinism.md`. The values are also pinned in a
 `crates/ffi` unit test, so changing the renderer or fonts updates the test in
-the same commit.
+the same commit. The rebuilt M11.1 library (with `application` and SQLCipher
+linked in) produced the same four values on the emulator.
 
 ## S3 Keystore probe
 
-The "Run S3 Keystore test" button drives put/get/invalidate/forget through the
+The **Run S3 Keystore test** button drives put/get/invalidate/forget through the
 Rust `DeviceSecretStore` callback. The prompt allows biometrics or the device
 credential, so a headless emulator needs a PIN:
 

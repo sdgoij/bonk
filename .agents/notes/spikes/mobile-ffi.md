@@ -163,6 +163,12 @@ terminated explicitly.
    declaration and the bindings do not compile. The archive method is `lock()`.
    This is the same collision class as the error field that had to be renamed
    from `message` to `detail`.
+10. **M11.1 confirmed the two-module split.** AGP 9.5 rejects both
+    `com.android.application` and `com.android.library` alongside the KMP
+    plugin; `com.android.kotlin.multiplatform.library` is required. The
+    application module has no Kotlin, and `MainActivity` stays in `shared` with
+    the manifest in `androidApp` naming it. The archive probe creates, locks,
+    and reopens a SQLCipher archive on the emulator.
 
 ## Decision
 

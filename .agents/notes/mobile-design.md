@@ -1304,11 +1304,12 @@ single place to update progress; the tables stay as the plan.
 - [x] `app::Session` moved to `application::Archive`; `DeviceStore` is a parameter of the session methods
 - [x] `crates/ffi` skeleton: `Archive`, `AppError`, `DeviceSecretStore`, `uniffi-bindgen`
 - [x] `mobile/` Gradle + Compose Multiplatform project builds
-- [x] Gradle `cargoNdk` and `uniffiBindings` tasks wired (opt in with `-Pnative`)
+- [x] Gradle `cargoNdk`, `uniffiBindings`, and `stripNdk` tasks wired (opt in with `-Pnative`)
 - [x] CI `mobile-rust` host-tests job added
+- [x] Two-module `shared` + `androidApp` split, using `com.android.kotlin.multiplatform.library`; the AGP 9 compatibility flags are gone
+- [x] Android archive probe on API 37 x86_64: `create=ok schema=17 locked open=ok drafts=0`; golden artefact hashes unchanged
 - [ ] Import service extraction (bytes to received document) remains
 - [ ] `BonkApp` still names `Keychain` at the two device-toggle call sites; inject a `Box<dyn DeviceStore>` with the mobile lock screen
-- [ ] Two-module `shared` + `androidApp` split required by AGP 9
 - [ ] Android cross-build job in CI
 - [ ] DTOs frozen for M11.2
 
