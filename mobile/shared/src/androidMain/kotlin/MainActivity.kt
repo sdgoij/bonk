@@ -21,6 +21,8 @@ class MainActivity : FragmentActivity() {
         }
         KeystoreHost.attach(this)
         MobileArchiveHost.attach(this)
+        // The chosen language is a device preference, read before anything draws.
+        loadUiLanguageCode()?.let { UiLanguage.current = Lang.parse(it) }
         enableEdgeToEdge()
         handleIntent(intent)
         setContent { App() }

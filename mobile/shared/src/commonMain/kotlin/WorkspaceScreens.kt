@@ -106,36 +106,36 @@ fun CustomerListScreen(
     }
 
     Column(Modifier.fillMaxWidth()) {
-        ScreenHeader("Customers", onBack) { }
+        ScreenHeader(strings.customers, onBack) { }
         OutlinedTextField(
             value = query,
             onValueChange = {
                 query = it
                 onInteraction()
             },
-            label = { Text("Search") },
+            label = { Text(strings.search) },
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
         )
         Spacer(Modifier.height(8.dp))
         Button(onClick = { onInteraction(); onAdd() }, modifier = Modifier.fillMaxWidth()) {
-            Text("Add customer")
+            Text(strings.addCustomer)
         }
         Spacer(Modifier.height(8.dp))
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(
                 onClick = { onInteraction(); importCsv() },
                 modifier = Modifier.weight(1f),
-            ) { Text("Import CSV") }
+            ) { Text(strings.importCsv) }
             OutlinedButton(
                 onClick = { onInteraction(); exportCsv() },
                 modifier = Modifier.weight(1f),
-            ) { Text("Export CSV") }
+            ) { Text(strings.exportCsv) }
         }
         report?.let {
             Spacer(Modifier.height(8.dp))
             Text(
-                "Imported ${it.imported}, skipped ${it.skipped}",
+                strings.importedSkipped(it.imported, it.skipped),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -147,7 +147,7 @@ fun CustomerListScreen(
         if (loading) {
             CircularProgressIndicator(modifier = Modifier.padding(16.dp))
         } else if (visible.isEmpty()) {
-            Text("No customers yet.", modifier = Modifier.padding(16.dp))
+            Text(strings.noCustomers, modifier = Modifier.padding(16.dp))
         } else {
             visible.forEach { customer ->
                 CustomerRow(customer) { onInteraction(); onEdit(customer) }
@@ -172,11 +172,11 @@ fun CustomerEditScreen(
 
     fun save() {
         if (form.name.isBlank()) {
-            error = "Enter a name."
+            error = strings.enterName
             return
         }
         if (form.city.isBlank()) {
-            error = "Enter a city."
+            error = strings.enterCity
             return
         }
         busy = true
@@ -189,22 +189,22 @@ fun CustomerEditScreen(
     }
 
     Column(Modifier.fillMaxWidth()) {
-        ScreenHeader(if (customer.id.isEmpty()) "New customer" else "Edit customer", onBack) { }
-        FormField("Name", form.name) { form = form.copy(name = it); onInteraction() }
-        FormField("Street", form.street) { form = form.copy(street = it); onInteraction() }
-        FormField("Postal code", form.postal) { form = form.copy(postal = it); onInteraction() }
-        FormField("City", form.city) { form = form.copy(city = it); onInteraction() }
-        FormField("Country", form.country) { form = form.copy(country = it.uppercase()); onInteraction() }
-        FormField("VAT identifier", form.vat) { form = form.copy(vat = it); onInteraction() }
-        FormField("Chamber of commerce", form.kvk) { form = form.copy(kvk = it); onInteraction() }
-        FormField("Peppol endpoint", form.peppol) { form = form.copy(peppol = it); onInteraction() }
-        FormField("Contact", form.contact) { form = form.copy(contact = it); onInteraction() }
-        FormField("Email", form.email) { form = form.copy(email = it); onInteraction() }
-        FormField("Phone", form.phone) { form = form.copy(phone = it); onInteraction() }
+        ScreenHeader(if (customer.id.isEmpty()) strings.newCustomer else strings.editCustomer, onBack) { }
+        FormField(strings.name, form.name) { form = form.copy(name = it); onInteraction() }
+        FormField(strings.street, form.street) { form = form.copy(street = it); onInteraction() }
+        FormField(strings.postal, form.postal) { form = form.copy(postal = it); onInteraction() }
+        FormField(strings.city, form.city) { form = form.copy(city = it); onInteraction() }
+        FormField(strings.country, form.country) { form = form.copy(country = it.uppercase()); onInteraction() }
+        FormField(strings.vat, form.vat) { form = form.copy(vat = it); onInteraction() }
+        FormField(strings.kvk, form.kvk) { form = form.copy(kvk = it); onInteraction() }
+        FormField(strings.peppol, form.peppol) { form = form.copy(peppol = it); onInteraction() }
+        FormField(strings.contact, form.contact) { form = form.copy(contact = it); onInteraction() }
+        FormField(strings.email, form.email) { form = form.copy(email = it); onInteraction() }
+        FormField(strings.phone, form.phone) { form = form.copy(phone = it); onInteraction() }
         error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
         Spacer(Modifier.height(12.dp))
         Button(onClick = ::save, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
-            Text(if (busy) "Saving..." else "Save customer")
+            Text(if (busy) strings.saving else strings.saveCustomer)
         }
     }
 }
@@ -239,7 +239,7 @@ fun DraftListScreen(
 
     fun create() {
         if (customers.isEmpty()) {
-            error = "Add a customer first."
+            error = strings.addCustomerFirst
             return
         }
         scope.launch {
@@ -249,22 +249,22 @@ fun DraftListScreen(
     }
 
     Column(Modifier.fillMaxWidth()) {
-        ScreenHeader("Drafts", onBack) {
-            TextButton(onClick = { onInteraction(); onCustomers() }) { Text("Customers") }
+        ScreenHeader(strings.drafts, onBack) {
+            TextButton(onClick = { onInteraction(); onCustomers() }) { Text(strings.customers) }
         }
         Button(onClick = { onInteraction(); create() }, modifier = Modifier.fillMaxWidth()) {
-            Text("New draft")
+            Text(strings.newDraft)
         }
         Spacer(Modifier.height(8.dp))
         if (loading) {
             CircularProgressIndicator(modifier = Modifier.padding(16.dp))
         } else if (drafts.isEmpty()) {
-            Text("No drafts yet.", modifier = Modifier.padding(16.dp))
+            Text(strings.noDrafts, modifier = Modifier.padding(16.dp))
         } else {
             drafts.forEach { draft ->
                 DraftRow(
                     draft = draft,
-                    customerName = customers.firstOrNull { it.id == draft.customerId }?.name ?: "No customer",
+                    customerName = customers.firstOrNull { it.id == draft.customerId }?.name ?: strings.noCustomer,
                     gross = totals[draft.id]?.let { "${formatMoney(it.grossMicros)} ${draft.currency}" } ?: "",
                 ) { onInteraction(); onOpen(draft, customers) }
                 HorizontalDivider()
@@ -335,20 +335,20 @@ fun DraftEditorScreen(
                 when {
                     issued != null -> onIssued(outcome)
                     outcome.findings.isNotEmpty() -> issueFindings = outcome.findings
-                    else -> error = "The archive refused the document without a finding."
+                    else -> error = strings.refusedWithoutFinding
                 }
             }.onFailure { error = it.message ?: it.toString() }
         }
     }
 
     Column(Modifier.fillMaxWidth()) {
-        ScreenHeader("Draft", onBack) { }
+        ScreenHeader(strings.draft, onBack) { }
         Box {
             Button(
                 onClick = { pickerOpen = true; onInteraction() },
                 modifier = Modifier.fillMaxWidth().revealOn(focus, DraftFocus.Customer, focus = false),
             ) {
-                Text(customers.firstOrNull { it.id == current.customerId }?.name ?: "Choose a customer")
+                Text(customers.firstOrNull { it.id == current.customerId }?.name ?: strings.chooseCustomer)
             }
             DropdownMenu(expanded = pickerOpen, onDismissRequest = { pickerOpen = false }) {
                 customers.forEach { customer ->
@@ -365,33 +365,33 @@ fun DraftEditorScreen(
         }
         Spacer(Modifier.height(8.dp))
         FormField(
-            "Issue date",
+            strings.issueDate,
             current.issueDate,
             modifier = Modifier.revealOn(focus, DraftFocus.IssueDate),
         ) { current = current.copy(issueDate = it); onInteraction() }
         FormField(
-            "Due date",
+            strings.dueDate,
             current.dueDate,
             modifier = Modifier.revealOn(focus, DraftFocus.DueDate),
         ) { current = current.copy(dueDate = it); onInteraction() }
         FormField(
-            "Note",
+            strings.note,
             current.note,
             modifier = Modifier.revealOn(focus, DraftFocus.Note),
         ) { current = current.copy(note = it); onInteraction() }
         FormField(
-            "Buyer reference",
+            strings.buyerReference,
             current.buyerReference,
             modifier = Modifier.revealOn(focus, DraftFocus.BuyerReference),
         ) { current = current.copy(buyerReference = it); onInteraction() }
         FormField(
-            "Order reference",
+            strings.orderReference,
             current.orderReference,
             modifier = Modifier.revealOn(focus, DraftFocus.OrderReference),
         ) { current = current.copy(orderReference = it); onInteraction() }
 
         Spacer(Modifier.height(12.dp))
-        Text("Lines", style = MaterialTheme.typography.titleMedium)
+        Text(strings.lines, style = MaterialTheme.typography.titleMedium)
         current.lines.forEach { line ->
             DraftLineEditor(
                 line = line,
@@ -423,21 +423,27 @@ fun DraftEditorScreen(
                 )
                 onInteraction()
             },
-        ) { Text("Add line") }
+        ) { Text(strings.addLine) }
 
         totals?.let {
             Spacer(Modifier.height(12.dp))
-            Text("Net ${formatMoney(it.netMicros)} ${current.currency}", style = MaterialTheme.typography.bodyMedium)
-            Text("VAT ${formatMoney(it.taxMicros)} ${current.currency}", style = MaterialTheme.typography.bodyMedium)
             Text(
-                "Gross ${formatMoney(it.grossMicros)} ${current.currency}",
+                strings.netTotal("${formatMoney(it.netMicros)} ${current.currency}"),
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            Text(
+                strings.vatTotal("${formatMoney(it.taxMicros)} ${current.currency}"),
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            Text(
+                strings.grossTotal("${formatMoney(it.grossMicros)} ${current.currency}"),
                 style = MaterialTheme.typography.titleMedium,
             )
         }
 
         if (findings.isNotEmpty()) {
             Spacer(Modifier.height(12.dp))
-            Text("Findings", style = MaterialTheme.typography.titleMedium)
+            Text(strings.findings, style = MaterialTheme.typography.titleMedium)
             findings.forEach { finding ->
                 FindingEntry(
                     finding = finding,
@@ -451,7 +457,7 @@ fun DraftEditorScreen(
                                 reason = ""
                                 onInteraction()
                             },
-                        ) { Text("Suppress") }
+                        ) { Text(strings.suppress) }
                     }
                 }
             }
@@ -465,9 +471,9 @@ fun DraftEditorScreen(
         ) {
             Text(
                 when {
-                    busy -> "Issuing..."
-                    current.docType == "381" -> "Issue credit note"
-                    else -> "Issue invoice"
+                    busy -> strings.issuing
+                    current.docType == "381" -> strings.issueCreditNote
+                    else -> strings.issueInvoice
                 },
             )
         }
@@ -477,16 +483,12 @@ fun DraftEditorScreen(
     issueFindings?.let { blocked ->
         AlertDialog(
             onDismissRequest = { issueFindings = null },
-            title = { Text("Not issued") },
+            title = { Text(strings.notIssued) },
             text = {
                 Column(Modifier.verticalScroll(rememberScrollState())) {
                     val unfixable = blocked.count { draftFocus(it.field, current.lines) == null }
                     Text(
-                        if (unfixable > 0) {
-                            "The archive refused the document. $unfixable of these point at a field this screen does not edit."
-                        } else {
-                            "The archive refused the document."
-                        },
+                        if (unfixable > 0) strings.refusedFields(unfixable) else strings.refused,
                         style = MaterialTheme.typography.bodyMedium,
                     )
                     Spacer(Modifier.height(8.dp))
@@ -503,7 +505,7 @@ fun DraftEditorScreen(
                 }
             },
             confirmButton = {
-                TextButton(onClick = { issueFindings = null }) { Text("Close") }
+                TextButton(onClick = { issueFindings = null }) { Text(strings.close) }
             },
         )
     }
@@ -511,7 +513,7 @@ fun DraftEditorScreen(
     suppressing?.let { finding ->
         AlertDialog(
             onDismissRequest = { suppressing = null },
-            title = { Text("Suppress ${finding.code}") },
+            title = { Text(strings.suppressFinding(finding.code)) },
             text = {
                 Column {
                     Text(finding.message)
@@ -519,7 +521,7 @@ fun DraftEditorScreen(
                     OutlinedTextField(
                         value = reason,
                         onValueChange = { reason = it },
-                        label = { Text("Reason") },
+                        label = { Text(strings.reason) },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth(),
                     )
@@ -544,10 +546,10 @@ fun DraftEditorScreen(
                         }
                     },
                     enabled = reason.isNotBlank(),
-                ) { Text("Suppress") }
+                ) { Text(strings.suppress) }
             },
             dismissButton = {
-                TextButton(onClick = { suppressing = null }) { Text("Cancel") }
+                TextButton(onClick = { suppressing = null }) { Text(strings.cancel) }
             },
         )
     }
@@ -595,23 +597,29 @@ fun IssueResultScreen(result: IssueResult, onDone: () -> Unit) {
     val issued = result.issued ?: return
     var message by remember { mutableStateOf<String?>(null) }
     Column(Modifier.fillMaxWidth()) {
-        ScreenHeader("Issued", onDone) { }
+        ScreenHeader(strings.issuedTitle, onDone) { }
         Text(issued.number, style = MaterialTheme.typography.headlineMedium)
         Text(
-            "Issued ${issued.issueDate}",
+            strings.issuedOn(issued.issueDate),
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Spacer(Modifier.height(12.dp))
-        Text("Net ${formatMoney(issued.netMicros)} ${issued.currency}", style = MaterialTheme.typography.bodyMedium)
-        Text("VAT ${formatMoney(issued.taxMicros)} ${issued.currency}", style = MaterialTheme.typography.bodyMedium)
         Text(
-            "Gross ${formatMoney(issued.grossMicros)} ${issued.currency}",
+            strings.netTotal("${formatMoney(issued.netMicros)} ${issued.currency}"),
+            style = MaterialTheme.typography.bodyMedium,
+        )
+        Text(
+            strings.vatTotal("${formatMoney(issued.taxMicros)} ${issued.currency}"),
+            style = MaterialTheme.typography.bodyMedium,
+        )
+        Text(
+            strings.grossTotal("${formatMoney(issued.grossMicros)} ${issued.currency}"),
             style = MaterialTheme.typography.titleMedium,
         )
 
         Spacer(Modifier.height(12.dp))
-        Text("Filed artefacts", style = MaterialTheme.typography.titleMedium)
+        Text(strings.filedArtefacts, style = MaterialTheme.typography.titleMedium)
         if (result.ublSha256.isNotBlank()) {
             ArtefactBlock("UBL", issued.id, issued.number, "ubl", result.ublSha256) { message = it }
         }
@@ -625,7 +633,7 @@ fun IssueResultScreen(result: IssueResult, onDone: () -> Unit) {
         if (result.pdfError.isNotBlank()) {
             Spacer(Modifier.height(8.dp))
             Text(
-                "The PDF could not be filed: ${result.pdfError}",
+                strings.pdfNotFiled(result.pdfError),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.error,
             )
@@ -633,7 +641,7 @@ fun IssueResultScreen(result: IssueResult, onDone: () -> Unit) {
 
         if (result.findings.isNotEmpty()) {
             Spacer(Modifier.height(12.dp))
-            Text("Warnings", style = MaterialTheme.typography.titleMedium)
+            Text(strings.warnings, style = MaterialTheme.typography.titleMedium)
             result.findings.forEach { finding ->
                 Text(
                     "${finding.code} ${finding.message}",
@@ -691,18 +699,18 @@ private fun ArtefactActions(
 
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         OutlinedButton(onClick = { run(io::share) }, enabled = !busy, modifier = Modifier.weight(1f)) {
-            Text("Share")
+            Text(strings.share)
         }
         OutlinedButton(onClick = { run(io::save) }, enabled = !busy, modifier = Modifier.weight(1f)) {
-            Text("Save")
+            Text(strings.save)
         }
         OutlinedButton(onClick = { run(io::open) }, enabled = !busy, modifier = Modifier.weight(1f)) {
-            Text("Open")
+            Text(strings.open)
         }
     }
     if (busy) {
         Text(
-            "Preparing the file...",
+            strings.preparingFile,
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -767,10 +775,9 @@ fun ImportScreen(
     }
 
     Column(Modifier.fillMaxWidth()) {
-        ScreenHeader("Import", onBack) { }
+        ScreenHeader(strings.importTitle, onBack) { }
         Text(
-            "A received invoice arrives as UBL or PDF. The archive reads the sender, the number " +
-                "and the totals, and refuses to store the same document twice.",
+            strings.importNote,
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -783,7 +790,7 @@ fun ImportScreen(
             enabled = !busy,
             modifier = Modifier.fillMaxWidth(),
         ) {
-            Text(if (busy) "Importing..." else "Choose a file")
+            Text(if (busy) strings.importing else strings.chooseFile)
         }
 
         error?.let {
@@ -794,21 +801,21 @@ fun ImportScreen(
         val received = report
         if (received != null) {
             Spacer(Modifier.height(12.dp))
-            Text("Received", style = MaterialTheme.typography.titleMedium)
-            Fact("File", source)
-            Fact("Number", received.number)
-            Fact("Supplier", received.supplier.ifBlank { "Not matched to a customer" })
+            Text(strings.received, style = MaterialTheme.typography.titleMedium)
+            Fact(strings.file, source)
+            Fact(strings.number, received.number)
+            Fact(strings.supplier, received.supplier.ifBlank { strings.notMatchedToCustomer })
             if (received.duplicate) {
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    "The archive already held this document, so nothing was added.",
+                    strings.alreadyHeld,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
             Spacer(Modifier.height(8.dp))
             Button(onClick = { onOpen(received.documentId) }, modifier = Modifier.fillMaxWidth()) {
-                Text("Open document")
+                Text(strings.openDocument)
             }
         }
     }
@@ -859,8 +866,7 @@ fun BackupScreen(
                     val needed = databaseBytes() * 2
                     val free = freeSpaceBytes()
                     check(free >= needed) {
-                        "Not enough free space: a copy needs about ${megabytes(needed)}, and " +
-                            "${megabytes(free)} is free."
+                        strings.freeSpace(megabytes(needed), megabytes(free))
                     }
                     writeBackup()
                 }
@@ -871,7 +877,7 @@ fun BackupScreen(
                     path = export.path,
                     name = export.path.substringAfterLast('/'),
                     mime = "application/octet-stream",
-                    onDone = { name -> message = "Saved $name (${kilobytes(export.bytes)} KB), verified." },
+                    onDone = { name -> message = strings.savedVerified(name, kilobytes(export.bytes)) },
                     onError = { error = it },
                 )
             }.onFailure { error = it.message ?: it.toString() }
@@ -891,9 +897,7 @@ fun BackupScreen(
                 io.exportKit(
                     key = key,
                     note = note,
-                    onDone = { where ->
-                        message = "Recovery kit written to $where. Keep it apart from the backups."
-                    },
+                    onDone = { where -> message = strings.kitWritten(where) },
                     onError = { error = it },
                 )
             }.onFailure { error = it.message ?: it.toString() }
@@ -901,45 +905,41 @@ fun BackupScreen(
     }
 
     Column(Modifier.fillMaxWidth()) {
-        ScreenHeader("Backup", onBack) { }
+        ScreenHeader(strings.backup, onBack) { }
         Text(
-            "The archive is two files: the database and the key that opens it. A backup holds the data, " +
-                "the recovery kit holds the key, and neither is enough on its own.",
+            strings.twoFiles,
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
 
         Spacer(Modifier.height(16.dp))
-        Text("Backup", style = MaterialTheme.typography.titleMedium)
+        Text(strings.backup, style = MaterialTheme.typography.titleMedium)
         Text(
-            "A verified, encrypted copy. It is checked here before you choose where it goes, and the " +
-                "app's own copy is deleted once it is written.",
+            strings.verifiedCopy,
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Spacer(Modifier.height(8.dp))
         Button(onClick = ::exportBackup, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
-            Text(if (busy) "Working..." else "Export backup")
+            Text(if (busy) strings.working else strings.exportBackup)
         }
 
         Spacer(Modifier.height(20.dp))
-        Text("Recovery kit", style = MaterialTheme.typography.titleMedium)
+        Text(strings.recoveryKit, style = MaterialTheme.typography.titleMedium)
         Text(
-            "The key, with the note that explains what it is. Keep it on another medium from the " +
-                "backups: anyone who has both this file and the passphrase has the archive.",
+            strings.recoveryKitNote,
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Spacer(Modifier.height(8.dp))
         Button(onClick = ::exportKit, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
-            Text("Export recovery kit")
+            Text(strings.exportKit)
         }
 
         Spacer(Modifier.height(20.dp))
-        Text("Restore", style = MaterialTheme.typography.titleMedium)
+        Text(strings.restore, style = MaterialTheme.typography.titleMedium)
         Text(
-            "Replaces this device's archive with a backup and the key that opens it. Both files are " +
-                "needed. The archive here now is kept beside the new one, so a wrong choice is recoverable.",
+            strings.restoreNote,
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -948,21 +948,21 @@ fun BackupScreen(
             onClick = {
                 onInteraction()
                 io.stagePair(
-                    onDone = { staged = true; message = "Both files are ready. Enter the passphrase of that backup." },
+                    onDone = { staged = true; message = strings.bothFilesReady },
                     onError = { error = it },
                 )
             },
             enabled = !busy,
             modifier = Modifier.fillMaxWidth(),
         ) {
-            Text(if (staged) "Choose the two files again" else "Choose the two files")
+            Text(if (staged) strings.chooseTwoAgain else strings.chooseTwo)
         }
         if (staged) {
             Spacer(Modifier.height(8.dp))
             OutlinedTextField(
                 value = passphrase,
                 onValueChange = { passphrase = it; onInteraction() },
-                label = { Text("Passphrase of that backup") },
+                label = { Text(strings.backupPassphrase) },
                 singleLine = true,
                 visualTransformation = PasswordVisualTransformation(),
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
@@ -974,7 +974,7 @@ fun BackupScreen(
                 enabled = !busy && passphrase.isNotBlank(),
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                Text(if (busy) "Restoring..." else "Replace this archive")
+                Text(if (busy) strings.restoring else strings.replaceArchive)
             }
         }
 
@@ -991,18 +991,15 @@ fun BackupScreen(
     if (confirming) {
         AlertDialog(
             onDismissRequest = { confirming = false },
-            title = { Text("Replace the archive?") },
+            title = { Text(strings.replaceQuestion) },
             text = {
-                Text(
-                    "The archive on this device is replaced by the pair you picked. The files that " +
-                        "are here now stay beside the new ones.",
-                )
+                Text(strings.replaceNote)
             },
             confirmButton = {
-                TextButton(onClick = ::restore) { Text("Replace") }
+                TextButton(onClick = ::restore) { Text(strings.replace) }
             },
             dismissButton = {
-                TextButton(onClick = { confirming = false }) { Text("Cancel") }
+                TextButton(onClick = { confirming = false }) { Text(strings.cancel) }
             },
         )
     }
@@ -1053,30 +1050,59 @@ fun SettingsScreen(
         }
     }
 
-    Column(Modifier.fillMaxWidth()) {
-        ScreenHeader("Settings", onBack) { }
+    fun chooseAppLanguage(language: Lang) {
+        if (UiLanguage.current == language) return
+        UiLanguage.current = language
+        saveUiLanguageCode(language.code)
+        saved = false
+        onInteraction()
+    }
 
-        Text("Seller", style = MaterialTheme.typography.titleMedium)
+    Column(Modifier.fillMaxWidth()) {
+        ScreenHeader(strings.settings, onBack) { }
+
+        Text(strings.appLanguage, style = MaterialTheme.typography.titleMedium)
+        Text(
+            strings.appLanguageNote,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(4.dp))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FilterChip(
+                selected = UiLanguage.current == Lang.English,
+                onClick = { chooseAppLanguage(Lang.English) },
+                label = { Text(strings.english) },
+            )
+            FilterChip(
+                selected = UiLanguage.current == Lang.Dutch,
+                onClick = { chooseAppLanguage(Lang.Dutch) },
+                label = { Text(strings.dutchLanguage) },
+            )
+        }
+
+        Spacer(Modifier.height(20.dp))
+        Text(strings.seller, style = MaterialTheme.typography.titleMedium)
         val current = seller
         if (current == null) {
             CircularProgressIndicator()
         } else {
             Text(current.name, style = MaterialTheme.typography.bodyMedium)
             Text(
-                current.vat.ifBlank { "No VAT identifier yet" },
+                current.vat.ifBlank { strings.noVat },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
         Spacer(Modifier.height(8.dp))
         OutlinedButton(onClick = onSeller, modifier = Modifier.fillMaxWidth()) {
-            Text("Edit seller")
+            Text(strings.editSeller)
         }
 
         Spacer(Modifier.height(20.dp))
-        Text("Document language", style = MaterialTheme.typography.titleMedium)
+        Text(strings.documentLanguage, style = MaterialTheme.typography.titleMedium)
         Text(
-            "What an issued invoice prints in. This is the document's language, not the app's.",
+            strings.documentLanguageNote,
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -1085,42 +1111,42 @@ fun SettingsScreen(
             FilterChip(
                 selected = current != null && !current.defaultLocale.startsWith("nl"),
                 onClick = { chooseLocale("en") },
-                label = { Text("English") },
+                label = { Text(strings.english) },
             )
             FilterChip(
                 selected = current != null && current.defaultLocale.startsWith("nl"),
                 onClick = { chooseLocale("nl-NL") },
-                label = { Text("Nederlands") },
+                label = { Text(strings.dutchLanguage) },
             )
         }
         if (saved) {
-            Text("Saved.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+            Text(strings.saved, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
         }
 
         Spacer(Modifier.height(20.dp))
-        Text("Recovery", style = MaterialTheme.typography.titleMedium)
+        Text(strings.recovery, style = MaterialTheme.typography.titleMedium)
         Text(
-            "A recovery key opens the archive when the passphrase is lost. It is shown once.",
+            strings.recoveryNote,
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Spacer(Modifier.height(8.dp))
         OutlinedButton(onClick = onAddRecovery, modifier = Modifier.fillMaxWidth()) {
-            Text("Add recovery key")
+            Text(strings.addRecoveryKey)
         }
 
         Spacer(Modifier.height(20.dp))
-        Text("Audit chain", style = MaterialTheme.typography.titleMedium)
+        Text(strings.auditChain, style = MaterialTheme.typography.titleMedium)
         val head = chain
         if (head == null) {
             Text(
-                "No events yet. Every issue, match and status change appends to it.",
+                strings.noEvents,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         } else {
-            Fact("Events", head.seq.toString())
-            Fact("Recorded", head.at)
+            Fact(strings.events, head.seq.toString())
+            Fact(strings.recorded, head.at)
             Spacer(Modifier.height(4.dp))
             Text(head.hash, style = MaterialTheme.typography.labelSmall)
         }
@@ -1166,7 +1192,7 @@ fun SellerEditScreen(onBack: () -> Unit, onInteraction: () -> Unit) {
     }
 
     Column(Modifier.fillMaxWidth()) {
-        ScreenHeader("Seller", onBack) { }
+        ScreenHeader(strings.seller, onBack) { }
         val seller = form
         if (seller == null) {
             if (error == null) CircularProgressIndicator()
@@ -1174,43 +1200,48 @@ fun SellerEditScreen(onBack: () -> Unit, onInteraction: () -> Unit) {
             return@Column
         }
         Text(
-            "Invoices are issued by this party. Conformance checks its address, VAT identifier and Peppol endpoint.",
+            strings.sellerNote,
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        FormField("Name", seller.name) { edit { copy(name = it) } }
-        FormField("Street", seller.street) { edit { copy(street = it) } }
-        FormField("Postal code", seller.postal) { edit { copy(postal = it) } }
-        FormField("City", seller.city) { edit { copy(city = it) } }
-        FormField("Country", seller.country) { edit { copy(country = it.uppercase()) } }
-        FormField("VAT identifier", seller.vat) { edit { copy(vat = it) } }
-        FormField("Chamber of commerce", seller.kvk) { edit { copy(kvk = it) } }
-        FormField("Peppol endpoint", seller.peppol) { edit { copy(peppol = it) } }
-        FormField("Contact", seller.contact) { edit { copy(contact = it) } }
-        FormField("Email", seller.email) { edit { copy(email = it) } }
-        FormField("Phone", seller.phone) { edit { copy(phone = it) } }
+        FormField(strings.name, seller.name) { edit { copy(name = it) } }
+        FormField(strings.street, seller.street) { edit { copy(street = it) } }
+        FormField(strings.postal, seller.postal) { edit { copy(postal = it) } }
+        FormField(strings.city, seller.city) { edit { copy(city = it) } }
+        FormField(strings.country, seller.country) { edit { copy(country = it.uppercase()) } }
+        FormField(strings.vat, seller.vat) { edit { copy(vat = it) } }
+        FormField(strings.kvk, seller.kvk) { edit { copy(kvk = it) } }
+        FormField(strings.peppol, seller.peppol) { edit { copy(peppol = it) } }
+        FormField(strings.contact, seller.contact) { edit { copy(contact = it) } }
+        FormField(strings.email, seller.email) { edit { copy(email = it) } }
+        FormField(strings.phone, seller.phone) { edit { copy(phone = it) } }
         error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
         if (saved) {
             Spacer(Modifier.height(4.dp))
-            Text("Saved.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+            Text(strings.saved, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
         }
         Spacer(Modifier.height(12.dp))
         Button(onClick = ::save, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
-            Text(if (busy) "Saving..." else "Save seller")
+            Text(if (busy) strings.saving else strings.saveSeller)
         }
     }
 }
 
 /** The two sides of the books, as the register switches between them. */
-private val DOCUMENT_SIDES = listOf(
-    "outbound" to "Issued",
-    "inbound" to "Received",
+private fun documentSides(): List<Pair<String, String>> = listOf(
+    "outbound" to strings.issuedTab,
+    "inbound" to strings.receivedTab,
 )
 
 /** The statuses each side can stand in, as the filter offers them. */
-private val DOCUMENT_FILTERS = mapOf(
-    "outbound" to listOf(null to "All", "paid" to "Paid", "archived" to "Archived"),
-    "inbound" to listOf(null to "All", "received" to "Received", "approved" to "Approved", "paid" to "Paid"),
+private fun documentFilters(): Map<String, List<Pair<String?, String>>> = mapOf(
+    "outbound" to listOf(null to strings.allFilter, "paid" to strings.paid, "archived" to strings.archived),
+    "inbound" to listOf(
+        null to strings.allFilter,
+        "received" to strings.receivedTab,
+        "approved" to strings.approved,
+        "paid" to strings.paid,
+    ),
 )
 
 /** What the register was showing, kept across a trip into a document. */
@@ -1250,10 +1281,13 @@ fun DocumentListScreen(
         if (documents.isNotEmpty()) listState.scrollToItem(0)
     }
 
+    val sides = documentSides()
+    val statusFilters = documentFilters()
+
     Column(Modifier.fillMaxSize()) {
-        ScreenHeader("Documents", onBack) { }
-        PrimaryTabRow(selectedTabIndex = DOCUMENT_SIDES.indexOfFirst { it.first == state.direction }) {
-            DOCUMENT_SIDES.forEach { (code, label) ->
+        ScreenHeader(strings.documents, onBack) { }
+        PrimaryTabRow(selectedTabIndex = sides.indexOfFirst { it.first == state.direction }) {
+            sides.forEach { (code, label) ->
                 Tab(
                     selected = state.direction == code,
                     onClick = {
@@ -1272,12 +1306,12 @@ fun DocumentListScreen(
         OutlinedTextField(
             value = state.query,
             onValueChange = { state.query = it; onInteraction() },
-            label = { Text("Search numbers, parties, references") },
+            label = { Text(strings.searchDocuments) },
             singleLine = true,
             supportingText = if (documents.isNotEmpty() && (state.query.isNotBlank() || state.status != null)) {
                 {
                     Text(
-                        if (documents.size == 1) "1 match" else "${documents.size} matches",
+                        strings.matches(documents.size),
                         style = MaterialTheme.typography.labelMedium,
                     )
                 }
@@ -1290,7 +1324,7 @@ fun DocumentListScreen(
             modifier = Modifier.fillMaxWidth().horizontalScroll(filters),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            DOCUMENT_FILTERS.getValue(state.direction).forEach { (code, label) ->
+            statusFilters.getValue(state.direction).forEach { (code, label) ->
                 FilterChip(
                     selected = state.status == code,
                     onClick = {
@@ -1307,10 +1341,10 @@ fun DocumentListScreen(
             loading && documents.isEmpty() -> CircularProgressIndicator()
             documents.isEmpty() -> Text(
                 when {
-                    state.query.isNotBlank() -> "Nothing matches that search."
-                    state.direction == "inbound" -> "No received invoices yet. Import one to file it here."
-                    state.status != null -> "No ${state.status} documents yet."
-                    else -> "No documents yet. Issue a draft and it is filed here."
+                    state.query.isNotBlank() -> strings.nothingMatches
+                    state.direction == "inbound" -> strings.noReceived
+                    state.status != null -> strings.noStatusDocuments(strings.status(state.status!!))
+                    else -> strings.noDocuments
                 },
                 style = MaterialTheme.typography.bodyMedium,
             )
@@ -1361,7 +1395,7 @@ fun DocumentDetailScreen(id: String, onBack: () -> Unit) {
         scope.launch {
             val result = withContext(Dispatchers.IO) { runCatching { matchSupplier(doc.id, customer.id) } }
             busy = false
-            result.onSuccess { message = "Supplier matched to ${customer.name}." }
+            result.onSuccess { message = strings.supplierMatched(customer.name) }
                 .onFailure { error = it.message ?: it.toString() }
             refresh++
         }
@@ -1375,14 +1409,14 @@ fun DocumentDetailScreen(id: String, onBack: () -> Unit) {
         scope.launch {
             val result = withContext(Dispatchers.IO) { runCatching { advanceDocument(doc.id, target) } }
             busy = false
-            result.onSuccess { message = "The document is now $it." }
+            result.onSuccess { message = strings.nowStatus(it) }
                 .onFailure { error = it.message ?: it.toString() }
             refresh++
         }
     }
 
     Column(Modifier.fillMaxWidth()) {
-        ScreenHeader(document?.number ?: "Document", onBack) { }
+        ScreenHeader(document?.number ?: strings.document, onBack) { }
         val doc = document
         if (doc == null) {
             error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
@@ -1395,33 +1429,33 @@ fun DocumentDetailScreen(id: String, onBack: () -> Unit) {
         val supplier = customers.firstOrNull { it.id == doc.supplierId }
 
         Text(
-            doc.status.uppercase(),
+            strings.status(doc.status).uppercase(),
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Spacer(Modifier.height(4.dp))
         Text(if (inbound) doc.seller else doc.buyer, style = MaterialTheme.typography.titleMedium)
-        Fact("Issued", doc.issueDate)
-        Fact("Due", doc.dueDate)
+        Fact(strings.issuedFact, doc.issueDate)
+        Fact(strings.dueFact, doc.dueDate)
         if (inbound) {
-            Fact("Supplier", supplier?.name ?: "Not matched")
-            Fact("Buyer", doc.buyer)
+            Fact(strings.supplier, supplier?.name ?: strings.notMatchedTitle)
+            Fact(strings.buyer, doc.buyer)
         } else {
-            Fact("Seller", doc.seller)
+            Fact(strings.seller, doc.seller)
         }
-        Fact("Buyer reference", doc.buyerReference)
-        Fact("Order reference", doc.orderReference)
-        Fact("Note", doc.note)
+        Fact(strings.buyerReference, doc.buyerReference)
+        Fact(strings.orderReference, doc.orderReference)
+        Fact(strings.note, doc.note)
 
         if (inbound) {
             Spacer(Modifier.height(8.dp))
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(onClick = { matching = true }, enabled = !busy, modifier = Modifier.weight(1f)) {
-                    Text(if (supplier == null) "Match supplier" else "Change supplier")
+                    Text(if (supplier == null) strings.matchSupplier else strings.changeSupplier)
                 }
                 val next = when (doc.status) {
-                    "received" -> "approved" to "Approve"
-                    "approved" -> "paid" to "Mark paid"
+                    "received" -> "approved" to strings.approve
+                    "approved" -> "paid" to strings.markPaid
                     else -> null
                 }
                 if (next != null) {
@@ -1442,13 +1476,18 @@ fun DocumentDetailScreen(id: String, onBack: () -> Unit) {
         }
 
         Spacer(Modifier.height(12.dp))
-        Text("Lines", style = MaterialTheme.typography.titleMedium)
+        Text(strings.lines, style = MaterialTheme.typography.titleMedium)
         doc.lines.forEach { line ->
             Column(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-                Text(line.name.ifBlank { "Line ${line.position}" }, style = MaterialTheme.typography.bodyMedium)
+                Text(line.name.ifBlank { strings.line(line.position) }, style = MaterialTheme.typography.bodyMedium)
                 Text(
-                    "${line.quantity} ${line.unit} x ${formatMoney(line.unitPriceMicros)} ${doc.currency}" +
-                        " · VAT ${formatRate(line.vatRateBp)}%",
+                    strings.lineDetail(
+                        line.quantity,
+                        line.unit,
+                        formatMoney(line.unitPriceMicros),
+                        doc.currency,
+                        formatRate(line.vatRateBp),
+                    ),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -1460,22 +1499,31 @@ fun DocumentDetailScreen(id: String, onBack: () -> Unit) {
         }
 
         Spacer(Modifier.height(12.dp))
-        Text("Net ${formatMoney(doc.netMicros)} ${doc.currency}", style = MaterialTheme.typography.bodyMedium)
-        Text("VAT ${formatMoney(doc.taxMicros)} ${doc.currency}", style = MaterialTheme.typography.bodyMedium)
-        Text("Gross ${formatMoney(doc.grossMicros)} ${doc.currency}", style = MaterialTheme.typography.titleMedium)
+        Text(
+            strings.netTotal("${formatMoney(doc.netMicros)} ${doc.currency}"),
+            style = MaterialTheme.typography.bodyMedium,
+        )
+        Text(
+            strings.vatTotal("${formatMoney(doc.taxMicros)} ${doc.currency}"),
+            style = MaterialTheme.typography.bodyMedium,
+        )
+        Text(
+            strings.grossTotal("${formatMoney(doc.grossMicros)} ${doc.currency}"),
+            style = MaterialTheme.typography.titleMedium,
+        )
 
         Spacer(Modifier.height(12.dp))
-        Text("Filed artefacts", style = MaterialTheme.typography.titleMedium)
+        Text(strings.filedArtefacts, style = MaterialTheme.typography.titleMedium)
         if (doc.artefacts.isEmpty()) {
             Text(
-                "None yet.",
+                strings.noneYet,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
         doc.artefacts.forEach { artefact ->
             Text(
-                "${artefact.kind.uppercase()} · ${artefact.sizeBytes} bytes",
+                strings.artefactLine(artefact.kind.uppercase(), artefact.sizeBytes),
                 style = MaterialTheme.typography.bodySmall,
             )
             ArtefactBlock(artefact.kind.uppercase(), doc.id, doc.number, artefact.kind, artefact.bytesHash) {
@@ -1489,11 +1537,10 @@ fun DocumentDetailScreen(id: String, onBack: () -> Unit) {
 
         if (doc.events.isNotEmpty()) {
             Spacer(Modifier.height(12.dp))
-            Text("History", style = MaterialTheme.typography.titleMedium)
+            Text(strings.history, style = MaterialTheme.typography.titleMedium)
             doc.events.forEach { event ->
                 Text(
-                    "${event.kind} · ${event.at} · ${event.actor}" +
-                        if (event.detail.isBlank()) "" else " · ${event.detail}",
+                    strings.event(event.kind, event.at, event.actor, event.detail),
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
@@ -1503,10 +1550,10 @@ fun DocumentDetailScreen(id: String, onBack: () -> Unit) {
     if (matching) {
         AlertDialog(
             onDismissRequest = { matching = false },
-            title = { Text("Match supplier") },
+            title = { Text(strings.matchSupplier) },
             text = {
                 if (customers.isEmpty()) {
-                    Text("No customers yet. Add one in Customers first.")
+                    Text(strings.noCustomersFirst)
                 } else {
                     LazyColumn(Modifier.heightIn(max = 360.dp)) {
                         items(customers, key = { it.id }) { customer ->
@@ -1524,7 +1571,7 @@ fun DocumentDetailScreen(id: String, onBack: () -> Unit) {
                 }
             },
             confirmButton = {
-                TextButton(onClick = { matching = false }) { Text("Cancel") }
+                TextButton(onClick = { matching = false }) { Text(strings.cancel) }
             },
         )
     }
@@ -1548,13 +1595,13 @@ private fun Fact(label: String, value: String) {
 private fun DocumentRow(hit: DocumentHit, onClick: () -> Unit) {
     TextButton(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.fillMaxWidth()) {
-            Text(hit.number.ifBlank { "No number" }, style = MaterialTheme.typography.titleMedium)
+            Text(hit.number.ifBlank { strings.noNumber }, style = MaterialTheme.typography.titleMedium)
             val detail = buildList {
                 add(hit.party)
                 add(hit.issueDate)
                 add("${formatMoney(hit.grossMicros)} ${hit.currency}")
-                add(hit.status)
-                if (hit.direction == "inbound" && !hit.matched) add("not matched")
+                add(strings.status(hit.status))
+                if (hit.direction == "inbound" && !hit.matched) add(strings.notMatched)
             }
                 .filter { it.isNotBlank() }
                 .joinToString(" · ")
@@ -1589,7 +1636,7 @@ private fun DraftLineEditor(
                 name = it
                 onChange(line.copy(name = it))
             },
-            label = { Text("Item") },
+            label = { Text(strings.item) },
             singleLine = true,
             modifier = Modifier.fillMaxWidth().revealOn(focus, DraftFocus.Line(line.id, LineField.Name)),
         )
@@ -1600,7 +1647,7 @@ private fun DraftLineEditor(
                     quantity = it
                     parseMicros(it)?.let { micros -> onChange(line.copy(quantityMicros = micros)) }
                 },
-                label = { Text("Quantity") },
+                label = { Text(strings.quantity) },
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                 modifier = Modifier
@@ -1613,7 +1660,7 @@ private fun DraftLineEditor(
                     unit = it.uppercase()
                     onChange(line.copy(unit = it.uppercase()))
                 },
-                label = { Text("Unit") },
+                label = { Text(strings.unit) },
                 singleLine = true,
                 modifier = Modifier
                     .weight(1f)
@@ -1627,7 +1674,7 @@ private fun DraftLineEditor(
                     price = it
                     parseMicros(it)?.let { micros -> onChange(line.copy(unitPriceMicros = micros)) }
                 },
-                label = { Text("Unit price") },
+                label = { Text(strings.unitPrice) },
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                 modifier = Modifier
@@ -1640,7 +1687,7 @@ private fun DraftLineEditor(
                     rate = it
                     parseBasisPoints(it)?.let { bp -> onChange(line.copy(taxRateBp = bp)) }
                 },
-                label = { Text("VAT %") },
+                label = { Text(strings.vatRate) },
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                 modifier = Modifier
@@ -1648,7 +1695,7 @@ private fun DraftLineEditor(
                     .revealOn(focus, DraftFocus.Line(line.id, LineField.TaxRate)),
             )
         }
-        TextButton(onClick = onRemove) { Text("Remove line") }
+        TextButton(onClick = onRemove) { Text(strings.removeLine) }
         HorizontalDivider()
     }
 }
@@ -1656,7 +1703,7 @@ private fun DraftLineEditor(
 @Composable
 private fun ScreenHeader(title: String, onBack: () -> Unit, action: @Composable () -> Unit) {
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        TextButton(onClick = onBack) { Text("Back") }
+        TextButton(onClick = onBack) { Text(strings.back) }
         Text(title, style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
         action()
     }
@@ -1680,7 +1727,7 @@ private fun DraftRow(draft: Draft, customerName: String, gross: String, onClick:
     TextButton(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.fillMaxWidth()) {
             Text(customerName, style = MaterialTheme.typography.titleMedium)
-            val detail = listOf(draft.issueDate, "${draft.lines.size} line(s)", gross)
+            val detail = listOf(draft.issueDate, strings.linesCount(draft.lines.size), gross)
                 .filter { it.isNotBlank() }
                 .joinToString(" · ")
             Text(detail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)

@@ -39,6 +39,23 @@ object MobileArchiveHost {
         return archiveExists(database, keystore)
     }
 
+    /**
+     * The app language is a device preference, not archive data: it has to work
+     * before the archive opens and it must survive a restore. It lives beside
+     * the archive files as a plain word.
+     */
+    fun readLanguage(): String? {
+        val base = directory ?: return null
+        val file = File(base, "ui-language")
+        if (!file.isFile) return null
+        return file.readText().trim().ifEmpty { null }
+    }
+
+    fun writeLanguage(code: String) {
+        val base = directory ?: return
+        File(base, "ui-language").writeText(code)
+    }
+
     fun create(passphrase: String): ArchiveSummary {
         require(passphrase.isNotEmpty()) { "choose a passphrase" }
         val (database, keystore) = paths()
@@ -618,16 +635,16 @@ internal inline fun <T> withUserError(block: () -> T): T = try {
 }
 
 private fun AppException.toUserMessage(): String = when (this) {
-    is AppException.WrongPassphrase -> "Wrong passphrase. Try again."
-    is AppException.ArchiveExists -> "An archive already exists on this device."
-    is AppException.InvalidKeystore -> "The archive keystore is damaged or from a newer version."
-    is AppException.NoRecoveryKey -> "This archive has no recovery key."
-    is AppException.InvalidRecoveryKey -> "That recovery key is not valid."
-    is AppException.Io -> "Storage error: $detail"
+    is AppException.WrongPassphrase -> strings.wrongPassphrase
+    is AppException.ArchiveExists -> strings.archiveExists
+    is AppException.InvalidKeystore -> strings.damagedKeystore
+    is AppException.NoRecoveryKey -> strings.noRecoveryKey
+    is AppException.InvalidRecoveryKey -> strings.invalidRecoveryKey
+    is AppException.Io -> strings.storageError(detail)
     is AppException.Store -> detail
-    is AppException.Artefact -> "Rendering failed: $detail"
-    is AppException.Import -> "Could not import the file: $detail"
-    is AppException.AuthFailed -> "Authentication failed: $detail"
-    is AppException.Invalidated -> "The device secret was invalidated."
-    is AppException.Closed -> "The archive is locked."
+    is AppException.Artefact -> strings.renderingFailed(detail)
+    is AppException.Import -> strings.couldNotImport(detail)
+    is AppException.AuthFailed -> strings.authenticationFailed(detail)
+    is AppException.Invalidated -> strings.deviceInvalidated
+    is AppException.Closed -> strings.archiveLocked
 }

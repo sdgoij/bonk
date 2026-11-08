@@ -41,6 +41,10 @@ actual fun documentArtefact(id: String, kind: String): ByteArray = withUserError
 
 actual fun newId(): String = java.util.UUID.randomUUID().toString()
 
+actual fun saveUiLanguageCode(code: String) = MobileArchiveHost.writeLanguage(code)
+
+actual fun loadUiLanguageCode(): String? = MobileArchiveHost.readLanguage()
+
 actual fun customersCsv(): String = withUserError { MobileArchiveHost.customersCsv() }
 
 actual fun importCustomersCsv(text: String): CustomerImportReport =

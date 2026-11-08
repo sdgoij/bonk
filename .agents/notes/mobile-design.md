@@ -1459,7 +1459,11 @@ Run on a device: a pair of the wrong files was refused with the keystore message
 
 Settings holds the seller, the document language, the recovery key and the audit chain head, and the dashboard lost the three buttons that moved there; Diagnostics now renders below the Settings card. The document language is the seller's `default_locale`, which is where the desktop keeps it too, so the FFI reads it when it issues instead of taking a language per document. The chain head shows the newest event's position, time and hash.
 
-The app's own language is still English. Localizing the strings is the remaining half of this item and is tracked on its own, because it touches every screen while the setting above changes only what a document prints.
+The app's own language is a device preference, not archive data, because the unlock screen needs it before an archive is open. Every screen now takes its words from `Strings`, which keeps each English sentence beside its Dutch one on the same line, and the Settings screen offers the choice under App language. The picked code is stored as a plain word beside the archive files, so it survives a restore and is read in `MainActivity.onCreate` before anything draws.
+
+Stored status codes reach the screen as words, so a register row and the detail header read `Verstuurd` rather than `issued`, and an empty filter names the status it filtered on. Platform errors (`AppException`) are translated at the point where the platform layer turns them into user text, so a wrong passphrase reads the same on every screen.
+
+Run on an emulator: switched to Nederlands in Settings and walked the dashboard, the customer list, the draft list and its editor (field labels, totals and the remove action), both register tabs with their filters, a received document's detail, the import screen and the backup screen, all in Dutch. A filter with no rows read "Nog geen documenten met status Betaald." Switching back to English redrew the same screens and the rows read `Issued`. A force-stop and relaunch started in the language last picked, in both directions.
 
 Run on an emulator: the Settings screen showed the seller and its VAT identifier, the two language chips, the recovery action, and 788 chain events with their timestamp and hash; switching the document language saved and stayed selected, and Edit seller returned to Settings.
 
@@ -1471,7 +1475,7 @@ Run on an emulator: a seeded UBL picked from Downloads reported its number and "
 - [x] Backup export (verify, then stream) and two-file restore
 - [x] Recovery-kit export
 - [x] Settings: seller, document language, audit chain head
-- [ ] Settings: UI language, English and Dutch, for the app's own strings
+- [x] Settings: UI language, English and Dutch, for the app's own strings
 - [x] Free-space preflight for backup
 
 #### M11.6 — Tablet, accessibility, performance (2 weeks)

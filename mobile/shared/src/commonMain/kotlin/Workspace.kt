@@ -395,3 +395,9 @@ object PickerGuard {
 
 /** A fresh identifier for a new line. */
 expect fun newId(): String
+
+/** Keeps the language the app draws in, so a restart starts in the same one. */
+expect fun saveUiLanguageCode(code: String)
+
+/** The stored app language, or null when the user never picked one. */
+expect fun loadUiLanguageCode(): String?

@@ -171,7 +171,7 @@ fun App() {
 
     fun unlock() {
         if (passphrase.isEmpty()) {
-            error = "Enter the passphrase."
+            error = strings.enterPassphrase
             return
         }
         busy = true
@@ -200,11 +200,11 @@ fun App() {
 
     fun create() {
         if (passphrase.isEmpty()) {
-            error = "Choose a passphrase."
+            error = strings.choosePassphrase
             return
         }
         if (passphrase != confirmation) {
-            error = "The passphrases do not match."
+            error = strings.passphrasesDiffer
             return
         }
         val chosen = passphrase
@@ -219,8 +219,8 @@ fun App() {
                     if (remembered.isSuccess) {
                         deviceAvailable = true
                     } else {
-                        notice = "The archive was created, but this device was not remembered: " +
-                            (remembered.exceptionOrNull()?.message ?: "unknown error")
+                        notice = strings.notRemembered +
+                            (remembered.exceptionOrNull()?.message ?: strings.unknownError)
                     }
                 }
                 val created = result.getOrThrow()
@@ -231,12 +231,12 @@ fun App() {
                 screen = if (recovery.isSuccess) {
                     Screen.RecoveryKey(recovery.getOrThrow())
                 } else {
-                    notice = "The archive was created, but no recovery key was generated: " +
-                        (recovery.exceptionOrNull()?.message ?: "unknown error")
+                    notice = strings.noRecoveryMade +
+                        (recovery.exceptionOrNull()?.message ?: strings.unknownError)
                     Screen.Unlocked
                 }
             } else {
-                fail(result.exceptionOrNull() ?: IllegalStateException("unknown error"))
+                fail(result.exceptionOrNull() ?: IllegalStateException(strings.unknownError))
             }
             busy = false
         }
@@ -244,15 +244,15 @@ fun App() {
 
     fun reset() {
         if (recoveryKey.isBlank()) {
-            error = "Enter the recovery key."
+            error = strings.enterRecoveryKey
             return
         }
         if (passphrase.isEmpty()) {
-            error = "Choose a new passphrase."
+            error = strings.chooseNewPassphrase
             return
         }
         if (passphrase != confirmation) {
-            error = "The new passphrases do not match."
+            error = strings.newPassphrasesDiffer
             return
         }
         val key = recoveryKey
@@ -274,7 +274,7 @@ fun App() {
 
     fun addRecovery() {
         if (passphrase.isEmpty()) {
-            error = "Enter the current passphrase."
+            error = strings.enterCurrentPassphrase
             return
         }
         if (screen !is Screen.AddRecovery) return
@@ -302,12 +302,12 @@ fun App() {
                 summary = result.getOrThrow()
                 screen = Screen.Unlocked
             } else {
-                fail(result.exceptionOrNull() ?: IllegalStateException("unknown error"))
+                fail(result.exceptionOrNull() ?: IllegalStateException(strings.unknownError))
                 // A Keystore invalidation deletes the wrapped entry. If it is
                 // gone, stop offering the route and say so.
                 deviceAvailable = withContext(Dispatchers.IO) { runCatching { deviceReady() }.getOrDefault(false) }
                 if (!deviceAvailable) {
-                    error = "The device key is no longer valid. Unlock with the passphrase."
+                    error = strings.deviceKeyInvalid
                     runCatching { markDeviceRevoked() }
                 }
             }
@@ -321,7 +321,7 @@ fun App() {
             val result = withContext(Dispatchers.IO) { runCatching { forgetDevice() } }
             result.onSuccess {
                 deviceAvailable = false
-                notice = if (it) "This device no longer opens the archive." else "No device key was stored."
+                notice = if (it) strings.deviceForgotten else strings.noDeviceKey
             }.onFailure { notice = it.message ?: it.toString() }
         }
     }
@@ -358,7 +358,7 @@ fun App() {
                     Text("Bonk", style = MaterialTheme.typography.headlineLarge)
                     Spacer(Modifier.height(8.dp))
                     Text(
-                        text = "Local-first e-invoicing",
+                        text = strings.tagline,
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -546,7 +546,7 @@ fun App() {
                                     onBack = { screen = Screen.Unlocked },
                                     onRestored = {
                                         summary = it
-                                        notice = "Archive restored."
+                                        notice = strings.archiveRestored
                                         screen = Screen.Unlocked
                                     },
                                     onLocked = {
@@ -595,17 +595,22 @@ private fun CreateForm(
     onRemember: (Boolean) -> Unit,
     onSubmit: () -> Unit,
 ) {
-    Text("Create your archive", style = MaterialTheme.typography.titleLarge)
+    Text(strings.createTitle, style = MaterialTheme.typography.titleLarge)
     Spacer(Modifier.height(8.dp))
     Text(
-        text = "The passphrase protects the archive on this device. There is no way to recover it if it is lost.",
+        text = strings.createNote,
         style = MaterialTheme.typography.bodyMedium,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
     Spacer(Modifier.height(20.dp))
-    PasswordField(value = passphrase, label = "Passphrase", enabled = !busy, onChange = onPassphrase)
+    PasswordField(value = passphrase, label = strings.passphrase, enabled = !busy, onChange = onPassphrase)
     Spacer(Modifier.height(12.dp))
-    PasswordField(value = confirmation, label = "Repeat passphrase", enabled = !busy, onChange = onConfirmation)
+    PasswordField(
+        value = confirmation,
+        label = strings.repeatPassphrase,
+        enabled = !busy,
+        onChange = onConfirmation,
+    )
     Spacer(Modifier.height(8.dp))
     ErrorText(error)
     Spacer(Modifier.height(8.dp))
@@ -615,10 +620,10 @@ private fun CreateForm(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Checkbox(checked = remember, onCheckedChange = onRemember, enabled = !busy)
-            Text("Remember this device", style = MaterialTheme.typography.bodyMedium)
+            Text(strings.rememberDevice, style = MaterialTheme.typography.bodyMedium)
         }
         Text(
-            text = "Unlocks with your fingerprint or face next time. The passphrase still works.",
+            text = strings.rememberNote,
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -629,7 +634,7 @@ private fun CreateForm(
         enabled = !busy,
         modifier = Modifier.fillMaxWidth(),
     ) {
-        Text(if (busy) "Creating..." else "Create archive")
+        Text(if (busy) strings.creating else strings.createArchive)
     }
 }
 
@@ -646,21 +651,21 @@ private fun ResetForm(
     onSubmit: () -> Unit,
     onBack: () -> Unit,
 ) {
-    Text("Reset the passphrase", style = MaterialTheme.typography.titleLarge)
+    Text(strings.resetTitle, style = MaterialTheme.typography.titleLarge)
     Spacer(Modifier.height(8.dp))
     Text(
-        text = "Enter the recovery key you wrote down. It will be spent, and a new one will be shown.",
+        text = strings.resetNote,
         style = MaterialTheme.typography.bodyMedium,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
     Spacer(Modifier.height(20.dp))
-    PasswordField(value = recoveryKey, label = "Recovery key", enabled = !busy, onChange = onRecoveryKey)
+    PasswordField(value = recoveryKey, label = strings.recoveryKey, enabled = !busy, onChange = onRecoveryKey)
     Spacer(Modifier.height(12.dp))
-    PasswordField(value = passphrase, label = "New passphrase", enabled = !busy, onChange = onPassphrase)
+    PasswordField(value = passphrase, label = strings.newPassphrase, enabled = !busy, onChange = onPassphrase)
     Spacer(Modifier.height(12.dp))
     PasswordField(
         value = confirmation,
-        label = "Repeat new passphrase",
+        label = strings.repeatNewPassphrase,
         enabled = !busy,
         onChange = onConfirmation,
     )
@@ -668,10 +673,10 @@ private fun ResetForm(
     ErrorText(error)
     Spacer(Modifier.height(8.dp))
     Button(onClick = onSubmit, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
-        Text(if (busy) "Resetting..." else "Reset passphrase")
+        Text(if (busy) strings.resetting else strings.resetAction)
     }
     TextButton(onClick = onBack, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
-        Text("Back")
+        Text(strings.back)
     }
 }
 
@@ -684,32 +689,32 @@ private fun AddRecoveryForm(
     onSubmit: () -> Unit,
     onBack: () -> Unit,
 ) {
-    Text("Add a recovery key", style = MaterialTheme.typography.titleLarge)
+    Text(strings.addRecoveryTitle, style = MaterialTheme.typography.titleLarge)
     Spacer(Modifier.height(8.dp))
     Text(
-        text = "Enter the current passphrase. The recovery key is shown once and replaces any earlier one.",
+        text = strings.addRecoveryNote,
         style = MaterialTheme.typography.bodyMedium,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
     Spacer(Modifier.height(20.dp))
-    PasswordField(value = passphrase, label = "Passphrase", enabled = !busy, onChange = onPassphrase)
+    PasswordField(value = passphrase, label = strings.passphrase, enabled = !busy, onChange = onPassphrase)
     Spacer(Modifier.height(8.dp))
     ErrorText(error)
     Spacer(Modifier.height(8.dp))
     Button(onClick = onSubmit, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
-        Text(if (busy) "Creating..." else "Create recovery key")
+        Text(if (busy) strings.creating else strings.createRecoveryKey)
     }
     TextButton(onClick = onBack, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
-        Text("Back")
+        Text(strings.back)
     }
 }
 
 @Composable
 private fun RecoveryKeyShown(key: String, notice: String?, onDone: () -> Unit) {
-    Text("Write down this recovery key", style = MaterialTheme.typography.titleLarge)
+    Text(strings.recoveryShownTitle, style = MaterialTheme.typography.titleLarge)
     Spacer(Modifier.height(8.dp))
     Text(
-        text = "This is the only way back in if you forget the passphrase. It is shown once.",
+        text = strings.recoveryShownNote,
         style = MaterialTheme.typography.bodyMedium,
         color = MaterialTheme.colorScheme.error,
     )
@@ -728,7 +733,7 @@ private fun RecoveryKeyShown(key: String, notice: String?, onDone: () -> Unit) {
     }
     Spacer(Modifier.height(12.dp))
     Text(
-        text = "Keep it somewhere other than this device. Anyone with this key can reset the passphrase.",
+        text = strings.recoveryKeep,
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
@@ -742,7 +747,7 @@ private fun RecoveryKeyShown(key: String, notice: String?, onDone: () -> Unit) {
     }
     Spacer(Modifier.height(16.dp))
     Button(onClick = onDone, modifier = Modifier.fillMaxWidth()) {
-        Text("I wrote it down")
+        Text(strings.wroteItDown)
     }
 }
 
@@ -757,15 +762,15 @@ private fun UnlockForm(
     onUnlockWithDevice: () -> Unit,
     onForgot: () -> Unit,
 ) {
-    Text("Unlock your archive", style = MaterialTheme.typography.titleLarge)
+    Text(strings.unlockTitle, style = MaterialTheme.typography.titleLarge)
     Spacer(Modifier.height(8.dp))
     Text(
-        text = "Enter the passphrase you chose for this device.",
+        text = strings.unlockNote,
         style = MaterialTheme.typography.bodyMedium,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
     Spacer(Modifier.height(20.dp))
-    PasswordField(value = passphrase, label = "Passphrase", enabled = !busy, onChange = onPassphrase)
+    PasswordField(value = passphrase, label = strings.passphrase, enabled = !busy, onChange = onPassphrase)
     Spacer(Modifier.height(8.dp))
     ErrorText(error)
     Spacer(Modifier.height(8.dp))
@@ -774,7 +779,7 @@ private fun UnlockForm(
         enabled = !busy,
         modifier = Modifier.fillMaxWidth(),
     ) {
-        Text(if (busy) "Unlocking..." else "Unlock")
+        Text(if (busy) strings.unlocking else strings.unlock)
     }
     if (deviceAvailable) {
         Spacer(Modifier.height(12.dp))
@@ -783,18 +788,18 @@ private fun UnlockForm(
             enabled = !busy,
             modifier = Modifier.fillMaxWidth(),
         ) {
-            Text("Unlock with device")
+            Text(strings.unlockWithDevice)
         }
         Spacer(Modifier.height(6.dp))
         Text(
-            text = "Uses your fingerprint or face. The passphrase still works.",
+            text = strings.unlockWithDeviceNote,
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
     Spacer(Modifier.height(4.dp))
     TextButton(onClick = onForgot, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
-        Text("Forgot passphrase?")
+        Text(strings.forgotPassphrase)
     }
 }
 
@@ -812,15 +817,15 @@ private fun Unlocked(
     onBackup: () -> Unit,
     onSettings: () -> Unit,
 ) {
-    Text("Unlocked", style = MaterialTheme.typography.titleLarge)
+    Text(strings.unlocked, style = MaterialTheme.typography.titleLarge)
     Spacer(Modifier.height(16.dp))
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceEvenly,
     ) {
-        Metric("Sellers", summary.sellers)
-        Metric("Drafts", summary.drafts)
-        Metric("Schema", summary.schemaVersion)
+        Metric(strings.sellers, summary.sellers)
+        Metric(strings.drafts, summary.drafts)
+        Metric(strings.schema, summary.schemaVersion)
     }
     if (notice != null) {
         Spacer(Modifier.height(12.dp))
@@ -835,36 +840,36 @@ private fun Unlocked(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Button(onClick = onCustomers, modifier = Modifier.weight(1f)) { Text("Customers") }
-        Button(onClick = onDrafts, modifier = Modifier.weight(1f)) { Text("Drafts") }
+        Button(onClick = onCustomers, modifier = Modifier.weight(1f)) { Text(strings.customers) }
+        Button(onClick = onDrafts, modifier = Modifier.weight(1f)) { Text(strings.drafts) }
     }
     Spacer(Modifier.height(8.dp))
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Button(onClick = onDocuments, modifier = Modifier.weight(1f)) { Text("Documents") }
-        Button(onClick = onImport, modifier = Modifier.weight(1f)) { Text("Import invoice") }
+        Button(onClick = onDocuments, modifier = Modifier.weight(1f)) { Text(strings.documents) }
+        Button(onClick = onImport, modifier = Modifier.weight(1f)) { Text(strings.importInvoice) }
     }
     Spacer(Modifier.height(8.dp))
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Button(onClick = onBackup, modifier = Modifier.weight(1f)) { Text("Backup") }
-        Button(onClick = onSettings, modifier = Modifier.weight(1f)) { Text("Settings") }
+        Button(onClick = onBackup, modifier = Modifier.weight(1f)) { Text(strings.backup) }
+        Button(onClick = onSettings, modifier = Modifier.weight(1f)) { Text(strings.settings) }
     }
     Spacer(Modifier.height(8.dp))
     Button(
         onClick = onLock,
         modifier = Modifier.fillMaxWidth(),
     ) {
-        Text("Lock")
+        Text(strings.lock)
     }
     if (deviceAvailable) {
         Spacer(Modifier.height(4.dp))
         TextButton(onClick = onForgetDevice, modifier = Modifier.fillMaxWidth()) {
-            Text("Forget this device")
+            Text(strings.forgetDevice)
         }
     }
 }
@@ -905,13 +910,13 @@ private fun ErrorText(error: String?) {
 @Composable
 private fun Diagnostics(modifier: Modifier = Modifier, onInteraction: () -> Unit = {}) {
     var expanded by remember { mutableStateOf(false) }
-    var keystoreResult by remember { mutableStateOf("not run") }
+    var keystoreResult by remember { mutableStateOf(strings.notRun) }
     var keystoreBusy by remember { mutableStateOf(false) }
-    var argonResult by remember { mutableStateOf("not run") }
+    var argonResult by remember { mutableStateOf(strings.notRun) }
     var argonBusy by remember { mutableStateOf(false) }
-    var artefactResult by remember { mutableStateOf("not run") }
+    var artefactResult by remember { mutableStateOf(strings.notRun) }
     var artefactBusy by remember { mutableStateOf(false) }
-    var canaryResult by remember { mutableStateOf("not run") }
+    var canaryResult by remember { mutableStateOf(strings.notRun) }
     var canaryBusy by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
@@ -920,20 +925,20 @@ private fun Diagnostics(modifier: Modifier = Modifier, onInteraction: () -> Unit
             expanded = !expanded
             onInteraction()
         }) {
-            Text(if (expanded) "Hide diagnostics" else "Diagnostics")
+            Text(if (expanded) strings.hideDiagnostics else strings.diagnostics)
         }
         if (!expanded) return@Column
 
         Card {
             Column(modifier = Modifier.padding(20.dp)) {
                 ProbeButton(
-                    label = "Run S3 Keystore test",
+                    label = strings.runKeystore,
                     busy = keystoreBusy,
                     result = keystoreResult,
                     onInteraction = onInteraction,
                     onRun = {
                         keystoreBusy = true
-                        keystoreResult = "waiting for authentication..."
+                        keystoreResult = strings.waitingForAuth
                         scope.launch {
                             keystoreResult = withContext(Dispatchers.IO) {
                                 runCatching { runKeystoreTest() }.getOrElse { it.message ?: it.toString() }
@@ -944,13 +949,13 @@ private fun Diagnostics(modifier: Modifier = Modifier, onInteraction: () -> Unit
                 )
                 Spacer(Modifier.height(12.dp))
                 ProbeButton(
-                    label = "Bench Argon2 (64 MiB)",
+                    label = strings.benchArgon,
                     busy = argonBusy,
                     result = argonResult,
                     onInteraction = onInteraction,
                     onRun = {
                         argonBusy = true
-                        argonResult = "running 64 MiB Argon2id..."
+                        argonResult = strings.runningArgon
                         scope.launch {
                             argonResult = withContext(Dispatchers.IO) {
                                 runCatching { runArgon2Benchmark() }.getOrElse { it.message ?: it.toString() }
@@ -961,13 +966,13 @@ private fun Diagnostics(modifier: Modifier = Modifier, onInteraction: () -> Unit
                 )
                 Spacer(Modifier.height(12.dp))
                 ProbeButton(
-                    label = "Hash UBL + PDF",
+                    label = strings.hashArtefacts,
                     busy = artefactBusy,
                     result = artefactResult,
                     onInteraction = onInteraction,
                     onRun = {
                         artefactBusy = true
-                        artefactResult = "hashing UBL and PDF..."
+                        artefactResult = strings.hashingArtefacts
                         scope.launch {
                             artefactResult = withContext(Dispatchers.IO) {
                                 runCatching { runArtefactHashes() }.getOrElse { it.message ?: it.toString() }
@@ -978,13 +983,13 @@ private fun Diagnostics(modifier: Modifier = Modifier, onInteraction: () -> Unit
                 )
                 Spacer(Modifier.height(12.dp))
                 ProbeButton(
-                    label = "Canary scan",
+                    label = strings.canary,
                     busy = canaryBusy,
                     result = canaryResult,
                     onInteraction = onInteraction,
                     onRun = {
                         canaryBusy = true
-                        canaryResult = "scanning database, WAL, and keystore..."
+                        canaryResult = strings.scanning
                         scope.launch {
                             canaryResult = withContext(Dispatchers.IO) {
                                 runCatching { runCanaryScan() }.getOrElse { it.message ?: it.toString() }
