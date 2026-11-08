@@ -213,10 +213,16 @@ jobs:
           api-level: 33
           target: google_apis
           arch: x86_64
-          profile: pixel_tablet
           disable-animations: true
-          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
+          emulator-boot-timeout: 900
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none -camera-front none
           script: |
+            # A phone profile boots far more reliably than a tablet one under the
+            # runner's software renderer. The screenshots are drawn at one pixel
+            # per dp in a 1280x800 box, so the display is widened to fit them
+            # rather than taking a tablet's native resolution.
+            adb shell wm size 1800x1200
+            sleep 3
             export BONK_APK=mobile/apks/androidApp-debug.apk
             export BONK_TEST_APK=mobile/apks/androidApp-debug-androidTest.apk
             sh tools/run-android-test.sh - com.github.sdgoij.bonk.ArtefactDeterminismTest
