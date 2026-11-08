@@ -10,6 +10,12 @@ data class ArchiveSummary(
 /** A failure with a message the lock screen can show. */
 class ArchiveException(message: String) : Exception(message)
 
+/** The outcome of a recovery-key reset. */
+data class RecoveryResult(
+    val summary: ArchiveSummary,
+    val replacementKey: String,
+)
+
 /** True when both files of an archive exist in app storage. */
 expect fun archiveExists(): Boolean
 
@@ -30,6 +36,12 @@ expect fun rememberDevice(passphrase: String)
 
 /** Removes the device key. False when there was none. */
 expect fun forgetDevice(): Boolean
+
+/** Replaces a forgotten passphrase with the recovery key. */
+expect fun resetPassphrase(recoveryKey: String, newPassphrase: String): RecoveryResult
+
+/** Adds or replaces the recovery key, returning the secret to show once. */
+expect fun addRecoveryKey(passphrase: String): String
 
 /** Drops the open archive and zeroizes its key. */
 expect fun lockArchive()

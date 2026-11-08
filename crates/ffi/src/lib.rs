@@ -110,6 +110,8 @@ pub struct ArchiveSummary {
 #[derive(uniffi::Object)]
 pub struct Archive {
     inner: Mutex<Option<AppArchive>>,
+    /// The replacement recovery key from a reset, handed to the caller once.
+    replacement_key: Mutex<Option<String>>,
 }
 
 #[uniffi::export]
@@ -123,6 +125,7 @@ impl Archive {
         let archive = AppArchive::create(database_path, keystore_path, &passphrase)?;
         Ok(Arc::new(Self {
             inner: Mutex::new(Some(archive)),
+            replacement_key: Mutex::new(None),
         }))
     }
 
@@ -132,6 +135,7 @@ impl Archive {
         let archive = AppArchive::unlock(database_path, keystore_path, &passphrase)?;
         Ok(Arc::new(Self {
             inner: Mutex::new(Some(archive)),
+            replacement_key: Mutex::new(None),
         }))
     }
 
@@ -146,6 +150,27 @@ impl Archive {
         let archive = AppArchive::unlock_with_device(database_path, keystore_path, &adapter)?;
         Ok(Arc::new(Self {
             inner: Mutex::new(Some(archive)),
+            replacement_key: Mutex::new(None),
+        }))
+    }
+
+    /// Replaces a forgotten passphrase with the recovery key.
+    ///
+    /// The new archive is returned and the replacement recovery key is kept for
+    /// [`Self::take_replacement_key`], so the caller can show it once before the
+    /// user continues.
+    #[uniffi::constructor]
+    pub fn reset_passphrase(
+        database_path: String,
+        keystore_path: String,
+        recovery_key: String,
+        new_passphrase: String,
+    ) -> Result<Arc<Self>, AppError> {
+        let (archive, replacement) =
+            AppArchive::reset_passphrase(database_path, keystore_path, &recovery_key, &new_passphrase)?;
+        Ok(Arc::new(Self {
+            inner: Mutex::new(Some(archive)),
+            replacement_key: Mutex::new(Some(replacement)),
         }))
     }
 
@@ -183,6 +208,18 @@ impl Archive {
         if let Ok(mut guard) = self.inner.lock() {
             *guard = None;
         }
+    }
+
+    /// Adds or replaces the recovery key, returning the secret to show once.
+    pub fn add_recovery_key(&self, passphrase: String) -> Result<String, AppError> {
+        let guard = self.inner.lock().map_err(|_| AppError::Closed)?;
+        let archive = guard.as_ref().ok_or(AppError::Closed)?;
+        Ok(archive.add_recovery_key(&passphrase)?)
+    }
+
+    /// Returns and clears the replacement recovery key from a reset.
+    pub fn take_replacement_key(&self) -> Option<String> {
+        self.replacement_key.lock().ok()?.take()
     }
 
     /// The database file this archive was opened from.
@@ -686,6 +723,28 @@ mod tests {
 
         let reopened = Archive::open(database, keystore, "passphrase".to_owned()).expect("an existing archive");
         assert_eq!(reopened.summary().expect("a summary").sellers, 0);
+    }
+
+    #[test]
+    fn a_recovery_key_resets_the_passphrase() {
+        let directory = tempfile::TempDir::new().expect("a temporary directory");
+        let database = directory.path().join("bonk.db").display().to_string();
+        let keystore = directory.path().join("keystore.bin").display().to_string();
+
+        let archive = Archive::create(database.clone(), keystore.clone(), "old".to_owned()).expect("a new archive");
+        let recovery = archive.add_recovery_key("old".to_owned()).expect("a recovery key");
+
+        let reset = Archive::reset_passphrase(database.clone(), keystore.clone(), recovery, "new".to_owned())
+            .expect("a reset archive");
+        let replacement = reset.take_replacement_key().expect("the replacement key");
+        assert!(!replacement.is_empty());
+        assert!(reset.take_replacement_key().is_none(), "the key is shown once");
+
+        assert!(matches!(
+            Archive::open(database.clone(), keystore.clone(), "old".to_owned()),
+            Err(AppError::WrongPassphrase)
+        ));
+        assert!(Archive::open(database, keystore, "new".to_owned()).is_ok());
     }
 
     #[test]

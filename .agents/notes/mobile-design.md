@@ -1317,8 +1317,8 @@ single place to update progress; the tables stay as the plan.
 #### M11.2 — Unlock and security (2 weeks)
 
 - [x] Create and open with a passphrase; create twice-checks the phrase, and a wrong passphrase is reported by variant
-- [ ] Passphrase reset with the recovery key
-- [ ] Recovery-key flow (show once, reset, rotate)
+- [x] Passphrase reset with the recovery key; a used key is spent and the replacement is shown once
+- [x] Recovery-key flow: generated at create, rotatable from the unlocked screen, reset from the lock screen
 - [x] Remember-device through the Android Keystore; passphrase fallback, and forget records the audit event
 - [ ] Physical fingerprint and enrolment-change invalidation on a device
 - [x] Lock drops the archive and zeroizes the DEK; activity destruction closes the handle

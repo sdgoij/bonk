@@ -79,7 +79,8 @@ On Linux/macOS the host cdylib is `target/debug/libbonkc.so` or
 ## Lock and create flow
 
 On first launch the app offers **Create your archive**; the passphrase is typed
-twice. Creating it opens the archive and shows seller, draft, and schema counts.
+twice. Creating it generates a recovery key that must be written down and
+acknowledged, then shows seller, draft, and schema counts.
 **Lock** drops the key and returns to the unlock screen. Relaunching checks for
 the two files and offers the unlock screen rather than create again.
 
@@ -114,6 +115,23 @@ enrolment-change invalidation remain in the device matrix.
 The archive also locks five minutes after unlock. The activity sets
 `FLAG_SECURE` and disables the recents screenshot, and a configuration change
 destroys the activity and closes the handle.
+
+## Recovery key
+
+Creating an archive generates a recovery key and shows it once, in eight
+groups. The screen refuses to continue until **I wrote it down** is pressed.
+The unlocked screen's **Add recovery key** asks for the current passphrase and
+replaces the key, showing the new one once.
+
+If the passphrase is forgotten, **Forgot passphrase?** on the unlock screen
+takes the recovery key and a new passphrase. The used key is spent, a replacement
+key is shown once, and the archive opens with the new passphrase. A wrong key
+reports “that recovery key does not open this archive” and leaves the archive
+untouched.
+
+On the API 37 x86_64 AVD: create showed a key, the reset flow accepted it and
+showed the replacement, the old passphrase then failed, the new one opened the
+archive, and **Add recovery key** rotated the key again.
 
 ## S4 Argon2 benchmark
 

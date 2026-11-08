@@ -72,6 +72,22 @@ object MobileArchiveHost {
         opened.rememberDevice(passphrase, KeystoreHost.deviceStore())
     }
 
+    fun addRecoveryKey(passphrase: String): String {
+        val opened = archive ?: error("the archive is not open")
+        return opened.addRecoveryKey(passphrase)
+    }
+
+    fun resetPassphrase(recoveryKey: String, newPassphrase: String): RecoveryResult {
+        require(recoveryKey.isNotBlank()) { "enter the recovery key" }
+        require(newPassphrase.isNotEmpty()) { "choose a new passphrase" }
+        val (database, keystore) = paths()
+        archive?.close()
+        val opened = Archive.resetPassphrase(database, keystore, recoveryKey, newPassphrase)
+        archive = opened
+        val replacement = opened.takeReplacementKey() ?: error("the replacement key is missing")
+        return RecoveryResult(opened.summary().toCommon(), replacement)
+    }
+
     fun forgetDevice(): Boolean {
         val opened = archive ?: error("the archive is not open")
         return opened.forgetDevice(KeystoreHost.deviceStore())
@@ -111,6 +127,14 @@ actual fun rememberDevice(passphrase: String) = withUserError {
 
 actual fun forgetDevice(): Boolean = withUserError {
     MobileArchiveHost.forgetDevice()
+}
+
+actual fun resetPassphrase(recoveryKey: String, newPassphrase: String): RecoveryResult = withUserError {
+    MobileArchiveHost.resetPassphrase(recoveryKey, newPassphrase)
+}
+
+actual fun addRecoveryKey(passphrase: String): String = withUserError {
+    MobileArchiveHost.addRecoveryKey(passphrase)
 }
 
 actual fun lockArchive() = MobileArchiveHost.lock()

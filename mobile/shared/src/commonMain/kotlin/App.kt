@@ -32,6 +32,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
@@ -60,6 +61,9 @@ private sealed interface Screen {
     data object Checking : Screen
     data object Create : Screen
     data object Unlock : Screen
+    data object Reset : Screen
+    data class AddRecovery(val summary: ArchiveSummary) : Screen
+    data class RecoveryKey(val summary: ArchiveSummary, val key: String) : Screen
     data class Unlocked(val summary: ArchiveSummary) : Screen
 }
 
@@ -68,6 +72,7 @@ fun App() {
     var screen by remember { mutableStateOf<Screen>(Screen.Checking) }
     var passphrase by remember { mutableStateOf("") }
     var confirmation by remember { mutableStateOf("") }
+    var recoveryKey by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
     var notice by remember { mutableStateOf<String?>(null) }
     var deviceAvailable by remember { mutableStateOf(false) }
@@ -85,14 +90,15 @@ fun App() {
         screen = if (state.first) Screen.Unlock else Screen.Create
     }
 
-    // Lock after five minutes unlocked. A configuration change also closes the
-    // handle through the activity's onDestroy.
+    // Lock after five minutes while the archive is open. A configuration change
+    // also closes the handle through the activity's onDestroy.
     LaunchedEffect(screen) {
-        if (screen is Screen.Unlocked) {
+        if (screen is Screen.Unlocked || screen is Screen.AddRecovery) {
             delay(5 * 60 * 1000L)
             lockArchive()
             passphrase = ""
             confirmation = ""
+            recoveryKey = ""
             screen = Screen.Unlock
         }
     }
@@ -145,12 +151,68 @@ fun App() {
                             (remembered.exceptionOrNull()?.message ?: "unknown error")
                     }
                 }
+                val summary = result.getOrThrow()
+                val recovery = withContext(Dispatchers.IO) { runCatching { addRecoveryKey(chosen) } }
                 passphrase = ""
                 confirmation = ""
-                screen = Screen.Unlocked(result.getOrThrow())
+                screen = if (recovery.isSuccess) {
+                    Screen.RecoveryKey(summary, recovery.getOrThrow())
+                } else {
+                    notice = "The archive was created, but no recovery key was generated: " +
+                        (recovery.exceptionOrNull()?.message ?: "unknown error")
+                    Screen.Unlocked(summary)
+                }
             } else {
                 fail(result.exceptionOrNull() ?: IllegalStateException("unknown error"))
             }
+            busy = false
+        }
+    }
+
+    fun reset() {
+        if (recoveryKey.isBlank()) {
+            error = "Enter the recovery key."
+            return
+        }
+        if (passphrase.isEmpty()) {
+            error = "Choose a new passphrase."
+            return
+        }
+        if (passphrase != confirmation) {
+            error = "The new passphrases do not match."
+            return
+        }
+        val key = recoveryKey
+        val phrase = passphrase
+        busy = true
+        error = null
+        scope.launch {
+            val result = withContext(Dispatchers.IO) { runCatching { resetPassphrase(key, phrase) } }
+            result.onSuccess {
+                recoveryKey = ""
+                passphrase = ""
+                confirmation = ""
+                screen = Screen.RecoveryKey(it.summary, it.replacementKey)
+            }.onFailure(::fail)
+            busy = false
+        }
+    }
+
+    fun addRecovery() {
+        if (passphrase.isEmpty()) {
+            error = "Enter the current passphrase."
+            return
+        }
+        val current = screen as? Screen.AddRecovery ?: return
+        val phrase = passphrase
+        busy = true
+        error = null
+        scope.launch {
+            val result = withContext(Dispatchers.IO) { runCatching { addRecoveryKey(phrase) } }
+            result.onSuccess {
+                passphrase = ""
+                screen = Screen.RecoveryKey(current.summary, it)
+            }.onFailure(::fail)
             busy = false
         }
     }
@@ -241,6 +303,60 @@ fun App() {
                                     },
                                     onSubmit = ::unlock,
                                     onUnlockWithDevice = ::unlockWithDevice,
+                                    onForgot = {
+                                        recoveryKey = ""
+                                        passphrase = ""
+                                        confirmation = ""
+                                        error = null
+                                        screen = Screen.Reset
+                                    },
+                                )
+                                Screen.Reset -> ResetForm(
+                                    recoveryKey = recoveryKey,
+                                    passphrase = passphrase,
+                                    confirmation = confirmation,
+                                    busy = busy,
+                                    error = error,
+                                    onRecoveryKey = {
+                                        recoveryKey = it
+                                        error = null
+                                    },
+                                    onPassphrase = {
+                                        passphrase = it
+                                        error = null
+                                    },
+                                    onConfirmation = {
+                                        confirmation = it
+                                        error = null
+                                    },
+                                    onSubmit = ::reset,
+                                    onBack = {
+                                        recoveryKey = ""
+                                        passphrase = ""
+                                        confirmation = ""
+                                        error = null
+                                        screen = Screen.Unlock
+                                    },
+                                )
+                                is Screen.AddRecovery -> AddRecoveryForm(
+                                    passphrase = passphrase,
+                                    busy = busy,
+                                    error = error,
+                                    onPassphrase = {
+                                        passphrase = it
+                                        error = null
+                                    },
+                                    onSubmit = ::addRecovery,
+                                    onBack = {
+                                        passphrase = ""
+                                        error = null
+                                        screen = Screen.Unlocked(current.summary)
+                                    },
+                                )
+                                is Screen.RecoveryKey -> RecoveryKeyShown(
+                                    key = current.key,
+                                    notice = notice,
+                                    onDone = { screen = Screen.Unlocked(current.summary) },
                                 )
                                 is Screen.Unlocked -> Unlocked(
                                     summary = current.summary,
@@ -249,10 +365,17 @@ fun App() {
                                     onLock = {
                                         lockArchive()
                                         passphrase = ""
+                                        confirmation = ""
+                                        recoveryKey = ""
                                         error = null
                                         screen = Screen.Unlock
                                     },
                                     onForgetDevice = ::forgetDeviceKey,
+                                    onAddRecovery = {
+                                        passphrase = ""
+                                        error = null
+                                        screen = Screen.AddRecovery(current.summary)
+                                    },
                                 )
                             }
                         }
@@ -317,6 +440,119 @@ private fun CreateForm(
 }
 
 @Composable
+private fun ResetForm(
+    recoveryKey: String,
+    passphrase: String,
+    confirmation: String,
+    busy: Boolean,
+    error: String?,
+    onRecoveryKey: (String) -> Unit,
+    onPassphrase: (String) -> Unit,
+    onConfirmation: (String) -> Unit,
+    onSubmit: () -> Unit,
+    onBack: () -> Unit,
+) {
+    Text("Reset the passphrase", style = MaterialTheme.typography.titleLarge)
+    Spacer(Modifier.height(8.dp))
+    Text(
+        text = "Enter the recovery key you wrote down. It will be spent, and a new one will be shown.",
+        style = MaterialTheme.typography.bodyMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    Spacer(Modifier.height(20.dp))
+    PasswordField(value = recoveryKey, label = "Recovery key", enabled = !busy, onChange = onRecoveryKey)
+    Spacer(Modifier.height(12.dp))
+    PasswordField(value = passphrase, label = "New passphrase", enabled = !busy, onChange = onPassphrase)
+    Spacer(Modifier.height(12.dp))
+    PasswordField(
+        value = confirmation,
+        label = "Repeat new passphrase",
+        enabled = !busy,
+        onChange = onConfirmation,
+    )
+    Spacer(Modifier.height(8.dp))
+    ErrorText(error)
+    Spacer(Modifier.height(8.dp))
+    Button(onClick = onSubmit, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
+        Text(if (busy) "Resetting..." else "Reset passphrase")
+    }
+    TextButton(onClick = onBack, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
+        Text("Back")
+    }
+}
+
+@Composable
+private fun AddRecoveryForm(
+    passphrase: String,
+    busy: Boolean,
+    error: String?,
+    onPassphrase: (String) -> Unit,
+    onSubmit: () -> Unit,
+    onBack: () -> Unit,
+) {
+    Text("Add a recovery key", style = MaterialTheme.typography.titleLarge)
+    Spacer(Modifier.height(8.dp))
+    Text(
+        text = "Enter the current passphrase. The recovery key is shown once and replaces any earlier one.",
+        style = MaterialTheme.typography.bodyMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    Spacer(Modifier.height(20.dp))
+    PasswordField(value = passphrase, label = "Passphrase", enabled = !busy, onChange = onPassphrase)
+    Spacer(Modifier.height(8.dp))
+    ErrorText(error)
+    Spacer(Modifier.height(8.dp))
+    Button(onClick = onSubmit, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
+        Text(if (busy) "Creating..." else "Create recovery key")
+    }
+    TextButton(onClick = onBack, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
+        Text("Back")
+    }
+}
+
+@Composable
+private fun RecoveryKeyShown(key: String, notice: String?, onDone: () -> Unit) {
+    Text("Write down this recovery key", style = MaterialTheme.typography.titleLarge)
+    Spacer(Modifier.height(8.dp))
+    Text(
+        text = "This is the only way back in if you forget the passphrase. It is shown once.",
+        style = MaterialTheme.typography.bodyMedium,
+        color = MaterialTheme.colorScheme.error,
+    )
+    Spacer(Modifier.height(16.dp))
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        shape = MaterialTheme.shapes.medium,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Text(
+            text = key,
+            modifier = Modifier.padding(16.dp),
+            fontFamily = FontFamily.Monospace,
+            style = MaterialTheme.typography.bodyLarge,
+        )
+    }
+    Spacer(Modifier.height(12.dp))
+    Text(
+        text = "Keep it somewhere other than this device. Anyone with this key can reset the passphrase.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    if (notice != null) {
+        Spacer(Modifier.height(8.dp))
+        Text(
+            text = notice,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+    Spacer(Modifier.height(16.dp))
+    Button(onClick = onDone, modifier = Modifier.fillMaxWidth()) {
+        Text("I wrote it down")
+    }
+}
+
+@Composable
 private fun UnlockForm(
     passphrase: String,
     deviceAvailable: Boolean,
@@ -325,6 +561,7 @@ private fun UnlockForm(
     onPassphrase: (String) -> Unit,
     onSubmit: () -> Unit,
     onUnlockWithDevice: () -> Unit,
+    onForgot: () -> Unit,
 ) {
     Text("Unlock your archive", style = MaterialTheme.typography.titleLarge)
     Spacer(Modifier.height(8.dp))
@@ -361,6 +598,10 @@ private fun UnlockForm(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
+    Spacer(Modifier.height(4.dp))
+    TextButton(onClick = onForgot, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
+        Text("Forgot passphrase?")
+    }
 }
 
 @Composable
@@ -370,6 +611,7 @@ private fun Unlocked(
     notice: String?,
     onLock: () -> Unit,
     onForgetDevice: () -> Unit,
+    onAddRecovery: () -> Unit,
 ) {
     Text("Unlocked", style = MaterialTheme.typography.titleLarge)
     Spacer(Modifier.height(16.dp))
@@ -401,6 +643,9 @@ private fun Unlocked(
         TextButton(onClick = onForgetDevice, modifier = Modifier.fillMaxWidth()) {
             Text("Forget this device")
         }
+    }
+    TextButton(onClick = onAddRecovery, modifier = Modifier.fillMaxWidth()) {
+        Text("Add recovery key")
     }
 }
 
