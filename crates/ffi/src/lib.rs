@@ -10,7 +10,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use application::{
-    Archive as AppArchive, CustomerDto, DraftDto, DraftLineDto, DraftTotalsDto, FindingDto, PrecedingInvoiceDto,
+    Archive as AppArchive, CustomerDto, CustomerImportDto, DraftDto, DraftLineDto, DraftTotalsDto, FindingDto,
+    PrecedingInvoiceDto,
 };
 use argon2::{Algorithm, Argon2, Params, Version};
 use crux::{
@@ -262,6 +263,27 @@ impl From<CustomerRecord> for CustomerDto {
             contact: record.contact,
             email: record.email,
             phone: record.phone,
+        }
+    }
+}
+
+/// The result of a customer CSV import.
+#[derive(uniffi::Record)]
+pub struct CustomerImportRecord {
+    /// Customers written to the archive.
+    pub imported: i64,
+    /// Rows that were already on file.
+    pub skipped: i64,
+    /// Rows that could not be read, with the line and the reason.
+    pub errors: Vec<String>,
+}
+
+impl From<CustomerImportDto> for CustomerImportRecord {
+    fn from(dto: CustomerImportDto) -> Self {
+        Self {
+            imported: dto.imported,
+            skipped: dto.skipped,
+            errors: dto.errors,
         }
     }
 }
@@ -572,6 +594,20 @@ impl Archive {
         let guard = self.inner.lock().map_err(|_| AppError::Closed)?;
         let archive = guard.as_ref().ok_or(AppError::Closed)?;
         Ok(archive.save_customer(&CustomerDto::from(customer))?.into())
+    }
+
+    /// Exports the customer table as CSV.
+    pub fn customers_csv(&self) -> Result<String, AppError> {
+        let guard = self.inner.lock().map_err(|_| AppError::Closed)?;
+        let archive = guard.as_ref().ok_or(AppError::Closed)?;
+        Ok(archive.customers_csv()?)
+    }
+
+    /// Imports customers from CSV.
+    pub fn import_customers_csv(&self, text: String) -> Result<CustomerImportRecord, AppError> {
+        let guard = self.inner.lock().map_err(|_| AppError::Closed)?;
+        let archive = guard.as_ref().ok_or(AppError::Closed)?;
+        Ok(archive.import_customers_csv(&text)?.into())
     }
 
     /// Drops the archive and zeroizes the data key. Later calls return `Closed`.

@@ -31,6 +31,17 @@ pub struct Summary {
     pub schema_version: i64,
 }
 
+/// The result of a customer CSV import.
+#[derive(Clone, PartialEq, Eq, Debug, Default)]
+pub struct CustomerImportDto {
+    /// Customers written to the archive.
+    pub imported: i64,
+    /// Rows that were already on file.
+    pub skipped: i64,
+    /// Rows that could not be read, with the line and the reason.
+    pub errors: Vec<String>,
+}
+
 /// A customer as a front end edits it.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct CustomerDto {

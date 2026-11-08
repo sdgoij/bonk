@@ -1,5 +1,7 @@
 package com.github.sdgoij.bonk
 
+import androidx.compose.runtime.Composable
+
 /** A customer as the editor and the list use it. */
 data class Customer(
     val id: String = "",
@@ -98,6 +100,47 @@ expect fun draftTotals(draft: Draft): DraftTotals
 
 /** A new invoice draft for a customer, dated today and saved. */
 expect fun newDraft(customerId: String): Draft
+
+/** What a customer CSV import did. */
+data class CustomerImportReport(
+    val imported: Int,
+    val skipped: Int,
+    val errors: List<String>,
+)
+
+/** The customer table as CSV. */
+expect fun customersCsv(): String
+
+/** Imports customers from CSV, skipping parties already on file. */
+expect fun importCustomersCsv(text: String): CustomerImportReport
+
+/** Reading and writing a text file through the platform picker. */
+interface CsvIo {
+    /** Opens a save dialog for `suggestedName` and writes `text`. */
+    fun export(text: String, suggestedName: String)
+
+    /** Opens a file picker and passes the chosen file's text. */
+    fun pick(onText: (String) -> Unit)
+}
+
+/** The platform picker, created in a composable so Android can use its launchers. */
+@Composable
+expect fun rememberCsvIo(): CsvIo
+
+/** Lets a platform file picker suspend the background lock while it is open. */
+object PickerGuard {
+    private var depth = 0
+
+    val active: Boolean get() = depth > 0
+
+    fun enter() {
+        depth++
+    }
+
+    fun exit() {
+        if (depth > 0) depth--
+    }
+}
 
 /** A fresh identifier for a new line. */
 expect fun newId(): String

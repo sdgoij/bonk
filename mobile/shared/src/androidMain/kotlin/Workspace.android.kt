@@ -17,3 +17,8 @@ actual fun draftTotals(draft: Draft): DraftTotals = withUserError { MobileArchiv
 actual fun newDraft(customerId: String): Draft = withUserError { MobileArchiveHost.newDraft(customerId) }
 
 actual fun newId(): String = java.util.UUID.randomUUID().toString()
+
+actual fun customersCsv(): String = withUserError { MobileArchiveHost.customersCsv() }
+
+actual fun importCustomersCsv(text: String): CustomerImportReport =
+    withUserError { MobileArchiveHost.importCustomersCsv(text) }

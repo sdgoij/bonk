@@ -15,6 +15,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -45,13 +46,38 @@ fun CustomerListScreen(
     var customers by remember { mutableStateOf<List<Customer>>(emptyList()) }
     var query by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
+    var report by remember { mutableStateOf<CustomerImportReport?>(null) }
     var loading by remember { mutableStateOf(true) }
+    var refresh by remember { mutableStateOf(0) }
+    val scope = rememberCoroutineScope()
+    val csvIo = rememberCsvIo()
 
-    LaunchedEffect(Unit) {
+    LaunchedEffect(refresh) {
         withContext(Dispatchers.IO) { runCatching { listCustomers() } }
             .onSuccess { customers = it }
             .onFailure { error = it.message ?: it.toString() }
         loading = false
+    }
+
+    fun exportCsv() {
+        scope.launch {
+            val csv = withContext(Dispatchers.IO) { runCatching { customersCsv() } }
+            csv.onSuccess { csvIo.export(it, "customers.csv") }
+                .onFailure { error = it.message ?: it.toString() }
+        }
+    }
+
+    fun importCsv() {
+        csvIo.pick { text ->
+            scope.launch {
+                val result = withContext(Dispatchers.IO) { runCatching { importCustomersCsv(text) } }
+                result.onSuccess {
+                    report = it
+                    error = null
+                    refresh++
+                }.onFailure { error = it.message ?: it.toString() }
+            }
+        }
     }
 
     val visible = if (query.isBlank()) {
@@ -79,6 +105,28 @@ fun CustomerListScreen(
         Spacer(Modifier.height(8.dp))
         Button(onClick = { onInteraction(); onAdd() }, modifier = Modifier.fillMaxWidth()) {
             Text("Add customer")
+        }
+        Spacer(Modifier.height(8.dp))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(
+                onClick = { onInteraction(); importCsv() },
+                modifier = Modifier.weight(1f),
+            ) { Text("Import CSV") }
+            OutlinedButton(
+                onClick = { onInteraction(); exportCsv() },
+                modifier = Modifier.weight(1f),
+            ) { Text("Export CSV") }
+        }
+        report?.let {
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "Imported ${it.imported}, skipped ${it.skipped}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            it.errors.forEach { message ->
+                Text(message, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+            }
         }
         Spacer(Modifier.height(8.dp))
         if (loading) {

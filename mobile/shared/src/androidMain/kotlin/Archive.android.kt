@@ -160,6 +160,16 @@ object MobileArchiveHost {
         return opened.newDraft(customerId).toCommon()
     }
 
+    fun customersCsv(): String {
+        val opened = archive ?: error("the archive is not open")
+        return opened.customersCsv()
+    }
+
+    fun importCustomersCsv(text: String): CustomerImportReport {
+        val opened = archive ?: error("the archive is not open")
+        return opened.importCustomersCsv(text).toCommon()
+    }
+
     fun forgetDevice(): Boolean {
         val opened = archive ?: error("the archive is not open")
         return opened.forgetDevice(KeystoreHost.deviceStore())
@@ -283,6 +293,12 @@ private fun uniffi.bonkc.DraftTotalsRecord.toCommon() = DraftTotals(
     netMicros = netMicros,
     taxMicros = taxMicros,
     grossMicros = grossMicros,
+)
+
+private fun uniffi.bonkc.CustomerImportRecord.toCommon() = CustomerImportReport(
+    imported = imported.toInt(),
+    skipped = skipped.toInt(),
+    errors = errors,
 )
 
 actual fun archiveExists(): Boolean = MobileArchiveHost.exists()

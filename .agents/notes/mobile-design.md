@@ -1382,10 +1382,10 @@ single place to update progress; the tables stay as the plan.
 
 #### M11.3 — Customers and drafts (3 weeks)
 
-**Status 2026-11-08:** Customers and drafts are usable: list, search, create, edit, a draft list, and a compact editor with domain-computed totals and inline findings. The CSV SAF flow, the suppressions, the tap-to-focus sheet, and the desktop parity test remain.
+**Status 2026-11-08:** Customers and drafts are usable: list, search, create, edit, a draft list, and a compact editor with domain-computed totals and inline findings. Customer CSV imports and exports through the system file picker. The suppressions, the tap-to-focus findings sheet, and the desktop parity test remain.
 
 - [x] Customer list, search, create, edit
-- [ ] CSV import/export through SAF
+- [x] CSV import/export through SAF
 - [x] Draft list
 - [x] Compact editor: customer, details, lines, review
 - [x] Findings with code, BT reference, field path, and message inline

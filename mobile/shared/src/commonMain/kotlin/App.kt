@@ -120,20 +120,23 @@ fun App() {
 
     // Lock five minutes after the last interaction while the archive is open. A
     // configuration change also closes the handle through the activity's
-    // onDestroy, and LockOnBackground covers leaving the app.
+    // onDestroy, and LockOnBackground covers leaving the app. A platform file
+    // picker suspends both, so an export or import keeps the archive open.
     LaunchedEffect(screen, interactions) {
         if (screen.isArchiveContent()) {
             delay(5 * 60 * 1000L)
-            lockArchive()
-            passphrase = ""
-            confirmation = ""
-            recoveryKey = ""
-            screen = Screen.Unlock
+            if (!PickerGuard.active) {
+                lockArchive()
+                passphrase = ""
+                confirmation = ""
+                recoveryKey = ""
+                screen = Screen.Unlock
+            }
         }
     }
 
     LockOnBackground {
-        if (screen.isArchiveContent() || screen is Screen.RecoveryKey) {
+        if (!PickerGuard.active && (screen.isArchiveContent() || screen is Screen.RecoveryKey)) {
             lockArchive()
             passphrase = ""
             confirmation = ""

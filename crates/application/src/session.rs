@@ -10,7 +10,7 @@ use std::path::Path;
 use store::{Database, KdfParams, KeyStore, StoreError};
 use zeroize::Zeroizing;
 
-use crate::dto::{CustomerDto, DraftDto, DraftTotalsDto, FindingDto, Summary};
+use crate::dto::{CustomerDto, CustomerImportDto, DraftDto, DraftTotalsDto, FindingDto, Summary};
 
 /// An unlocked application session: one database, one keystore.
 pub struct Archive {
@@ -116,6 +116,23 @@ impl Archive {
             store::update_customer(self.database.connection(), &record, &now)?;
             Ok(CustomerDto::from_record(&record))
         }
+    }
+
+    /// Exports the customer table as CSV.
+    pub fn customers_csv(&self) -> Result<String, StoreError> {
+        let customers = store::list_customers(self.database.connection())?;
+        Ok(crate::customers::export(&customers))
+    }
+
+    /// Imports customers from CSV, skipping parties already on file.
+    pub fn import_customers_csv(&self, text: &str) -> Result<CustomerImportDto, StoreError> {
+        let rows = crate::customers::parse(text).map_err(StoreError::Data)?;
+        let report = crate::customers::import(&self.database, &rows, &store::now_rfc3339())?;
+        Ok(CustomerImportDto {
+            imported: report.imported as i64,
+            skipped: report.skipped as i64,
+            errors: report.errors,
+        })
     }
 
     /// Lists drafts, most recently updated first.
@@ -549,5 +566,40 @@ mod tests {
         assert_eq!(totals.net_micros, 100_000_000);
         assert_eq!(totals.tax_micros, 21_000_000);
         assert_eq!(totals.gross_micros, 121_000_000);
+    }
+
+    #[test]
+    fn customers_round_trip_through_csv() {
+        let (_directory, archive) = archive();
+        let customer = CustomerDto {
+            id: String::new(),
+            name: "Buyer BV".to_owned(),
+            street: Some("Main 1".to_owned()),
+            postal: Some("1000 AA".to_owned()),
+            city: "Utrecht".to_owned(),
+            country: "NL".to_owned(),
+            vat: Some("NL123456788B01".to_owned()),
+            kvk: None,
+            peppol: None,
+            contact: None,
+            email: None,
+            phone: None,
+        };
+        archive.save_customer(&customer).unwrap();
+
+        let csv = archive.customers_csv().unwrap();
+        assert!(csv.contains("Buyer BV"));
+
+        // The same CSV is skipped rather than duplicated.
+        let report = archive.import_customers_csv(&csv).unwrap();
+        assert_eq!(report.imported, 0);
+        assert_eq!(report.skipped, 1);
+        assert!(report.errors.is_empty(), "{report:?}");
+
+        // A new row is imported.
+        let csv = format!("{csv}New BV,Main 2,2000 BB,Delft,NL,,,,,\n");
+        let report = archive.import_customers_csv(&csv).unwrap();
+        assert_eq!(report.imported, 1, "{report:?}");
+        assert_eq!(archive.list_customers().unwrap().len(), 2);
     }
 }

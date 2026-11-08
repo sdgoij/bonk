@@ -180,6 +180,14 @@ emulator a customer and a one-line draft were created, the totals read 100.00 ne
 21.00 VAT, and 121.00 gross, the empty-draft finding disappeared once the line
 was added, and the draft was still listed after a force-stop and relaunch.
 
+The customers screen has **Import CSV** and **Export CSV**. Both use the system
+file picker: export writes the header and columns the desktop writes, and import
+skips parties already on file by VAT identifier, Peppol endpoint, or name and
+city, then reports how many were written and skipped. A platform picker suspends
+the background lock while it is open, so the archive stays unlocked and the read
+or write completes. On the emulator the export wrote a 92-byte file with the
+customer row and the import of a second file reported "Imported 1, skipped 0".
+
 A draft needs an owner, and the mobile shell has no seller screen yet, so the
 first new draft inserts a placeholder seller ("My company", Amsterdam, NL). The
 settings work replaces it. Drafts need a customer, so the drafts screen asks for
