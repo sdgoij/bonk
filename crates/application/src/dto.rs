@@ -399,6 +399,12 @@ pub struct IssueOutcome {
     pub issued: Option<DocumentSummary>,
     /// Every finding, blocking or not.
     pub findings: Vec<FindingDto>,
+    /// SHA-256 of the stored UBL artefact, when a document was issued.
+    pub ubl_sha256: Option<String>,
+    /// SHA-256 of the stored PDF artefact, when one was rendered and filed.
+    pub pdf_sha256: Option<String>,
+    /// Why the PDF was not filed, when the document was issued anyway.
+    pub pdf_error: Option<String>,
 }
 
 #[cfg(test)]

@@ -170,14 +170,22 @@ impl Archive {
             .map_err(|error| StoreError::Data(error.to_string()))?;
         let seller = store::load_seller(self.database.connection(), domain.seller_id)?;
         let customer = store::load_customer(self.database.connection(), domain.customer_id)?;
-        let mut findings = crux::validate_draft(&domain, &seller.party, &customer.party);
-        let suppressions = store::list_suppressions(self.database.connection(), domain.id)?;
-        findings.retain(|finding| {
-            !suppressions
-                .iter()
-                .any(|suppression| suppression.code == finding.code && suppression.field == finding.field)
-        });
+        let findings = crux::validate_draft(&domain, &seller.party, &customer.party);
+        let findings = crate::issue::without_suppressed(self, domain.id, findings)?;
         Ok(findings.iter().map(FindingDto::from).collect())
+    }
+
+    /// Issues a draft, or returns the findings that stopped it.
+    ///
+    /// `actor` names the front end in the audit trail.
+    pub fn issue(
+        &mut self,
+        draft: &DraftDto,
+        language: crate::DocumentLanguage,
+        template: Option<&crate::ArchiveTemplate>,
+        actor: &str,
+    ) -> Result<crate::IssueOutcome, StoreError> {
+        crate::issue::issue(self, draft, language, template, actor)
     }
 
     /// Records a reason for accepting a non-blocking finding.
@@ -602,6 +610,219 @@ mod tests {
         assert_eq!(totals.net_micros, 100_000_000);
         assert_eq!(totals.tax_micros, 21_000_000);
         assert_eq!(totals.gross_micros, 121_000_000);
+    }
+
+    const NOW: &str = "2026-11-08T12:00:00Z";
+
+    /// A Dutch party with the street and post code the Dutch profile asks for.
+    fn party(name: &str, city: &str, vat: Option<&str>) -> crux::Party {
+        let mut address = crux::Address::new(city, crux::CountryCode::NL);
+        address.street = Some("Main 1".to_owned());
+        address.postal_code = Some("2611 AA".to_owned());
+        let mut party = crux::Party::new(name, address);
+        party.vat_id = vat.map(str::to_owned);
+        // The Peppol profile requires an endpoint identifier on both parties.
+        party.peppol_id = Some("0088:1234567890123".to_owned());
+        party
+    }
+
+    /// Inserts one seller and one customer and returns their identities.
+    fn seed(archive: &Archive) -> (String, String) {
+        let seller = store::SellerRecord {
+            id: crux::SellerId::new(),
+            party: party("Seller BV", "Delft", Some("NL123456782B01")),
+            default_currency: crux::Currency::EUR,
+            default_locale: "en".to_owned(),
+        };
+        store::insert_seller(archive.database().connection(), &seller, NOW).unwrap();
+        let customer = store::CustomerRecord {
+            id: crux::CustomerId::new(),
+            party: party("Buyer BV", "Utrecht", None),
+        };
+        store::insert_customer(archive.database().connection(), &customer, NOW).unwrap();
+        (seller.id.to_string(), customer.id.to_string())
+    }
+
+    /// One line at 100.00 with 21 percent VAT, dated 2026-11-08.
+    fn draft(seller_id: &str, customer_id: &str, item: &str) -> DraftDto {
+        DraftDto {
+            id: crux::DocumentId::new().to_string(),
+            seller_id: seller_id.to_owned(),
+            customer_id: customer_id.to_owned(),
+            doc_type: "380".to_owned(),
+            currency: "EUR".to_owned(),
+            issue_date: "2026-11-08".to_owned(),
+            due_date: Some("2026-12-08".to_owned()),
+            delivery_date: None,
+            buyer_reference: Some("PO-1".to_owned()),
+            order_reference: None,
+            note: None,
+            template: None,
+            preceding_invoice: None,
+            lines: vec![DraftLineDto {
+                id: crux::LineId::new().to_string(),
+                position: 1,
+                name: item.to_owned(),
+                description: None,
+                quantity_micros: 1_000_000,
+                unit: "HUR".to_owned(),
+                unit_price_micros: 100_000_000,
+                price_base_quantity_micros: 1_000_000,
+                tax_category: "S".to_owned(),
+                tax_rate_bp: 2100,
+                line_net_micros: 100_000_000,
+                exemption_reason: None,
+                exemption_reason_code: None,
+            }],
+        }
+    }
+
+    fn document_count(archive: &Archive) -> i64 {
+        archive
+            .database()
+            .connection()
+            .query_row("SELECT COUNT(*) FROM document", [], |row| row.get(0))
+            .unwrap()
+    }
+
+    #[test]
+    fn a_blocked_draft_is_not_issued_and_keeps_its_identity() {
+        let (_directory, mut archive) = archive();
+        let (seller, customer) = seed(&archive);
+        let draft = draft(&seller, &customer, "");
+
+        let outcome = archive
+            .issue(&draft, crate::DocumentLanguage::English, None, "test")
+            .unwrap();
+
+        assert!(outcome.issued.is_none());
+        assert!(
+            outcome.findings.iter().any(|finding| finding.severity == "blocking"),
+            "{outcome:?}"
+        );
+        assert!(outcome.ubl_sha256.is_none());
+        // No number was consumed, and the draft is still editable.
+        assert_eq!(document_count(&archive), 0);
+        assert_eq!(archive.load_draft(&draft.id).unwrap().id, draft.id);
+
+        // Correcting the item name lets the same draft through, with the first
+        // number the year has.
+        let fixed = archive
+            .issue(
+                &draft_with_name(&draft, "Consultancy"),
+                crate::DocumentLanguage::English,
+                None,
+                "test",
+            )
+            .unwrap();
+        let issued = fixed.issued.expect("issued once corrected");
+        assert_eq!(issued.number, "2026-0001");
+        assert_eq!(document_count(&archive), 1);
+    }
+
+    #[test]
+    fn issuing_files_a_ubl_and_a_pdf_artefact() {
+        let (_directory, mut archive) = archive();
+        let (seller, customer) = seed(&archive);
+
+        let outcome = archive
+            .issue(
+                &draft(&seller, &customer, "Consultancy"),
+                crate::DocumentLanguage::English,
+                None,
+                "test",
+            )
+            .unwrap();
+        let Some(issued) = outcome.issued.clone() else {
+            panic!("the draft should have issued: {outcome:#?}");
+        };
+        assert_eq!(issued.number, "2026-0001");
+        assert_eq!(issued.gross_micros, 121_000_000);
+        assert_eq!(issued.status, "issued");
+        assert!(outcome.findings.is_empty(), "{outcome:?}");
+        assert!(outcome.pdf_error.is_none(), "{outcome:?}");
+
+        // Both artefacts are stored, and the reported hashes are the stored ones.
+        let id = crux::DocumentId::parse_str(&issued.id).unwrap();
+        let connection = archive.database().connection();
+        assert_eq!(
+            store::archive::artefact_kinds(connection, id).unwrap(),
+            vec!["pdf".to_owned(), "ubl".to_owned()]
+        );
+        let ubl = store::archive::artefact_bytes(connection, id, "ubl").unwrap();
+        assert_eq!(store::audit::sha256_hex(&ubl), outcome.ubl_sha256.unwrap());
+        let pdf = store::archive::artefact_bytes(connection, id, "pdf").unwrap();
+        assert_eq!(store::audit::sha256_hex(&pdf), outcome.pdf_sha256.unwrap());
+
+        // The draft became the document.
+        assert!(archive.list_drafts().unwrap().is_empty());
+    }
+
+    #[test]
+    fn issuing_twice_continues_the_number_series() {
+        let (_directory, mut archive) = archive();
+        let (seller, customer) = seed(&archive);
+
+        let first = archive
+            .issue(
+                &draft(&seller, &customer, "Consultancy"),
+                crate::DocumentLanguage::English,
+                None,
+                "test",
+            )
+            .unwrap()
+            .issued
+            .unwrap();
+        let second = archive
+            .issue(
+                &draft(&seller, &customer, "Support"),
+                crate::DocumentLanguage::English,
+                None,
+                "test",
+            )
+            .unwrap()
+            .issued
+            .unwrap();
+
+        assert_eq!(first.number, "2026-0001");
+        assert_eq!(second.number, "2026-0002");
+    }
+
+    #[test]
+    fn the_same_draft_produces_the_same_bytes_in_two_archives() {
+        let (_first_directory, mut first) = archive();
+        let (_second_directory, mut second) = archive();
+        let (first_seller, first_customer) = seed(&first);
+        let (second_seller, second_customer) = seed(&second);
+
+        let one = first
+            .issue(
+                &draft(&first_seller, &first_customer, "Consultancy"),
+                crate::DocumentLanguage::English,
+                None,
+                "test",
+            )
+            .unwrap();
+        let two = second
+            .issue(
+                &draft(&second_seller, &second_customer, "Consultancy"),
+                crate::DocumentLanguage::English,
+                None,
+                "test",
+            )
+            .unwrap();
+
+        assert_eq!(one.issued.unwrap().number, two.issued.unwrap().number);
+        assert_eq!(one.ubl_sha256, two.ubl_sha256);
+        assert_eq!(one.pdf_sha256, two.pdf_sha256);
+    }
+
+    fn draft_with_name(draft: &DraftDto, item: &str) -> DraftDto {
+        let mut draft = draft.clone();
+        for line in &mut draft.lines {
+            line.name = item.to_owned();
+        }
+        draft
     }
 
     #[test]

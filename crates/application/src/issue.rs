@@ -5,11 +5,14 @@
 //! drift into two slightly different invoice pipelines.
 
 use conformance::{Profile, SemanticInvoice};
-use crux::{InvoiceDraft, InvoiceTotals, LocalDate, Party};
+use crux::{Finding, InvoiceDraft, InvoiceTotals, LocalDate, Party};
 use render::PdfRenderer;
-use store::{CustomerRecord, IssueView, SellerRecord, StoreError};
+use store::{CustomerRecord, DocumentStatus, IssueRequest, IssueView, SellerRecord, StoreError};
 use syntax::{UblInvoice, UblLine, UblPrecedingInvoice, write_invoice};
 
+use crate::dto::{DocumentSummary, DraftDto, FindingDto, IssueOutcome};
+use crate::session::Archive;
+use crate::templates::ArchiveTemplate;
 use crate::templates::renderer_for;
 
 /// The language the printed document speaks.
@@ -17,6 +20,124 @@ use crate::templates::renderer_for;
 /// Re-exported so a front end that renders through [`invoice_pdf`] does not need
 /// a direct dependency on the renderer.
 pub use render::Language as DocumentLanguage;
+
+/// Issues a draft: validate, render UBL, render the PDF, file both.
+///
+/// The draft is saved first, because an editor may hold edits newer than its
+/// last save. A blocking finding stops the attempt before a number is allocated,
+/// and the draft keeps its identity so it can be corrected and retried.
+///
+/// `actor` names the front end in the audit trail; it is recorded as the device
+/// as well, because one process holds the session.
+pub fn issue(
+    archive: &mut Archive,
+    draft: &DraftDto,
+    language: DocumentLanguage,
+    template: Option<&ArchiveTemplate>,
+    actor: &str,
+) -> Result<IssueOutcome, StoreError> {
+    let domain = draft
+        .clone()
+        .into_draft()
+        .map_err(|error| StoreError::Data(error.to_string()))?;
+    let now = store::now_rfc3339();
+    store::save_draft(archive.database().connection(), &domain, &now)?;
+
+    let seller = store::load_seller(archive.database().connection(), domain.seller_id)?;
+    let customer = store::load_customer(archive.database().connection(), domain.customer_id)?;
+
+    let findings = crux::validate_draft(&domain, &seller.party, &customer.party);
+    let findings = without_suppressed(archive, domain.id, findings)?;
+    if crux::has_blocking(&findings) {
+        return Ok(stopped(findings));
+    }
+
+    let record = match store::issue_draft(
+        archive.database_mut().connection_mut(),
+        IssueRequest {
+            draft_id: domain.id,
+            actor,
+            device: actor,
+            renderer_version: "syntax-0.1",
+            now: &now,
+        },
+        render_issue,
+    ) {
+        Ok(record) => record,
+        // The conformance profile can reject a document that passed tier 1. That
+        // is a reviewable outcome, not a failed transaction, so the caller gets
+        // the findings the official profile raised.
+        Err(StoreError::Conformance(findings)) => return Ok(stopped(findings)),
+        Err(error) => return Err(error),
+    };
+
+    // The document stands even when the PDF cannot be drawn, matching the
+    // desktop: the UBL artefact is what the archive is audited on, so a failed
+    // layout must not roll back an issued document.
+    let mut pdf_sha256 = None;
+    let mut pdf_error = None;
+    match invoice_pdf(
+        &record.number,
+        &domain,
+        &seller,
+        &customer,
+        &record.totals,
+        language,
+        template.map(|template| &template.template),
+    ) {
+        Ok(bytes) => match store::attach_artefact(
+            archive.database().connection(),
+            record.id,
+            "pdf",
+            &bytes,
+            render::RENDERER_VERSION,
+            template.map(|template| template.sha256.as_str()),
+            &now,
+        ) {
+            Ok(hash) => pdf_sha256 = Some(hash),
+            Err(error) => pdf_error = Some(error.to_string()),
+        },
+        Err(error) => pdf_error = Some(error.to_string()),
+    }
+
+    Ok(IssueOutcome {
+        issued: Some(DocumentSummary::from_record(&record, DocumentStatus::Issued)),
+        findings: findings.iter().map(FindingDto::from).collect(),
+        ubl_sha256: Some(record.ubl_sha256.clone()),
+        pdf_sha256,
+        pdf_error,
+    })
+}
+
+/// Removes findings the user accepted with a reason.
+///
+/// A blocking finding cannot be suppressed (the store refuses to record one) and
+/// a code keeps its severity, so filtering by code and field cannot hide one.
+pub(crate) fn without_suppressed(
+    archive: &Archive,
+    draft_id: crux::DocumentId,
+    findings: Vec<Finding>,
+) -> Result<Vec<Finding>, StoreError> {
+    let suppressions = store::list_suppressions(archive.database().connection(), draft_id)?;
+    Ok(findings
+        .into_iter()
+        .filter(|finding| {
+            !suppressions
+                .iter()
+                .any(|suppression| suppression.code == finding.code && suppression.field == finding.field)
+        })
+        .collect())
+}
+
+fn stopped(findings: Vec<Finding>) -> IssueOutcome {
+    IssueOutcome {
+        issued: None,
+        findings: findings.iter().map(FindingDto::from).collect(),
+        ubl_sha256: None,
+        pdf_sha256: None,
+        pdf_error: None,
+    }
+}
 
 /// Renders a document to UBL for the issue transaction.
 ///
