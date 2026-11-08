@@ -361,7 +361,7 @@ fun App() {
     // The register keeps its side and filters while a document is open.
     val register = remember { DocumentRegisterState() }
 
-    MaterialTheme {
+    BonkTheme {
         Surface(modifier = Modifier.fillMaxSize()) {
             BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
                 val width = WindowWidth.of(maxWidth)

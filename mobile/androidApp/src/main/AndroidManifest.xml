@@ -6,7 +6,7 @@
         android:fullBackupContent="false"
         android:label="Bonk"
         android:supportsRtl="true"
-        android:theme="@android:style/Theme.Material.Light.NoActionBar">
+        android:theme="@style/Theme.Bonk">
         <activity
             android:name=".MainActivity"
             android:exported="true"

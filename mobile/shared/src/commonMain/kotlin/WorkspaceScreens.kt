@@ -43,6 +43,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
@@ -1591,6 +1592,19 @@ fun DocumentDetailScreen(
 @Composable
 private fun Fact(label: String, value: String) {
     if (value.isBlank()) return
+    // At a large font the label no longer fits a fixed column, so the pair
+    // stacks instead of clipping.
+    if (LocalDensity.current.fontScale >= 1.5f) {
+        Column(Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
+            Text(
+                label,
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(value, style = MaterialTheme.typography.bodyMedium)
+        }
+        return
+    }
     Row(Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
         Text(
             label,
@@ -1604,22 +1618,23 @@ private fun Fact(label: String, value: String) {
 
 @Composable
 private fun DocumentRow(hit: DocumentHit, selected: Boolean, onClick: () -> Unit) {
+    val number = hit.number.ifBlank { strings.noNumber }
+    val detail = buildList {
+        add(hit.party)
+        add(hit.issueDate)
+        add("${formatMoney(hit.grossMicros)} ${hit.currency}")
+        add(strings.status(hit.status))
+        if (hit.direction == "inbound" && !hit.matched) add(strings.notMatched)
+    }
+        .filter { it.isNotBlank() }
+        .joinToString(" · ")
     Surface(
         color = if (selected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surface,
         modifier = Modifier.fillMaxWidth(),
     ) {
         TextButton(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
             Column(Modifier.fillMaxWidth()) {
-                Text(hit.number.ifBlank { strings.noNumber }, style = MaterialTheme.typography.titleMedium)
-                val detail = buildList {
-                    add(hit.party)
-                    add(hit.issueDate)
-                    add("${formatMoney(hit.grossMicros)} ${hit.currency}")
-                    add(strings.status(hit.status))
-                    if (hit.direction == "inbound" && !hit.matched) add(strings.notMatched)
-                }
-                    .filter { it.isNotBlank() }
-                    .joinToString(" · ")
+                Text(number, style = MaterialTheme.typography.titleMedium)
                 Text(
                     detail,
                     style = MaterialTheme.typography.bodySmall,
@@ -1727,6 +1742,7 @@ private fun ScreenHeader(title: String, onBack: () -> Unit, action: @Composable 
 
 @Composable
 private fun CustomerRow(customer: Customer, selected: Boolean, onClick: () -> Unit) {
+    val detail = listOf(customer.city, customer.vat).filter { it.isNotBlank() }.joinToString(" · ")
     Surface(
         color = if (selected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surface,
         modifier = Modifier.fillMaxWidth(),
@@ -1734,7 +1750,6 @@ private fun CustomerRow(customer: Customer, selected: Boolean, onClick: () -> Un
         TextButton(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
             Column(Modifier.fillMaxWidth()) {
                 Text(customer.name, style = MaterialTheme.typography.titleMedium)
-                val detail = listOf(customer.city, customer.vat).filter { it.isNotBlank() }.joinToString(" · ")
                 if (detail.isNotBlank()) {
                     Text(
                         detail,
@@ -1749,13 +1764,19 @@ private fun CustomerRow(customer: Customer, selected: Boolean, onClick: () -> Un
 
 @Composable
 private fun DraftRow(draft: Draft, customerName: String, gross: String, onClick: () -> Unit) {
-    TextButton(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
-        Column(Modifier.fillMaxWidth()) {
-            Text(customerName, style = MaterialTheme.typography.titleMedium)
-            val detail = listOf(draft.issueDate, strings.linesCount(draft.lines.size), gross)
-                .filter { it.isNotBlank() }
-                .joinToString(" · ")
-            Text(detail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    val detail = listOf(draft.issueDate, strings.linesCount(draft.lines.size), gross)
+        .filter { it.isNotBlank() }
+        .joinToString(" · ")
+    Box(Modifier.fillMaxWidth()) {
+        TextButton(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
+            Column(Modifier.fillMaxWidth()) {
+                Text(customerName, style = MaterialTheme.typography.titleMedium)
+                Text(
+                    detail,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
     }
 }
