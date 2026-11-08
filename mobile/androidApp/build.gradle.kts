@@ -1,5 +1,7 @@
 plugins {
     alias(libs.plugins.android.application)
+    // The screenshot test draws Compose in this module's test sources.
+    alias(libs.plugins.compose.compiler)
 }
 
 // The application module is the Android shell: identity, manifest, native
@@ -49,4 +51,9 @@ dependencies {
 
     androidTestImplementation(libs.androidx.test.junit)
     androidTestImplementation(libs.androidx.test.runner)
+
+    // The screenshot test composes the real shell pieces; Compose itself comes
+    // from the shared module, which exposes it as `api`.
+    androidTestImplementation(libs.androidx.compose.ui.test.junit4)
+    debugImplementation(libs.androidx.compose.ui.test.manifest)
 }

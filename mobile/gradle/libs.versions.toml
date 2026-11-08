@@ -4,6 +4,9 @@ kotlin = "2.4.21"
 compose = "1.12.2"
 # Material3 has its own release line; 1.9.0 is what Compose Multiplatform 1.12.2 resolves to.
 composeMaterial3 = "1.9.0"
+# The androidx Compose version the Compose Multiplatform 1.12.2 artifacts resolve
+# to; the test artifacts must be that same version, not the multiplatform one.
+composeAndroid = "1.12.1"
 jna = "5.19.1"
 activityCompose = "1.13.0"
 biometric = "1.1.0"
@@ -25,6 +28,8 @@ kotlinx-coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutine
 androidx-test-junit = { module = "androidx.test.ext:junit", version.ref = "androidxTestJunit" }
 androidx-test-runner = { module = "androidx.test:runner", version.ref = "androidxTestRunner" }
 androidx-documentfile = { module = "androidx.documentfile:documentfile", version.ref = "documentfile" }
+androidx-compose-ui-test-junit4 = { module = "androidx.compose.ui:ui-test-junit4", version.ref = "composeAndroid" }
+androidx-compose-ui-test-manifest = { module = "androidx.compose.ui:ui-test-manifest", version.ref = "composeAndroid" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

@@ -21,10 +21,12 @@ kotlin {
 
     sourceSets {
         commonMain.dependencies {
-            implementation(libs.compose.runtime)
-            implementation(libs.compose.foundation)
-            implementation(libs.compose.material3)
-            implementation(libs.compose.ui)
+            // `api`: the screens are public composables, so a module that draws
+            // them needs Compose on its own compile classpath.
+            api(libs.compose.runtime)
+            api(libs.compose.foundation)
+            api(libs.compose.material3)
+            api(libs.compose.ui)
         }
         commonTest.dependencies {
             implementation(kotlin("test"))

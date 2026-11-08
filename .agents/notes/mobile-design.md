@@ -1498,6 +1498,10 @@ Every clickable node on the two-pane customer screen measured at least 48 dp at 
 
 The width bands are pinned by a host test that fails if a threshold moves, and the size class itself is the only thing the layout reads, so a test can state the design's table without a device. `tools/check-page-size.sh` reads each shipped library's `LOAD` segments with the NDK's `llvm-readelf` and fails on anything but `0x4000`; both Android targets report `0x4000`, and the mobile cross-build job now runs that check instead of only looking for a `LOAD` segment.
 
+`ShellScreenshotTest` draws the rail and the dashboard, which is the one archive screen that takes its data as parameters and so can be drawn without opening an archive, at 360, 700 and 1280 dp wide. It draws at one pixel per dp and pins the light palette, so the images do not depend on the device's density or its day/night choice. The test compares every pixel against the committed image and allows a fifth of a percent to differ, which covers antialiasing without hiding a moved control. A missing image fails the test and writes the one the device drew; `just mobile-screenshots [serial]` runs the comparison and `just mobile-screenshots-update [serial]` pulls regenerated images into `assets/screenshots`. The three images show the phone without a rail, and the medium and tablet windows with the rail and the dashboard's two columns.
+
+Run on an API 33 AVD with a 1280x800 dp window: the images matched on a second run. The same test cannot run on the API 37 images: the Compose test rule starts Espresso, whose input injection looks up `InputManager.getInstance`, a method API 37 removed, so the run fails before any test body executes.
+
 What TalkBack announces has not been verified: the rows keep Material's clickable semantics, which the screen reader merges and reads as one stop, but there is no way to hear the result here and the uiautomator dump shows the raw view tree rather than the spoken output. A walkthrough on a device is still due.
 
 - [x] Width classes and a navigation rail on medium and expanded windows
@@ -1508,7 +1512,7 @@ What TalkBack announces has not been verified: the rows keep Material's clickabl
 - [x] Font scale 200%, dark/light, RTL layout
 - [x] 48 dp touch targets on every clickable control
 - [ ] TalkBack traversal of the two-pane layouts and the findings chips
-- [ ] Screenshot tests for phone and tablet sizes
+- [x] Screenshot tests for phone and tablet sizes
 - [ ] Baseline profile and §6.8 budgets met
 - [x] 16 KB native page alignment check
 

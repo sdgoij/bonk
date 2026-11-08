@@ -107,6 +107,24 @@ mobile-golden serial="":
     cd mobile && ./gradlew :androidApp:assembleDebug :androidApp:assembleDebugAndroidTest
     sh tools/run-android-test.sh "{{serial}}" com.github.sdgoij.bonk.ArtefactDeterminismTest
 
+# Screenshot tests: the shell at phone, medium and tablet sizes, compared with
+# the committed goldens. The images are drawn at one pixel per dp, so they do
+# not depend on density; run on a window at least 1280 px wide, which the tablet
+# AVD is. A missing golden fails the test and writes the image to the device.
+#
+# Usage: just mobile-screenshots [serial]
+mobile-screenshots serial="":
+    cd mobile && ./gradlew :androidApp:assembleDebug :androidApp:assembleDebugAndroidTest
+    sh tools/run-android-test.sh "{{serial}}" com.github.sdgoij.bonk.ShellScreenshotTest
+
+# Regenerate the screenshot goldens from a device, after an intended UI change.
+#
+# Usage: just mobile-screenshots-update [serial]
+mobile-screenshots-update serial="":
+    cd mobile && ./gradlew :androidApp:assembleDebug :androidApp:assembleDebugAndroidTest
+    sh tools/run-android-test.sh "{{serial}}" com.github.sdgoij.bonk.ShellScreenshotTest -e updateScreenshots 1
+    sh tools/pull-screenshots.sh "{{serial}}"
+
 # Seed a demo archive into a connected Android device.
 #
 # Runs the same generator as `just demo`, then hands the archive to the app

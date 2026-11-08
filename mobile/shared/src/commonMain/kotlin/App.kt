@@ -10,16 +10,13 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
@@ -386,7 +383,7 @@ fun App() {
                         if (wide && screen.usesShell()) {
                             NavigationRailPanel(screen.destination()) { destination ->
                                 forgetSelection()
-                                screen = destination.screen
+                                screen = destination.toScreen()
                                 touch()
                             }
                             VerticalDivider()
@@ -522,7 +519,7 @@ fun App() {
                                             notice = notice,
                                             onDone = { screen = Screen.Unlocked },
                                         )
-                                        Screen.Unlocked -> Unlocked(
+                                        Screen.Unlocked -> Dashboard(
                                             summary = summary,
                                             deviceAvailable = deviceAvailable,
                                             notice = notice,
@@ -900,7 +897,7 @@ private fun UnlockForm(
 }
 
 @Composable
-private fun Unlocked(
+fun Dashboard(
     summary: ArchiveSummary,
     deviceAvailable: Boolean,
     notice: String?,
@@ -1140,12 +1137,12 @@ private fun ProbeButton(
 }
 
 /** Where the rail can take an open archive. */
-private enum class RailDestination(val screen: Screen) {
-    Home(Screen.Unlocked),
-    Customers(Screen.Customers),
-    Drafts(Screen.Drafts),
-    Documents(Screen.Documents),
-    Settings(Screen.Settings),
+private fun RailDestination.toScreen(): Screen = when (this) {
+    RailDestination.Home -> Screen.Unlocked
+    RailDestination.Customers -> Screen.Customers
+    RailDestination.Drafts -> Screen.Drafts
+    RailDestination.Documents -> Screen.Documents
+    RailDestination.Settings -> Screen.Settings
 }
 
 private fun Screen.destination(): RailDestination = when (this) {
@@ -1159,44 +1156,6 @@ private fun Screen.destination(): RailDestination = when (this) {
 /** Screens that sit beside the rail; the lock screens keep the whole window. */
 private fun Screen.usesShell(): Boolean =
     isArchiveContent() || this is Screen.Import || this is Screen.Backup || this is Screen.Settings
-
-@Composable
-private fun NavigationRailPanel(destination: RailDestination, onSelect: (RailDestination) -> Unit) {
-    Surface(
-        color = MaterialTheme.colorScheme.surfaceContainer,
-        modifier = Modifier.fillMaxHeight().width(200.dp),
-    ) {
-        Column(
-            modifier = Modifier.fillMaxHeight().padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-            Text("Bonk", style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(12.dp))
-            Spacer(Modifier.height(8.dp))
-            RailEntry(strings.home, destination == RailDestination.Home) { onSelect(RailDestination.Home) }
-            RailEntry(strings.customers, destination == RailDestination.Customers) {
-                onSelect(RailDestination.Customers)
-            }
-            RailEntry(strings.drafts, destination == RailDestination.Drafts) { onSelect(RailDestination.Drafts) }
-            RailEntry(strings.documents, destination == RailDestination.Documents) {
-                onSelect(RailDestination.Documents)
-            }
-            RailEntry(strings.settings, destination == RailDestination.Settings) {
-                onSelect(RailDestination.Settings)
-            }
-        }
-    }
-}
-
-@Composable
-private fun RailEntry(label: String, selected: Boolean, onClick: () -> Unit) {
-    TextButton(
-        onClick = onClick,
-        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
-        colors = if (selected) ButtonDefaults.filledTonalButtonColors() else ButtonDefaults.textButtonColors(),
-    ) {
-        Text(label, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Start)
-    }
-}
 
 /** Customers on the left, the customer being edited or added on the right. */
 @Composable

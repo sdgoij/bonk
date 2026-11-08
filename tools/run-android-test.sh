@@ -10,6 +10,7 @@ set -eu
 
 serial=${1:--}
 test_class=${2:-}
+shift 2
 package=com.github.sdgoij.bonk
 apk=mobile/androidApp/build/outputs/apk/debug/androidApp-debug.apk
 test_apk=mobile/androidApp/build/outputs/apk/androidTest/debug/androidApp-debug-androidTest.apk
@@ -51,7 +52,7 @@ adb_of install -r "$test_apk" >/dev/null
 
 # `am instrument` exits 0 even when a test fails, so the output carries the verdict.
 result=$(adb_of shell am instrument -w -e class "$test_class" \
-    "$package.test/androidx.test.runner.AndroidJUnitRunner")
+    "$@" "$package.test/androidx.test.runner.AndroidJUnitRunner")
 printf '%s\n' "$result"
 
 # `OK (0 tests)` means the class was not found, which is a failure of the run.
