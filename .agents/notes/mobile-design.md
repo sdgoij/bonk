@@ -1233,7 +1233,8 @@ previous archive is kept in `files/archive.bak`, a stale write-ahead log is
 removed so it cannot be replayed over the new database, and the app is started
 once when its storage is not readable yet, which covers a fresh install. The
 passphrase is `bonk-demo`; a locked device stops the script with a message,
-since its app storage is encrypted until it is unlocked.
+since its app storage is encrypted until it is unlocked. An unavailable serial
+prints the attached devices and, when exactly one is attached, the serial to use.
 
 ### 8.5 Distribution
 

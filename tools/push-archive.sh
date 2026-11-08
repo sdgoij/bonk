@@ -33,7 +33,19 @@ adb_of() {
 }
 
 if ! adb_of get-state >/dev/null 2>&1; then
-    echo "error: no device responded; start an emulator or pass its serial" >&2
+    if [ -n "$serial" ] && [ "$serial" != "-" ]; then
+        echo "error: no device is attached with serial $serial" >&2
+    else
+        echo "error: no single device is available; pass a serial from the list below" >&2
+    fi
+    echo "attached devices:" >&2
+    env MSYS_NO_PATHCONV=1 adb devices -l >&2
+    attached=$(env MSYS_NO_PATHCONV=1 adb devices | awk 'NR > 1 && $2 == "device" { print $1 }')
+    if [ -n "$serial" ] && [ "$serial" != "-" ] && [ -n "$attached" ] &&
+        [ "$(printf '%s\n' "$attached" | wc -l)" -eq 1 ]; then
+        echo "did you mean: just demo-android $attached" >&2
+    fi
+    echo "start an emulator, plug in a device, or pass the serial from that list" >&2
     exit 1
 fi
 
