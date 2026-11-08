@@ -18,7 +18,7 @@ use crux::{
     InvoiceTotals, LineId, LocalDate, Money, Party, PhoneNumber, PrecedingInvoice, Quantity, SellerId, Severity,
     TaxTreatment, UnitCode, VatCategory, VatRate,
 };
-use store::{CustomerRecord, DocumentRecord, DocumentStatus};
+use store::{CustomerRecord, DocumentRecord, DocumentStatus, SearchHit, archive::DocumentView};
 
 /// What the dashboard shows for an open archive.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -405,6 +405,218 @@ pub struct IssueOutcome {
     pub pdf_sha256: Option<String>,
     /// Why the PDF was not filed, when the document was issued anyway.
     pub pdf_error: Option<String>,
+}
+
+/// One row in the document register.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct DocumentHit {
+    /// Document identity.
+    pub id: String,
+    /// Human number; empty for a draft that has none yet.
+    pub number: String,
+    /// `outbound` or `inbound`.
+    pub direction: String,
+    /// The party on the other side.
+    pub party: String,
+    /// Issue date, ISO `YYYY-MM-DD`.
+    pub issue_date: String,
+    /// ISO currency code.
+    pub currency: String,
+    /// Gross in micro-units.
+    pub gross_micros: i64,
+    /// Stable status code.
+    pub status: String,
+}
+
+impl DocumentHit {
+    /// Converts one search result.
+    pub fn from_hit(hit: &SearchHit) -> Self {
+        Self {
+            id: hit.id.to_string(),
+            number: hit.number.clone(),
+            direction: hit.direction.code().to_owned(),
+            party: hit.party.clone(),
+            issue_date: hit.issue_date.to_iso_string(),
+            currency: hit.currency.as_str().to_owned(),
+            gross_micros: hit.gross.micros(),
+            status: hit.status.code().to_owned(),
+        }
+    }
+}
+
+/// A stored document, as the detail screen shows it.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct DocumentDetail {
+    /// Document identity.
+    pub id: String,
+    /// Human number.
+    pub number: String,
+    /// `outbound` or `inbound`.
+    pub direction: String,
+    /// UN/CEFACT type, `380` or `381`.
+    pub doc_type: String,
+    /// ISO currency code.
+    pub currency: String,
+    /// Issue date, ISO `YYYY-MM-DD`.
+    pub issue_date: String,
+    /// Due date, when the document has one.
+    pub due_date: Option<String>,
+    /// Delivery date, when the document has one.
+    pub delivery_date: Option<String>,
+    /// Buyer reference (BT-10).
+    pub buyer_reference: Option<String>,
+    /// Order reference (BT-13).
+    pub order_reference: Option<String>,
+    /// Free-text note (BT-22).
+    pub note: Option<String>,
+    /// Issuer as it was on the day.
+    pub seller: String,
+    /// Buyer as it was on the day.
+    pub buyer: String,
+    /// Net in micro-units.
+    pub net_micros: i64,
+    /// Tax in micro-units.
+    pub tax_micros: i64,
+    /// Gross in micro-units.
+    pub gross_micros: i64,
+    /// Stable status code.
+    pub status: String,
+    /// When the archive recorded it, RFC 3339.
+    pub recorded_at: String,
+    /// Lines, in position order.
+    pub lines: Vec<DocumentLine>,
+    /// Artefacts with their hashes, oldest first.
+    pub artefacts: Vec<DocumentArtefact>,
+    /// Status events, oldest first.
+    pub events: Vec<DocumentEvent>,
+}
+
+impl DocumentDetail {
+    /// Converts a stored document.
+    pub fn from_view(view: &DocumentView) -> Self {
+        Self {
+            id: view.id.to_string(),
+            number: view.number.clone(),
+            direction: view.direction.code().to_owned(),
+            doc_type: view.doc_type.code().to_owned(),
+            currency: view.currency.as_str().to_owned(),
+            issue_date: view.issue_date.to_iso_string(),
+            due_date: view.due_date.map(LocalDate::to_iso_string),
+            delivery_date: view.delivery_date.map(LocalDate::to_iso_string),
+            buyer_reference: view.buyer_reference.clone(),
+            order_reference: view.order_reference.clone(),
+            note: view.note.clone(),
+            seller: view.seller.legal_name.clone(),
+            buyer: view.buyer.legal_name.clone(),
+            net_micros: view.totals.net.micros(),
+            tax_micros: view.totals.tax.micros(),
+            gross_micros: view.totals.gross.micros(),
+            status: view.status.code().to_owned(),
+            recorded_at: view.recorded_at.clone(),
+            lines: view.lines.iter().map(DocumentLine::from_stored).collect(),
+            artefacts: view.artefacts.iter().map(DocumentArtefact::from_info).collect(),
+            events: view.events.iter().map(DocumentEvent::from_stored).collect(),
+        }
+    }
+}
+
+/// One line of a stored document, as recorded.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct DocumentLine {
+    /// Position on the document.
+    pub position: i64,
+    /// Item name.
+    pub name: String,
+    /// Optional longer description.
+    pub description: Option<String>,
+    /// Quantity, trimmed (for example `3` or `1.5`).
+    pub quantity: String,
+    /// Unit of measure code.
+    pub unit: String,
+    /// Unit price in micro-units.
+    pub unit_price_micros: i64,
+    /// VAT category code.
+    pub vat_category: String,
+    /// VAT rate in basis points.
+    pub vat_rate_bp: u16,
+    /// Line net in micro-units, as recorded.
+    pub line_net_micros: i64,
+    /// Tax on the line in micro-units, as recorded.
+    pub tax_micros: i64,
+}
+
+impl DocumentLine {
+    /// Converts one stored line.
+    pub fn from_stored(line: &store::archive::StoredLine) -> Self {
+        Self {
+            position: line.position,
+            name: line.name.clone(),
+            description: line.description.clone(),
+            quantity: line.quantity.to_trimmed_string(),
+            unit: line.unit.as_str().to_owned(),
+            unit_price_micros: line.unit_price.micros(),
+            vat_category: line.vat_category.code().to_owned(),
+            vat_rate_bp: line.vat_rate.basis_points(),
+            line_net_micros: line.line_net.micros(),
+            tax_micros: line.tax.micros(),
+        }
+    }
+}
+
+/// One artefact filed under a document.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct DocumentArtefact {
+    /// `ubl`, `pdf`, and so on.
+    pub kind: String,
+    /// Syntax profile, when the kind has one.
+    pub syntax_profile: Option<String>,
+    /// SHA-256 of the bytes.
+    pub bytes_hash: String,
+    /// Size in bytes.
+    pub size_bytes: i64,
+    /// When it was rendered, RFC 3339.
+    pub rendered_at: String,
+    /// What rendered it.
+    pub renderer_version: String,
+}
+
+impl DocumentArtefact {
+    /// Converts one stored artefact.
+    pub fn from_info(info: &store::archive::ArtefactInfo) -> Self {
+        Self {
+            kind: info.kind.clone(),
+            syntax_profile: info.syntax_profile.clone(),
+            bytes_hash: info.bytes_hash.clone(),
+            size_bytes: info.size_bytes,
+            rendered_at: info.rendered_at.clone(),
+            renderer_version: info.renderer_version.clone(),
+        }
+    }
+}
+
+/// One status change on a document.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct DocumentEvent {
+    /// Status code.
+    pub kind: String,
+    /// When it happened, RFC 3339.
+    pub at: String,
+    /// Who decided.
+    pub actor: String,
+    /// Optional detail, such as a payment reference.
+    pub detail: Option<String>,
+}
+
+impl DocumentEvent {
+    /// Converts one stored event.
+    pub fn from_stored(event: &store::archive::StatusEvent) -> Self {
+        Self {
+            kind: event.kind.clone(),
+            at: event.at.clone(),
+            actor: event.actor.clone(),
+            detail: event.detail.clone(),
+        }
+    }
 }
 
 #[cfg(test)]

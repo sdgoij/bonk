@@ -10,7 +10,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use application::{
-    Archive as AppArchive, CustomerDto, CustomerImportDto, DraftDto, DraftLineDto, DraftTotalsDto, FindingDto,
+    Archive as AppArchive, CustomerDto, CustomerImportDto, DocumentArtefact, DocumentDetail, DocumentEvent,
+    DocumentHit, DocumentLine, DocumentSummary, DraftDto, DraftLineDto, DraftTotalsDto, FindingDto, IssueOutcome,
     PrecedingInvoiceDto,
 };
 use argon2::{Algorithm, Argon2, Params, Version};
@@ -284,6 +285,276 @@ impl From<CustomerImportDto> for CustomerImportRecord {
             imported: dto.imported,
             skipped: dto.skipped,
             errors: dto.errors,
+        }
+    }
+}
+
+/// An issued document, as a list or a header shows it.
+#[derive(uniffi::Record)]
+pub struct DocumentSummaryRecord {
+    /// Document identity.
+    pub id: String,
+    /// Human number.
+    pub number: String,
+    /// Issue date, ISO `YYYY-MM-DD`.
+    pub issue_date: String,
+    /// ISO currency code.
+    pub currency: String,
+    /// Net in micro-units.
+    pub net_micros: i64,
+    /// Tax in micro-units.
+    pub tax_micros: i64,
+    /// Gross in micro-units.
+    pub gross_micros: i64,
+    /// Stable status code.
+    pub status: String,
+}
+
+impl From<DocumentSummary> for DocumentSummaryRecord {
+    fn from(dto: DocumentSummary) -> Self {
+        Self {
+            id: dto.id,
+            number: dto.number,
+            issue_date: dto.issue_date,
+            currency: dto.currency,
+            net_micros: dto.net_micros,
+            tax_micros: dto.tax_micros,
+            gross_micros: dto.gross_micros,
+            status: dto.status,
+        }
+    }
+}
+
+/// The result of an issue attempt: a document, or the findings that stopped it.
+#[derive(uniffi::Record)]
+pub struct IssueRecord {
+    /// The issued document, when nothing blocked it.
+    pub issued: Option<DocumentSummaryRecord>,
+    /// Every finding, blocking or not.
+    pub findings: Vec<FindingRecord>,
+    /// SHA-256 of the stored UBL artefact, when a document was issued.
+    pub ubl_sha256: Option<String>,
+    /// SHA-256 of the stored PDF artefact, when one was rendered and filed.
+    pub pdf_sha256: Option<String>,
+    /// Why the PDF was not filed, when the document was issued anyway.
+    pub pdf_error: Option<String>,
+}
+
+impl From<IssueOutcome> for IssueRecord {
+    fn from(outcome: IssueOutcome) -> Self {
+        Self {
+            issued: outcome.issued.map(DocumentSummaryRecord::from),
+            findings: outcome.findings.into_iter().map(FindingRecord::from).collect(),
+            ubl_sha256: outcome.ubl_sha256,
+            pdf_sha256: outcome.pdf_sha256,
+            pdf_error: outcome.pdf_error,
+        }
+    }
+}
+
+/// One row in the document register.
+#[derive(uniffi::Record)]
+pub struct DocumentHitRecord {
+    /// Document identity.
+    pub id: String,
+    /// Human number; empty for a draft that has none yet.
+    pub number: String,
+    /// `outbound` or `inbound`.
+    pub direction: String,
+    /// The party on the other side.
+    pub party: String,
+    /// Issue date, ISO `YYYY-MM-DD`.
+    pub issue_date: String,
+    /// ISO currency code.
+    pub currency: String,
+    /// Gross in micro-units.
+    pub gross_micros: i64,
+    /// Stable status code.
+    pub status: String,
+}
+
+impl From<DocumentHit> for DocumentHitRecord {
+    fn from(dto: DocumentHit) -> Self {
+        Self {
+            id: dto.id,
+            number: dto.number,
+            direction: dto.direction,
+            party: dto.party,
+            issue_date: dto.issue_date,
+            currency: dto.currency,
+            gross_micros: dto.gross_micros,
+            status: dto.status,
+        }
+    }
+}
+
+/// One line of a stored document.
+#[derive(uniffi::Record)]
+pub struct DocumentLineRecord {
+    /// Position on the document.
+    pub position: i64,
+    /// Item name.
+    pub name: String,
+    /// Optional longer description.
+    pub description: Option<String>,
+    /// Quantity, trimmed (for example `3` or `1.5`).
+    pub quantity: String,
+    /// Unit of measure code.
+    pub unit: String,
+    /// Unit price in micro-units.
+    pub unit_price_micros: i64,
+    /// VAT category code.
+    pub vat_category: String,
+    /// VAT rate in basis points.
+    pub vat_rate_bp: u16,
+    /// Line net in micro-units, as recorded.
+    pub line_net_micros: i64,
+    /// Tax on the line in micro-units, as recorded.
+    pub tax_micros: i64,
+}
+
+impl From<DocumentLine> for DocumentLineRecord {
+    fn from(dto: DocumentLine) -> Self {
+        Self {
+            position: dto.position,
+            name: dto.name,
+            description: dto.description,
+            quantity: dto.quantity,
+            unit: dto.unit,
+            unit_price_micros: dto.unit_price_micros,
+            vat_category: dto.vat_category,
+            vat_rate_bp: dto.vat_rate_bp,
+            line_net_micros: dto.line_net_micros,
+            tax_micros: dto.tax_micros,
+        }
+    }
+}
+
+/// One artefact filed under a document.
+#[derive(uniffi::Record)]
+pub struct DocumentArtefactRecord {
+    /// `ubl`, `pdf`, and so on.
+    pub kind: String,
+    /// Syntax profile, when the kind has one.
+    pub syntax_profile: Option<String>,
+    /// SHA-256 of the bytes.
+    pub bytes_hash: String,
+    /// Size in bytes.
+    pub size_bytes: i64,
+    /// When it was rendered, RFC 3339.
+    pub rendered_at: String,
+    /// What rendered it.
+    pub renderer_version: String,
+}
+
+impl From<DocumentArtefact> for DocumentArtefactRecord {
+    fn from(dto: DocumentArtefact) -> Self {
+        Self {
+            kind: dto.kind,
+            syntax_profile: dto.syntax_profile,
+            bytes_hash: dto.bytes_hash,
+            size_bytes: dto.size_bytes,
+            rendered_at: dto.rendered_at,
+            renderer_version: dto.renderer_version,
+        }
+    }
+}
+
+/// One status change on a document.
+#[derive(uniffi::Record)]
+pub struct DocumentEventRecord {
+    /// Status code.
+    pub kind: String,
+    /// When it happened, RFC 3339.
+    pub at: String,
+    /// Who decided.
+    pub actor: String,
+    /// Optional detail, such as a payment reference.
+    pub detail: Option<String>,
+}
+
+impl From<DocumentEvent> for DocumentEventRecord {
+    fn from(dto: DocumentEvent) -> Self {
+        Self {
+            kind: dto.kind,
+            at: dto.at,
+            actor: dto.actor,
+            detail: dto.detail,
+        }
+    }
+}
+
+/// A stored document, as the detail screen shows it.
+#[derive(uniffi::Record)]
+pub struct DocumentDetailRecord {
+    /// Document identity.
+    pub id: String,
+    /// Human number.
+    pub number: String,
+    /// `outbound` or `inbound`.
+    pub direction: String,
+    /// UN/CEFACT type, `380` or `381`.
+    pub doc_type: String,
+    /// ISO currency code.
+    pub currency: String,
+    /// Issue date, ISO `YYYY-MM-DD`.
+    pub issue_date: String,
+    /// Due date, when the document has one.
+    pub due_date: Option<String>,
+    /// Delivery date, when the document has one.
+    pub delivery_date: Option<String>,
+    /// Buyer reference (BT-10).
+    pub buyer_reference: Option<String>,
+    /// Order reference (BT-13).
+    pub order_reference: Option<String>,
+    /// Free-text note (BT-22).
+    pub note: Option<String>,
+    /// Issuer as it was on the day.
+    pub seller: String,
+    /// Buyer as it was on the day.
+    pub buyer: String,
+    /// Net in micro-units.
+    pub net_micros: i64,
+    /// Tax in micro-units.
+    pub tax_micros: i64,
+    /// Gross in micro-units.
+    pub gross_micros: i64,
+    /// Stable status code.
+    pub status: String,
+    /// When the archive recorded it, RFC 3339.
+    pub recorded_at: String,
+    /// Lines, in position order.
+    pub lines: Vec<DocumentLineRecord>,
+    /// Artefacts with their hashes, oldest first.
+    pub artefacts: Vec<DocumentArtefactRecord>,
+    /// Status events, oldest first.
+    pub events: Vec<DocumentEventRecord>,
+}
+
+impl From<DocumentDetail> for DocumentDetailRecord {
+    fn from(dto: DocumentDetail) -> Self {
+        Self {
+            id: dto.id,
+            number: dto.number,
+            direction: dto.direction,
+            doc_type: dto.doc_type,
+            currency: dto.currency,
+            issue_date: dto.issue_date,
+            due_date: dto.due_date,
+            delivery_date: dto.delivery_date,
+            buyer_reference: dto.buyer_reference,
+            order_reference: dto.order_reference,
+            note: dto.note,
+            seller: dto.seller,
+            buyer: dto.buyer,
+            net_micros: dto.net_micros,
+            tax_micros: dto.tax_micros,
+            gross_micros: dto.gross_micros,
+            status: dto.status,
+            recorded_at: dto.recorded_at,
+            lines: dto.lines.into_iter().map(DocumentLineRecord::from).collect(),
+            artefacts: dto.artefacts.into_iter().map(DocumentArtefactRecord::from).collect(),
+            events: dto.events.into_iter().map(DocumentEventRecord::from).collect(),
         }
     }
 }
@@ -583,6 +854,48 @@ impl Archive {
         let guard = self.inner.lock().map_err(|_| AppError::Closed)?;
         let archive = guard.as_ref().ok_or(AppError::Closed)?;
         Ok(archive.draft_totals(&DraftDto::from(draft))?.into())
+    }
+
+    /// Issues a draft, or returns the findings that stopped it.
+    ///
+    /// The draft is saved first, so an edit still in the editor is what gets
+    /// issued. The mobile shell is English and uses the built-in layout until
+    /// the settings screen exists.
+    pub fn issue_draft(&self, draft: DraftRecord) -> Result<IssueRecord, AppError> {
+        let mut guard = self.inner.lock().map_err(|_| AppError::Closed)?;
+        let archive = guard.as_mut().ok_or(AppError::Closed)?;
+        let outcome = archive.issue(
+            &DraftDto::from(draft),
+            application::DocumentLanguage::English,
+            None,
+            "mobile",
+        )?;
+        Ok(outcome.into())
+    }
+
+    /// Issued documents, best match first; an empty query lists newest first.
+    pub fn documents(&self, query: Option<String>) -> Result<Vec<DocumentHitRecord>, AppError> {
+        let guard = self.inner.lock().map_err(|_| AppError::Closed)?;
+        let archive = guard.as_ref().ok_or(AppError::Closed)?;
+        Ok(archive
+            .documents(query.as_deref())?
+            .into_iter()
+            .map(DocumentHitRecord::from)
+            .collect())
+    }
+
+    /// One stored document for the detail screen.
+    pub fn document(&self, id: String) -> Result<DocumentDetailRecord, AppError> {
+        let guard = self.inner.lock().map_err(|_| AppError::Closed)?;
+        let archive = guard.as_ref().ok_or(AppError::Closed)?;
+        Ok(archive.document(&id)?.into())
+    }
+
+    /// The bytes of one artefact, verified against the hash recorded for it.
+    pub fn document_artefact(&self, id: String, kind: String) -> Result<Vec<u8>, AppError> {
+        let guard = self.inner.lock().map_err(|_| AppError::Closed)?;
+        let archive = guard.as_ref().ok_or(AppError::Closed)?;
+        Ok(archive.document_artefact(&id, &kind)?)
     }
 
     /// A new invoice draft for a customer, dated today and saved.
@@ -1278,6 +1591,105 @@ mod tests {
             .expect("an updated customer");
         assert_eq!(saved.city, "Delft");
         assert_eq!(archive.list_customers().expect("customers").len(), 1);
+    }
+
+    #[test]
+    fn an_issued_document_crosses_the_ffi() {
+        let directory = tempfile::TempDir::new().expect("a temporary directory");
+        let database = directory.path().join("bonk.db").display().to_string();
+        let keystore = directory.path().join("keystore.bin").display().to_string();
+        let archive = Archive::create(database, keystore, "passphrase".to_owned()).expect("a new archive");
+
+        // Parties the Dutch and Peppol profiles accept, so issuing gets past them.
+        let now = "2026-11-08T12:00:00Z";
+        let mut seller_party = Party::new("Seller BV", Address::new("Delft", CountryCode::NL));
+        seller_party.address.street = Some("Main 1".to_owned());
+        seller_party.address.postal_code = Some("2611 AA".to_owned());
+        seller_party.vat_id = Some("NL123456782B01".to_owned());
+        seller_party.peppol_id = Some("0088:1234567890123".to_owned());
+        let seller = store::SellerRecord {
+            id: crux::SellerId::new(),
+            party: seller_party,
+            default_currency: Currency::EUR,
+            default_locale: "en".to_owned(),
+        };
+        let mut buyer_party = Party::new("Buyer BV", Address::new("Utrecht", CountryCode::NL));
+        buyer_party.peppol_id = Some("0088:9876543210987".to_owned());
+        let customer = store::CustomerRecord {
+            id: crux::CustomerId::new(),
+            party: buyer_party,
+        };
+        {
+            let mut guard = archive.inner.lock().expect("the archive lock");
+            let app = guard.as_mut().expect("an open archive");
+            store::insert_seller(app.database().connection(), &seller, now).expect("a seller");
+            store::insert_customer(app.database().connection(), &customer, now).expect("a customer");
+        }
+
+        let draft = |item: &str| DraftRecord {
+            id: crux::DocumentId::new().to_string(),
+            seller_id: seller.id.to_string(),
+            customer_id: customer.id.to_string(),
+            doc_type: "380".to_owned(),
+            currency: "EUR".to_owned(),
+            issue_date: "2026-11-08".to_owned(),
+            due_date: Some("2026-12-08".to_owned()),
+            delivery_date: None,
+            buyer_reference: Some("PO-1".to_owned()),
+            order_reference: None,
+            note: None,
+            template: None,
+            preceding_invoice: None,
+            lines: vec![DraftLineRecord {
+                id: crux::LineId::new().to_string(),
+                position: 1,
+                name: item.to_owned(),
+                description: None,
+                quantity_micros: 1_000_000,
+                unit: "HUR".to_owned(),
+                unit_price_micros: 100_000_000,
+                price_base_quantity_micros: 1_000_000,
+                tax_category: "S".to_owned(),
+                tax_rate_bp: 2100,
+                line_net_micros: 100_000_000,
+                exemption_reason: None,
+                exemption_reason_code: None,
+            }],
+        };
+
+        // A blocking finding comes back as data, and nothing is filed.
+        let blocked = archive.issue_draft(draft("")).expect("an issue attempt");
+        assert!(blocked.issued.is_none());
+        assert!(blocked.findings.iter().any(|finding| finding.severity == "blocking"));
+        assert!(blocked.ubl_sha256.is_none());
+        assert!(archive.documents(None).expect("the register").is_empty());
+
+        let issued = archive.issue_draft(draft("Consultancy")).expect("an issue");
+        let summary = issued.issued.as_ref().expect("an issued document");
+        assert_eq!(summary.number, "2026-0001");
+        assert_eq!(summary.gross_micros, 121_000_000);
+        assert!(issued.findings.is_empty(), "unexpected findings");
+        assert_eq!(issued.ubl_sha256.as_deref().map(str::len), Some(64));
+        assert!(issued.pdf_error.is_none());
+
+        let documents = archive.documents(None).expect("the register");
+        assert_eq!(documents.len(), 1);
+        assert_eq!(documents[0].number, "2026-0001");
+
+        let detail = archive.document(summary.id.clone()).expect("a detail");
+        assert_eq!(detail.buyer, "Buyer BV");
+        assert_eq!(detail.lines.len(), 1);
+        assert_eq!(detail.artefacts.len(), 2);
+
+        let pdf = archive
+            .document_artefact(summary.id.clone(), "pdf".to_owned())
+            .expect("the pdf");
+        assert_eq!(sha256_hex(&pdf), issued.pdf_sha256.clone().expect("a hash"));
+
+        assert!(matches!(
+            archive.document("not-a-document".to_owned()),
+            Err(AppError::Store { .. })
+        ));
     }
 
     #[test]

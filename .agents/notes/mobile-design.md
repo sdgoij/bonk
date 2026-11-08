@@ -1401,6 +1401,8 @@ single place to update progress; the tables stay as the plan.
 
 **Status 2026-11-08:** Issuing runs through `application`: the draft is saved, tier-1 and conformance findings are collected with suppressed warnings removed, and a blocking finding stops the attempt before a number is allocated. A document that passes gets its number, UBL, PDF artefact and audit events in the same transaction the desktop uses. A PDF that fails to render leaves the document issued and reports the error. Two archives issuing the same draft produce the same UBL and PDF hashes.
 
+The FFI now carries issuing, the document register (newest first, searchable over numbers, parties, references and notes), the detail view with lines, totals, artefacts and events, and artefact bytes verified against their recorded hash.
+
 Issuing a mobile draft currently stops at conformance for reasons the compact editor cannot answer: EN 16931 wants a buyer reference or order reference (there is no field), and the Peppol profile wants an endpoint identifier on both parties plus a street and post code for the seller (the placeholder seller has none of them). The seller screen belongs with the issue screen, not after it.
 
 - [x] Issue through `application`: validate → UBL → PDF → artefacts → audit

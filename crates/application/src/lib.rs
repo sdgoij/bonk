@@ -23,8 +23,8 @@ pub mod session;
 pub mod templates;
 
 pub use dto::{
-    CustomerDto, CustomerImportDto, DocumentSummary, DraftDto, DraftLineDto, DraftTotalsDto, FindingDto, IssueOutcome,
-    PrecedingInvoiceDto, Summary,
+    CustomerDto, CustomerImportDto, DocumentArtefact, DocumentDetail, DocumentEvent, DocumentHit, DocumentLine,
+    DocumentSummary, DraftDto, DraftLineDto, DraftTotalsDto, FindingDto, IssueOutcome, PrecedingInvoiceDto, Summary,
 };
 pub use issue::{DocumentLanguage, invoice_pdf, pdf_data, render_issue};
 pub use session::Archive;

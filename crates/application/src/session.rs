@@ -10,7 +10,9 @@ use std::path::Path;
 use store::{Database, KdfParams, KeyStore, StoreError};
 use zeroize::Zeroizing;
 
-use crate::dto::{CustomerDto, CustomerImportDto, DraftDto, DraftTotalsDto, FindingDto, Summary};
+use crate::dto::{
+    CustomerDto, CustomerImportDto, DocumentDetail, DocumentHit, DraftDto, DraftTotalsDto, FindingDto, Summary,
+};
 
 /// An unlocked application session: one database, one keystore.
 pub struct Archive {
@@ -186,6 +188,43 @@ impl Archive {
         actor: &str,
     ) -> Result<crate::IssueOutcome, StoreError> {
         crate::issue::issue(self, draft, language, template, actor)
+    }
+
+    /// Issued documents, best match first; drafts are listed separately.
+    ///
+    /// A query matches the number, the party, the references and the note. With
+    /// no query the list is newest first, which is what the register shows.
+    pub fn documents(&self, query: Option<&str>) -> Result<Vec<DocumentHit>, StoreError> {
+        let Some(seller) = store::first_seller(self.database.connection())? else {
+            return Ok(Vec::new());
+        };
+        let request = store::SearchRequest {
+            query: query.filter(|query| !query.trim().is_empty()),
+            direction: Some(store::Direction::Outbound),
+            from: None,
+            to: None,
+            status: None,
+        };
+        let hits = store::search(self.database.connection(), seller.id, &request)?;
+        Ok(hits
+            .iter()
+            .filter(|hit| hit.status != store::DocumentStatus::Draft)
+            .map(DocumentHit::from_hit)
+            .collect())
+    }
+
+    /// One stored document for the detail screen.
+    pub fn document(&self, id: &str) -> Result<DocumentDetail, StoreError> {
+        let id = crux::DocumentId::parse_str(id).map_err(|error| StoreError::Data(error.to_string()))?;
+        let view = store::archive::load(self.database.connection(), id)?
+            .ok_or_else(|| StoreError::NotFound(format!("document {id}")))?;
+        Ok(DocumentDetail::from_view(&view))
+    }
+
+    /// The bytes of one artefact, verified against the hash recorded for it.
+    pub fn document_artefact(&self, id: &str, kind: &str) -> Result<Vec<u8>, StoreError> {
+        let id = crux::DocumentId::parse_str(id).map_err(|error| StoreError::Data(error.to_string()))?;
+        store::archive::artefact_bytes(self.database.connection(), id, kind)
     }
 
     /// Records a reason for accepting a non-blocking finding.
@@ -786,6 +825,68 @@ mod tests {
 
         assert_eq!(first.number, "2026-0001");
         assert_eq!(second.number, "2026-0002");
+    }
+
+    #[test]
+    fn an_issued_document_reads_back_from_the_register_and_the_detail() {
+        let (_directory, mut archive) = archive();
+        let (seller, customer) = seed(&archive);
+        let outcome = archive
+            .issue(
+                &draft(&seller, &customer, "Consultancy"),
+                crate::DocumentLanguage::English,
+                None,
+                "test",
+            )
+            .unwrap();
+        let issued = outcome.issued.clone().expect("issued");
+
+        let listed = archive.documents(None).unwrap();
+        assert_eq!(listed.len(), 1, "{listed:?}");
+        assert_eq!(listed[0].id, issued.id);
+        assert_eq!(listed[0].number, "2026-0001");
+        assert_eq!(listed[0].party, "Buyer BV");
+        assert_eq!(listed[0].direction, "outbound");
+        assert_eq!(listed[0].status, "issued");
+        assert_eq!(listed[0].gross_micros, 121_000_000);
+        assert_eq!(listed[0].currency, "EUR");
+
+        // A query matches the number and the party; a word nobody used finds nothing.
+        assert_eq!(archive.documents(Some("2026-0001")).unwrap().len(), 1);
+        assert_eq!(archive.documents(Some("Buyer")).unwrap().len(), 1);
+        assert!(archive.documents(Some("nothing-like-this")).unwrap().is_empty());
+        // An empty query means the register, not nothing.
+        assert_eq!(archive.documents(Some("  ")).unwrap().len(), 1);
+
+        let detail = archive.document(&issued.id).unwrap();
+        assert_eq!(detail.number, "2026-0001");
+        assert_eq!(detail.doc_type, "380");
+        assert_eq!(detail.seller, "Seller BV");
+        assert_eq!(detail.buyer, "Buyer BV");
+        assert_eq!(detail.due_date.as_deref(), Some("2026-12-08"));
+        assert_eq!(detail.buyer_reference.as_deref(), Some("PO-1"));
+        assert_eq!(detail.gross_micros, 121_000_000);
+        assert_eq!(detail.lines.len(), 1);
+        assert_eq!(detail.lines[0].quantity, "1");
+        assert_eq!(detail.lines[0].unit_price_micros, 100_000_000);
+        assert_eq!(detail.lines[0].vat_rate_bp, 2100);
+        // The state was written at issue time; the history starts with the first
+        // change after it.
+        assert_eq!(detail.status, "issued");
+        assert!(detail.events.is_empty(), "{:?}", detail.events);
+        let kinds: Vec<&str> = detail.artefacts.iter().map(|artefact| artefact.kind.as_str()).collect();
+        assert!(kinds.contains(&"ubl") && kinds.contains(&"pdf"), "{kinds:?}");
+
+        // The bytes come back as stored, and the PDF hashes to what was reported.
+        let pdf = archive.document_artefact(&issued.id, "pdf").unwrap();
+        assert_eq!(store::audit::sha256_hex(&pdf), outcome.pdf_sha256.clone().unwrap());
+        let ubl = archive.document_artefact(&issued.id, "ubl").unwrap();
+        let text = String::from_utf8(ubl).unwrap();
+        assert!(text.contains("Buyer BV"), "the UBL carries the buyer");
+
+        // An unknown artefact kind and an unknown document are both errors.
+        assert!(archive.document_artefact(&issued.id, "xml").is_err());
+        assert!(archive.document("not-a-document").is_err());
     }
 
     #[test]
