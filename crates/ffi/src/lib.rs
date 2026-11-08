@@ -1001,6 +1001,22 @@ impl Archive {
         Ok(archive.draft_totals(&DraftDto::from(draft))?.into())
     }
 
+    /// Renders the draft as it would print, without issuing it.
+    ///
+    /// The page stands in the document's word for a preview where the number
+    /// will go, because a number is only allocated when the document is issued.
+    /// Nothing is stored and the draft keeps its identity.
+    pub fn draft_preview(&self, draft: DraftRecord) -> Result<Vec<u8>, AppError> {
+        let guard = self.inner.lock().map_err(|_| AppError::Closed)?;
+        let archive = guard.as_ref().ok_or(AppError::Closed)?;
+        let locale = archive
+            .seller()
+            .map(|seller| seller.default_locale)
+            .unwrap_or_else(|_| "en".to_owned());
+        let language = application::DocumentLanguage::from_locale(&locale);
+        Ok(archive.draft_preview(&DraftDto::from(draft), language, None)?)
+    }
+
     /// Issues a draft, or returns the findings that stopped it.
     ///
     /// The draft is saved first, so an edit still in the editor is what gets

@@ -210,6 +210,14 @@ expect fun validateDraft(draft: Draft): List<Finding>
 /** Totals for the editor preview, computed by the domain. */
 expect fun draftTotals(draft: Draft): DraftTotals
 
+/**
+ * The draft as it would print, as PDF bytes.
+ *
+ * Nothing is stored and no number is used; the page carries the document's word
+ * for a preview where the number will go.
+ */
+expect fun draftPreview(draft: Draft): ByteArray
+
 /** Issues a draft, or returns the findings that stopped it. */
 expect fun issueDraft(draft: Draft): IssueResult
 

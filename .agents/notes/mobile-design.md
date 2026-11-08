@@ -1486,6 +1486,10 @@ Run on a phone emulator at its own size: the compact layout is unchanged, with t
 
 Run on a tablet emulator (1280x800 dp): the rail, the two-column dashboard, and the two-pane customer list; selecting a customer loaded the editor beside it, selecting another swapped the form, and Save cleared the right pane and refreshed the list. On Documents, the Register's Issued and Received tabs keep their list while a document opens beside them, scrolling the detail pane independently, and approving a received invoice moved its row to Approved without touching the list's state. A draft on the same tablet puts the form and the lines in the left pane and the totals, the findings and the issue action in the right one, each side scrolling on its own, so a finding and the field it names are both on screen.
 
+The wide editor's right pane also draws the draft itself. The page comes from the same renderer the issue path uses, asked for through `draft_preview`, which loads the seller and customer, sums the lines and renders the PDF without saving the draft or allocating a number; the page carries the language's word for a preview where the number will go. Android draws page one through `PdfRenderer` into a bitmap, reading the bytes from a temporary file in the app's scratch directory, and the pane says so when the platform refuses the document. The preview is refreshed on the editor's existing 500 ms debounce, so it follows the totals.
+
+Run on the tablet with a seeded draft: the preview appeared in the right pane above the totals and the issue action, with the fields in the left pane. A host test asserts that a preview is a PDF and that it leaves the register empty and no draft saved, and that a draft with no lines still renders.
+
 The colours follow the system light or dark choice through `BonkTheme`, and the window behind Compose is themed the same way in `values` and `values-night`, so the first frame does not flash the wrong shade. A fact whose label and value shared a fixed 120 dp column now stacks them above 1.5 font scale instead of clipping. Layout direction comes from the locale, so a right-to-left configuration mirrors the rail, the two-pane order and the text fields without a second layout.
 
 Run on a phone emulator at 200% font scale: the unlock form, dashboard, register rows, and a document's facts all stayed legible, and the facts stacked label over value as intended. Run with the app locale set to `ar` at medium width: the rail moved to the right side, the dashboard's button columns swapped, and the customer list sat to the right of the detail pane. The packaged APK carries both day and night variants of the window theme (checked with `aapt2`), and the app unlocked and redrew in night mode without a runtime error in logcat; the colours themselves cannot be inspected on the emulator because the window refuses screenshots.
@@ -1499,7 +1503,7 @@ What TalkBack announces has not been verified: the rows keep Material's clickabl
 - [x] Width classes and a navigation rail on medium and expanded windows
 - [x] Two-pane list-detail for customers and documents, each pane scrolling on its own
 - [x] Expanded editor: form beside a panel with the totals, findings and issue action
-- [ ] Expanded editor: rendered invoice preview pane
+- [x] Expanded editor: rendered invoice preview pane
 - [ ] Foldable hinge avoidance and posture-aware split
 - [x] Font scale 200%, dark/light, RTL layout
 - [x] 48 dp touch targets on every clickable control

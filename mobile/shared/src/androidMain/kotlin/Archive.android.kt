@@ -181,6 +181,14 @@ object MobileArchiveHost {
         return opened.draftTotals(draft.toFfi()).toCommon()
     }
 
+    fun draftPreview(draft: Draft): ByteArray {
+        val opened = archive ?: error("the archive is not open")
+        return opened.draftPreview(draft.toFfi())
+    }
+
+    /** Where a rendered preview page waits while the platform draws it. */
+    fun scratchDirectory(): File? = cache
+
     fun newDraft(customerId: String): Draft {
         val opened = archive ?: error("the archive is not open")
         return opened.newDraft(customerId).toCommon()

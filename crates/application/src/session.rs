@@ -423,6 +423,45 @@ impl Archive {
         Ok(DraftTotalsDto::from(&totals))
     }
 
+    /// Renders a draft as it would print, without issuing it.
+    ///
+    /// Nothing is stored and no number is consumed: the page carries the
+    /// document's word for a preview where the number will go, so the editor can
+    /// show the layout before the document stands.
+    pub fn draft_preview(
+        &self,
+        draft: &DraftDto,
+        language: crate::DocumentLanguage,
+        template: Option<&crate::ArchiveTemplate>,
+    ) -> Result<Vec<u8>, StoreError> {
+        let domain = draft
+            .clone()
+            .into_draft()
+            .map_err(|error| StoreError::Data(error.to_string()))?;
+        let seller = store::load_seller(self.database.connection(), domain.seller_id)?;
+        let customer = store::load_customer(self.database.connection(), domain.customer_id)?;
+        let totals = if domain.lines.is_empty() {
+            let zero = crux::Money::zero(domain.currency);
+            crux::InvoiceTotals {
+                net: zero,
+                tax: zero,
+                gross: zero,
+                breakdown: Vec::new(),
+            }
+        } else {
+            crux::calculate_totals(&domain.lines).map_err(|error| StoreError::Data(error.to_string()))?
+        };
+        crate::issue::invoice_pdf(
+            language.preview_number(),
+            &domain,
+            &seller,
+            &customer,
+            &totals,
+            language,
+            template.map(|template| &template.template),
+        )
+    }
+
     /// The default seller's id, creating a placeholder party when there is none.
     ///
     /// The mobile shell has no seller setup screen yet and a draft needs an
@@ -916,6 +955,43 @@ mod tests {
         assert_eq!(totals.net_micros, 100_000_000);
         assert_eq!(totals.tax_micros, 21_000_000);
         assert_eq!(totals.gross_micros, 121_000_000);
+    }
+
+    #[test]
+    fn a_draft_previews_without_being_issued_or_numbered() {
+        let (_directory, archive) = archive();
+        let (seller, customer) = seed(&archive);
+
+        let pdf = archive
+            .draft_preview(
+                &draft(&seller, &customer, "Consultancy"),
+                crate::DocumentLanguage::English,
+                None,
+            )
+            .unwrap();
+        assert!(pdf.starts_with(b"%PDF"), "a preview is a PDF");
+
+        // The preview neither saved a draft nor numbered a document.
+        assert!(archive.list_drafts().unwrap().is_empty());
+        assert!(
+            archive
+                .documents(None, None, store::Direction::Outbound)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn an_empty_draft_still_draws_a_preview() {
+        let (_directory, archive) = archive();
+        let (seller, customer) = seed(&archive);
+        let mut empty = draft(&seller, &customer, "Consultancy");
+        empty.lines.clear();
+
+        let pdf = archive
+            .draft_preview(&empty, crate::DocumentLanguage::Dutch, None)
+            .unwrap();
+        assert!(pdf.starts_with(b"%PDF"));
     }
 
     const NOW: &str = "2026-11-08T12:00:00Z";

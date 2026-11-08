@@ -14,6 +14,8 @@ actual fun validateDraft(draft: Draft): List<Finding> = withUserError { MobileAr
 
 actual fun draftTotals(draft: Draft): DraftTotals = withUserError { MobileArchiveHost.draftTotals(draft) }
 
+actual fun draftPreview(draft: Draft): ByteArray = withUserError { MobileArchiveHost.draftPreview(draft) }
+
 actual fun newDraft(customerId: String): Draft = withUserError { MobileArchiveHost.newDraft(customerId) }
 
 actual fun issueDraft(draft: Draft): IssueResult = withUserError { MobileArchiveHost.issueDraft(draft) }

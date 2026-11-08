@@ -1,5 +1,6 @@
 package com.github.sdgoij.bonk
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -45,6 +46,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -298,7 +300,12 @@ fun DraftEditorScreen(
     var focus by remember { mutableStateOf<DraftFocusRequest?>(null) }
     var busy by remember { mutableStateOf(false) }
     var issueFindings by remember { mutableStateOf<List<Finding>?>(null) }
+    var preview by remember { mutableStateOf<ByteArray?>(null) }
+    var previewError by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
+    // A wide window keeps the totals, the findings and the preview beside the
+    // form instead of below it.
+    val expanded = LocalWindowWidth.current.isExpanded
 
     // Tapping a finding reveals its control. A customer finding can only be
     // answered by choosing another customer, so it opens the picker instead of
@@ -312,17 +319,24 @@ fun DraftEditorScreen(
         focus = DraftFocusRequest(target, (focus?.token ?: 0) + 1)
     }
 
-    // Save and refresh the preview 500 ms after the last edit.
+    // Save and refresh the preview 500 ms after the last edit. The rendered page
+    // is only asked for on a wide window, because that is the only place it is
+    // shown.
     LaunchedEffect(current) {
         delay(500)
-        val preview = withContext(Dispatchers.IO) {
+        val previewData = withContext(Dispatchers.IO) {
             runCatching {
                 saveDraft(current)
                 draftTotals(current) to validateDraft(current)
             }
         }
-        preview.onSuccess { (t, f) -> totals = t; findings = f }
+        previewData.onSuccess { (t, f) -> totals = t; findings = f }
             .onFailure { error = it.message ?: it.toString() }
+        if (expanded) {
+            val rendered = withContext(Dispatchers.IO) { runCatching { draftPreview(current) } }
+            rendered.onSuccess { preview = it; previewError = null }
+                .onFailure { previewError = it.message ?: it.toString() }
+        }
     }
 
     // The issue attempt saves the draft itself, so an edit that is still inside
@@ -350,7 +364,6 @@ fun DraftEditorScreen(
     // On an expanded window the totals, the findings and the issue action stay
     // beside the form instead of below it, so a finding and the field it names
     // are both on screen at once.
-    val expanded = LocalWindowWidth.current.isExpanded
 
     val fields: @Composable () -> Unit = {
         Column(Modifier.fillMaxWidth()) {
@@ -440,6 +453,9 @@ fun DraftEditorScreen(
 
     val summary: @Composable () -> Unit = {
         Column(Modifier.fillMaxWidth()) {
+            if (expanded) {
+                DraftPreviewPane(preview, previewError)
+            }
             totals?.let {
                 Spacer(Modifier.height(12.dp))
                 Text(
@@ -629,6 +645,35 @@ private fun FindingEntry(
         }
         action()
     }
+}
+
+/** The draft's own PDF page, drawn by the platform renderer. */
+@Composable
+private fun DraftPreviewPane(bytes: ByteArray?, error: String?) {
+    if (bytes == null) {
+        if (error != null) PreviewUnavailable()
+        return
+    }
+    val page = rememberPdfPage(bytes)
+    if (page == null) {
+        PreviewUnavailable()
+        return
+    }
+    Image(
+        bitmap = page,
+        contentDescription = strings.preview,
+        contentScale = ContentScale.Fit,
+        modifier = Modifier.fillMaxWidth().heightIn(max = 420.dp).padding(bottom = 8.dp),
+    )
+}
+
+@Composable
+private fun PreviewUnavailable() {
+    Text(
+        strings.previewUnavailable,
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
 }
 
 /** What the archive holds after a successful issue. */

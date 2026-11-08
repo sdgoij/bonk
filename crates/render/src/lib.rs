@@ -108,6 +108,17 @@ impl Language {
         }
     }
 
+    /// What a draft prints where the number will go.
+    ///
+    /// A number is allocated when the document is issued, so a preview cannot
+    /// show one; it says what the page is instead of pretending to be numbered.
+    pub const fn preview_number(self) -> &'static str {
+        match self {
+            Language::English => "Preview",
+            Language::Dutch => "Voorbeeld",
+        }
+    }
+
     /// Infers the printed language from a locale tag; `nl` anywhere in the
     /// primary subtag means Dutch, anything else English.
     pub fn from_locale(locale: &str) -> Self {

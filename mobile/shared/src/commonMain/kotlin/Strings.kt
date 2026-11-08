@@ -198,6 +198,8 @@ class Strings(private val dutch: Boolean) {
         "Het archief weigerde het document zonder bevinding.",
     )
     val reason = t("Reason", "Reden")
+    val preview = t("Invoice preview", "Factuurvoorbeeld")
+    val previewUnavailable = t("The preview could not be drawn.", "Het voorbeeld kon niet worden getekend.")
 
     fun netTotal(amount: String) = t("Net $amount", "Netto $amount")
 
