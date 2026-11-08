@@ -26,6 +26,9 @@ kotlin {
             implementation(libs.compose.material3)
             implementation(libs.compose.ui)
         }
+        commonTest.dependencies {
+            implementation(kotlin("test"))
+        }
         androidMain.dependencies {
             implementation(libs.androidx.activity.compose)
             implementation(libs.androidx.biometric)

@@ -811,10 +811,13 @@ Details:
 
 **Findings**
 
-- Severity chips (`blocking`, `warning`, `info`), stable code, BT reference, and
-  the field path.
-- Tap focuses the field; on compact, the sheet collapses and the field scrolls
-  into view.
+- Severity, stable code, BT reference, message, and the field path.
+- The field path is a chip. Tapping it focuses that control, scrolls it into view,
+  and raises the keyboard. A path the editor cannot show (a seller field, a line
+  position) stays plain text. A customer finding opens the customer picker, which
+  is the only remedy the editor offers.
+- The editor keeps findings inline below the totals so the message stays visible
+  while the user corrects the field.
 - Suppressing a warning requires a reason and writes the same audit/record as
   the desktop. Only non-blocking findings can be suppressed.
 
@@ -1382,14 +1385,14 @@ single place to update progress; the tables stay as the plan.
 
 #### M11.3 — Customers and drafts (3 weeks)
 
-**Status 2026-11-08:** Customers and drafts are usable: list, search, create, edit, a draft list, and a compact editor with domain-computed totals and inline findings. Customer CSV imports and exports through the system file picker, non-blocking warnings can be suppressed with a reason, and a parity test pins the editor rules to the domain. The tap-to-focus findings sheet remains.
+**Status 2026-11-08:** Customers and drafts are usable: list, search, create, edit, a draft list, and a compact editor with domain-computed totals and inline findings. Customer CSV imports and exports through the system file picker, non-blocking warnings can be suppressed with a reason, and a parity test pins the editor rules to the domain. A finding shows its field path as a chip; tapping the chip focuses that control, scrolls it into view, and raises the keyboard, and a customer finding opens the customer picker.
 
 - [x] Customer list, search, create, edit
 - [x] CSV import/export through SAF
 - [x] Draft list
 - [x] Compact editor: customer, details, lines, review
 - [x] Findings with code, BT reference, field path, and message inline
-- [ ] Findings sheet that focuses the field on tap
+- [x] Findings sheet that focuses the field on tap
 - [x] Suppression flow for non-blocking warnings
 - [x] 500 ms debounced save and draft reload after process death
 - [x] Validation parity test against the desktop

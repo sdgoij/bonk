@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
@@ -274,7 +275,20 @@ fun DraftEditorScreen(
     var pickerOpen by remember { mutableStateOf(false) }
     var suppressing by remember { mutableStateOf<Finding?>(null) }
     var reason by remember { mutableStateOf("") }
+    var focus by remember { mutableStateOf<DraftFocusRequest?>(null) }
     val scope = rememberCoroutineScope()
+
+    // Tapping a finding reveals its control. A customer finding can only be
+    // answered by choosing another customer, so it opens the picker instead of
+    // focusing the button that opens it.
+    fun moveTo(field: String) {
+        val target = draftFocus(field, current.lines) ?: return
+        if (target == DraftFocus.Customer) {
+            pickerOpen = true
+            return
+        }
+        focus = DraftFocusRequest(target, (focus?.token ?: 0) + 1)
+    }
 
     // Save and refresh the preview 500 ms after the last edit.
     LaunchedEffect(current) {
@@ -294,7 +308,7 @@ fun DraftEditorScreen(
         Box {
             Button(
                 onClick = { pickerOpen = true; onInteraction() },
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.fillMaxWidth().revealOn(focus, DraftFocus.Customer, focus = false),
             ) {
                 Text(customers.firstOrNull { it.id == current.customerId }?.name ?: "Choose a customer")
             }
@@ -312,15 +326,28 @@ fun DraftEditorScreen(
             }
         }
         Spacer(Modifier.height(8.dp))
-        FormField("Issue date", current.issueDate) { current = current.copy(issueDate = it); onInteraction() }
-        FormField("Due date", current.dueDate) { current = current.copy(dueDate = it); onInteraction() }
-        FormField("Note", current.note) { current = current.copy(note = it); onInteraction() }
+        FormField(
+            "Issue date",
+            current.issueDate,
+            modifier = Modifier.revealOn(focus, DraftFocus.IssueDate),
+        ) { current = current.copy(issueDate = it); onInteraction() }
+        FormField(
+            "Due date",
+            current.dueDate,
+            modifier = Modifier.revealOn(focus, DraftFocus.DueDate),
+        ) { current = current.copy(dueDate = it); onInteraction() }
+        FormField(
+            "Note",
+            current.note,
+            modifier = Modifier.revealOn(focus, DraftFocus.Note),
+        ) { current = current.copy(note = it); onInteraction() }
 
         Spacer(Modifier.height(12.dp))
         Text("Lines", style = MaterialTheme.typography.titleMedium)
         current.lines.forEach { line ->
             DraftLineEditor(
                 line = line,
+                focus = focus,
                 onChange = { updated ->
                     current = current.copy(lines = current.lines.map { if (it.id == line.id) updated else it })
                     onInteraction()
@@ -335,6 +362,7 @@ fun DraftEditorScreen(
             )
         }
         TextButton(
+            modifier = Modifier.revealOn(focus, DraftFocus.Lines),
             onClick = {
                 current = current.copy(
                     lines = current.lines + DraftLine(
@@ -364,17 +392,35 @@ fun DraftEditorScreen(
             Text("Findings", style = MaterialTheme.typography.titleMedium)
             findings.forEach { finding ->
                 val reference = listOf(finding.code, finding.bt).filter { it.isNotBlank() }.joinToString(" ")
+                val target = draftFocus(finding.field, current.lines)
+                val tone = if (finding.blocking) {
+                    MaterialTheme.colorScheme.error
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                }
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        "${finding.severity}: $reference ${finding.field} ${finding.message}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = if (finding.blocking) {
-                            MaterialTheme.colorScheme.error
-                        } else {
-                            MaterialTheme.colorScheme.onSurfaceVariant
-                        },
-                        modifier = Modifier.weight(1f),
-                    )
+                    Column(Modifier.weight(1f).padding(vertical = 4.dp)) {
+                        Text(
+                            "${finding.severity}: $reference",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = tone,
+                        )
+                        Text(finding.message, style = MaterialTheme.typography.bodySmall)
+                        if (finding.field.isNotBlank()) {
+                            if (target != null) {
+                                AssistChip(
+                                    onClick = { moveTo(finding.field) },
+                                    label = { Text(finding.field, style = MaterialTheme.typography.labelSmall) },
+                                )
+                            } else {
+                                Text(
+                                    finding.field,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = tone,
+                                )
+                            }
+                        }
+                    }
                     if (!finding.blocking) {
                         TextButton(
                             onClick = {
@@ -438,6 +484,7 @@ fun DraftEditorScreen(
 @Composable
 private fun DraftLineEditor(
     line: DraftLine,
+    focus: DraftFocusRequest?,
     onChange: (DraftLine) -> Unit,
     onRemove: () -> Unit,
 ) {
@@ -458,7 +505,7 @@ private fun DraftLineEditor(
             },
             label = { Text("Item") },
             singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.fillMaxWidth().revealOn(focus, DraftFocus.Line(line.id, LineField.Name)),
         )
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedTextField(
@@ -470,7 +517,9 @@ private fun DraftLineEditor(
                 label = { Text("Quantity") },
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                modifier = Modifier.weight(1f),
+                modifier = Modifier
+                    .weight(1f)
+                    .revealOn(focus, DraftFocus.Line(line.id, LineField.Quantity)),
             )
             OutlinedTextField(
                 value = unit,
@@ -480,7 +529,9 @@ private fun DraftLineEditor(
                 },
                 label = { Text("Unit") },
                 singleLine = true,
-                modifier = Modifier.weight(1f),
+                modifier = Modifier
+                    .weight(1f)
+                    .revealOn(focus, DraftFocus.Line(line.id, LineField.Unit)),
             )
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -493,7 +544,9 @@ private fun DraftLineEditor(
                 label = { Text("Unit price") },
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                modifier = Modifier.weight(1f),
+                modifier = Modifier
+                    .weight(1f)
+                    .revealOn(focus, DraftFocus.Line(line.id, LineField.UnitPrice)),
             )
             OutlinedTextField(
                 value = rate,
@@ -504,7 +557,9 @@ private fun DraftLineEditor(
                 label = { Text("VAT %") },
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                modifier = Modifier.weight(1f),
+                modifier = Modifier
+                    .weight(1f)
+                    .revealOn(focus, DraftFocus.Line(line.id, LineField.TaxRate)),
             )
         }
         TextButton(onClick = onRemove) { Text("Remove line") }
@@ -548,13 +603,18 @@ private fun DraftRow(draft: Draft, customerName: String, gross: String, onClick:
 }
 
 @Composable
-private fun FormField(label: String, value: String, onChange: (String) -> Unit) {
+private fun FormField(
+    label: String,
+    value: String,
+    modifier: Modifier = Modifier,
+    onChange: (String) -> Unit,
+) {
     OutlinedTextField(
         value = value,
         onValueChange = onChange,
         label = { Text(label) },
         singleLine = true,
-        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+        modifier = modifier.fillMaxWidth().padding(vertical = 4.dp),
     )
 }
 
