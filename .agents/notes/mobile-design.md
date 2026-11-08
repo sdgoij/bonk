@@ -1032,6 +1032,15 @@ split is a security feature and must not be hidden.
 - **Cloud backup:** excluded. The user can still put the encrypted backup in a
   cloud folder deliberately; that is their choice and the file is encrypted.
 
+**Review (2026-11-08).** Keep the two-file split. A backup is `bonk.db` and the
+recovery kit is `keystore.bin`. The export writes a `VACUUM INTO` copy to a cache
+path, reopens it read-only, and checks the integrity and the audit chain before
+streaming it to the destination and deleting the cache; the restore copies both
+files into app-private storage and verifies again before unlock. A single-file
+`.bonk` container stays a later convenience behind an ADR. The export and restore
+screens land with the import and settings milestone; this review fixes the format
+and the safety checks, not the UI.
+
 ### 7.6 Audit and evidence
 
 - Actors: `android` and `ios`; device name recorded where the desktop records
@@ -1041,6 +1050,33 @@ split is a security feature and must not be hidden.
   verifier remains the CLI/desktop tool, not a mobile claim.
 - Support bundles contain counts, versions, sizes, and hashes only; no names,
   amounts, numbers, identifiers, or paths. Opt-in.
+
+### 7.7 Privacy and data safety
+
+The app states one posture in the store listing, the Play data-safety form, and
+an in-app note when Settings lands:
+
+- **No account and no server.** Everything runs on the device; the app makes no
+  network requests.
+- **No telemetry, analytics, or crash reporting.** Nothing is collected or
+  uploaded, so the data-safety form reports "No data collected".
+- **Data stays in app-private storage.** The encrypted database and keystore live
+  under the app's private files, and the archive is excluded from Google backup
+  and device transfer.
+- **No permissions beyond what the feature needs.** `USE_BIOMETRIC` for device
+  unlock, and no storage permission because import and export go through the
+  system file picker.
+- **The OS can still clear app data.** Uninstall, "Clear storage", or a lost
+  device with no export removes the archive; a verified export plus the recovery
+  kit is the only durable copy.
+- **Share and export are explicit.** A PDF, UBL, or backup leaves the app only
+  when the user chooses a destination, and a backup is encrypted.
+- **Crash logs are off.** If reporting is ever added, it is opt-in, redacted, and
+  never automatic.
+
+The listing and the in-app note must say that a backup file alone cannot restore
+the archive: it needs the matching keystore, and the recovery kit is where that
+comes from.
 
 ---
 
@@ -1317,7 +1353,7 @@ single place to update progress; the tables stay as the plan.
 
 #### M11.2 — Unlock and security (2 weeks)
 
-**Status 2026-11-08:** Locking, backup exclusion, and the canary scan are done. Auto-lock runs five minutes after the last interaction and on `ON_STOP`; device extraction rules exclude the archive from cloud backup and device transfer; the canary scan reported clean DB, WAL, and keystore on the API 37 x86_64 emulator. Physical fingerprint invalidation and the explicit backup/restore review remain.
+**Status 2026-11-08:** Locking, backup exclusion, the canary scan, the backup/restore review, and the privacy and threat-model text are done. Auto-lock runs five minutes after the last interaction and on `ON_STOP`; device extraction rules exclude the archive from cloud backup and device transfer; the canary scan reported clean DB, WAL, and keystore on the API 37 x86_64 emulator. Only the physical fingerprint and enrolment-change invalidation on real hardware remain.
 
 - [x] Create and open with a passphrase; create twice-checks the phrase, and a wrong passphrase is reported by variant
 - [x] Passphrase reset with the recovery key; a used key is spent and the replacement is shown once
@@ -1330,7 +1366,7 @@ single place to update progress; the tables stay as the plan.
 - [x] Manifest `allowBackup=false`
 - [x] `FLAG_SECURE` and recents screenshot disabled
 - [x] Data extraction rules review; the archive is excluded from cloud backup and device transfer
-- [ ] Explicit encrypted backup export and restore review
+- [x] Explicit encrypted backup export and restore review; the export and restore screens land with the import and settings milestone
 - [x] Canary scan of DB/WAL and keystore on a device
 - [x] Audit events for device trust and forget
 

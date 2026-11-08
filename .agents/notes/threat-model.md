@@ -1,10 +1,10 @@
 # Threat model
 
-**Status:** v1.0 draft, 2026-10-28. This is the honest version: it names what the
+**Status:** v1.0 draft, 2026-10-28; mobile surface added 2026-11-08. This is the honest version: it names what the
 product does not defend against as clearly as what it does.
 
-Scope: the desktop client as built through M6 — local archive, keys, imports,
-exported artefacts, backups, evidence and support bundles. The Peppol bridge
+Scope: the desktop client as built through M6 (local archive, keys, imports,
+exported artefacts, backups, evidence and support bundles) and the Android client that wraps the same core. The Peppol bridge
 (M7), synchronization (M8), and the DRR pipeline (M9) are out of scope and are
 not in the binary.
 
@@ -121,6 +121,31 @@ the machine, not a machine an attacker is already logged into.
 | Unmaintained dependency reported | `deny.toml` sets `unmaintained = "workspace"`: the check fails for a crate this workspace depends on directly, and not for one buried in a transitive stack. The Linux desktop stacks pull in `zvariant`, folded into zbus 6, which no release has migrated to | A transitive crate going unmaintained is a real risk (no more security fixes). Vulnerabilities and unsound advisories are not affected by the setting |
 | Untrusted code in a template | Templates are declarative JSON: unknown keys are refused, placeholders come from a fixed table, and there is no expression language to execute | M4's template editor must keep the format declarative; adding conditionals or expressions would reopen this |
 
+### 4.7 Mobile surface
+
+The mobile client runs the same Rust core through UniFFI on a phone or tablet.
+The desktop boundary still applies: encryption protects a copy that leaves the
+device, not a device an attacker is already using while unlocked. A phone adds
+these threats.
+
+| Threat | Mitigation | Residual |
+|---|---|---|
+| Lost or stolen phone | SQLCipher at rest, Keystore-gated device unlock, a lock after five minutes without interaction and immediately on `ON_STOP`, and the archive excluded from cloud and device-transfer backup | A weak passphrase, or an unlocked device in an attacker's hand while the process still holds the DEK |
+| Screenshot or app-switcher snapshot | `FLAG_SECURE` on the activity and `setRecentsScreenshotEnabled(false)` | Photographs of the screen by another person |
+| Platform cloud or adb backup | `allowBackup=false` and `data_extraction_rules.xml` keep the database, keystore, files, shared preferences, and external storage out of cloud backup and device transfer | A user who exports the archive to an unsafe place |
+| Malicious keyboard or IME | The app does not log field content, and the recovery-key field disables suggestions; a compromised system IME is out of scope | A compromised system IME reads what the user types |
+| Clipboard leakage | Nothing sensitive is copied automatically, and copies are marked sensitive on Android 13 and later | Other apps on the device can read the clipboard |
+| Rooted or jailbroken device | Out of scope, as on desktop; the app does not pretend to detect it reliably | Full compromise of the archive while unlocked |
+| Overlay or tapjacking | `filterTouchesWhenObscured` on sensitive actions, plus the platform overlay protections | A sophisticated overlay attack |
+| Biometric enrolment change | The Keystore entry is invalidated, the app falls back to the passphrase and stops offering the device route, and the revocation is recorded after the next unlock because the database needs the key | A user who ignores the passphrase fallback |
+| App killed while editing | Debounced save and process-death restore (later milestone) | The last few hundred milliseconds of typing |
+| Clock manipulation | Audit order is total and independent of the wall clock, and issue dates are user-entered | A mis-set date is a user error |
+
+**Plaintext canary.** The archive and its WAL are scanned for the SQLite magic
+on the device, so a build that loses encryption fails the scan rather than
+shipping silently. On the API 37 x86_64 emulator the database, WAL, and keystore
+all reported clean.
+
 ## 5. Residual risks, stated plainly
 
 - **R1 — Unlocked means readable.** While the app runs, the DEK is in memory and
@@ -164,6 +189,19 @@ the data key is in the operating system's credential store, so anyone at an
 unlocked session can read the archive; the passphrase stops being required on
 this machine. It still protects a copy of the keystore taken elsewhere. Turning
 it off deletes the entry and appends `device_forgotten` to the chain.
+- **R10: A mobile lock is a lifecycle event, not a guarantee.** Locking on
+  `ON_STOP` and after five minutes without interaction covers Home, the recents
+  screen, and a locked device, but a process the OS keeps alive in the background
+  still holds the DEK until the activity stops.
+- **R11: Kotlin strings are not wiped.** The passphrase and recovery key live in
+  Compose state only and are cleared after use, but the Kotlin runtime cannot
+  zeroize a `String`; their lifetime is kept short, and they never enter saved
+  state or logs. This is the same residual as the desktop, now on a platform that
+  may snapshot the process.
+- **R12: Platform backup and "clear app data" are outside the app.** The app
+  excludes the archive from cloud and device-transfer backup and states that a
+  backup alone cannot restore it, but the OS can still erase app data on uninstall
+  or through Settings; only an explicit export survives.
 
 ## 6. Out of scope for v1.0
 
@@ -206,6 +244,9 @@ it off deletes the entry and appends `device_forgotten` to the chain.
 | A remembered device opens the archive without the passphrase | `a_remembered_device_opens_the_archive_without_the_passphrase` |
 | Forgetting the device removes the route | `forgetting_the_device_removes_the_route` |
 | Parsers survive hostile bytes | `arbitrary_bytes_never_panic`, `a_mutated_container_never_panics`, `a_stream_that_inflates_past_the_limit_is_refused`; deeper, bounded runs are `just fuzz-all` (fuzz/ubl, fuzz/cii, fuzz/pdf) |
+| The mobile archive is excluded from platform backup | `mobile/androidApp/src/main/res/xml/data_extraction_rules.xml` and `android:allowBackup="false"`, inspected on the emulator |
+| The mobile archive and WAL have no plaintext header on the device | the Diagnostics canary scan, run on the API 37 x86_64 emulator |
+| Leaving the mobile app locks the archive | manual: Home, relaunch, the unlock screen appears |
 
 ## 8. Open items
 
