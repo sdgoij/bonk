@@ -48,6 +48,9 @@ android {
 
 dependencies {
     implementation(project(":shared"))
+    // Installs the baseline profile the libraries ship, on installs that did not
+    // come through Play.
+    implementation(libs.androidx.profileinstaller)
 
     androidTestImplementation(libs.androidx.test.junit)
     androidTestImplementation(libs.androidx.test.runner)

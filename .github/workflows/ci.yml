@@ -172,6 +172,7 @@ jobs:
           path: |
             mobile/androidApp/build/outputs/apk/debug/androidApp-debug.apk
             mobile/androidApp/build/outputs/apk/androidTest/debug/androidApp-debug-androidTest.apk
+            mobile/androidApp/build/outputs/apk/release/androidApp-release.apk
           if-no-files-found: error
           retention-days: 7
 
@@ -218,6 +219,8 @@ jobs:
             export BONK_TEST_APK=mobile/apks/androidApp-debug-androidTest.apk
             sh tools/run-android-test.sh - com.github.sdgoij.bonk.ArtefactDeterminismTest
             sh tools/run-android-test.sh - com.github.sdgoij.bonk.ShellScreenshotTest
+            sh tools/run-android-test.sh - com.github.sdgoij.bonk.BudgetTest
+            BONK_APK=mobile/apks/androidApp-release.apk sh tools/measure-cold-start.sh -
 
   plain:
     name: unencrypted fallback builds

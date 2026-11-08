@@ -1500,6 +1500,10 @@ The width bands are pinned by a host test that fails if a threshold moves, and t
 
 `ShellScreenshotTest` draws the rail and the dashboard, which is the one archive screen that takes its data as parameters and so can be drawn without opening an archive, at 360, 700 and 1280 dp wide. It draws at one pixel per dp and pins the light palette, so the images do not depend on the device's density or its day/night choice. The test compares every pixel against the committed image and allows a fifth of a percent to differ, which covers antialiasing without hiding a moved control. A missing image fails the test and writes the one the device drew; `just mobile-screenshots [serial]` runs the comparison and `just mobile-screenshots-update [serial]` pulls regenerated images into `assets/screenshots`. The three images show the phone without a rail, and the medium and tablet windows with the rail and the dashboard's two columns.
 
+`BudgetTest` creates its own archive, fills a seller and a customer, saves a draft with one line, and times the calls the design budgets: create, unlock (Argon2 and the database open), issue (validation, UBL and PDF), and the draft preview render. `just mobile-budgets [serial]` runs it and the log line under `BonkBudget` carries the figures; `just mobile-cold-start [serial]` installs the release build and reports what the platform says a cold start costs. On the API 33 tablet emulator, whose host is a desktop and so is not the design's mid-range phone: cold start to the lock screen 926 ms, create 283 ms, unlock 112 ms, issue 21 ms, preview 3 ms. The assertions only refuse a start or a call that takes five seconds, so they catch a gross regression without pretending to be the device measurement; scroll jank, RSS and the per-ABI download size are still unmeasured.
+
+The release APK carries `assets/dexopt/baseline.prof` (7.3 KB) merged from the libraries, and declares `ProfileInstaller`'s initializer and receiver, so an install that did not come through Play still gets the profile on first run; the app now names `androidx.profileinstaller` as its dependency rather than inheriting it. The app's own startup methods are not in that profile, because generating one needs a macrobenchmark run on a rootable or Play-managed device.
+
 Run on an API 33 AVD with a 1280x800 dp window: the images matched on a second run. The same test cannot run on the API 37 images: the Compose test rule starts Espresso, whose input injection looks up `InputManager.getInstance`, a method API 37 removed, so the run fails before any test body executes.
 
 CI has an `android` job that builds both ABIs with the bindings, runs the shared Kotlin host tests, checks the exported symbol and the page alignment, assembles the debug pair and the release APK, and guards the universal APK's size at 32 MiB. An `android-instrumented` job installs those APKs on an API 33 tablet emulator and runs the golden artefact hashes and the screenshot images, so a tag cannot publish past a failing device test. The universal release APK is 30.5 MB; the §6.8 budget is a per-ABI Play download, which needs a bundle measurement that this APK cannot stand in for. A tag's release now carries `bonk-android.apk` beside the desktop archives and in `SHA256SUMS`, signed with the debug key until there is a release key.
@@ -1515,7 +1519,10 @@ What TalkBack announces has not been verified: the rows keep Material's clickabl
 - [x] 48 dp touch targets on every clickable control
 - [ ] TalkBack traversal of the two-pane layouts and the findings chips
 - [x] Screenshot tests for phone and tablet sizes
-- [ ] Baseline profile and §6.8 budgets met
+- [x] Library baseline profile packaged and its installer declared
+- [ ] App-specific baseline profile generated on a device
+- [x] §6.8 timings harness with emulator figures recorded
+- [ ] §6.8 budgets measured on a mid-range phone (jank, RSS, per-ABI download size)
 - [x] 16 KB native page alignment check
 
 #### M11.7 — Beta (2 weeks)

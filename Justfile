@@ -125,6 +125,24 @@ mobile-screenshots-update serial="":
     sh tools/run-android-test.sh "{{serial}}" com.github.sdgoij.bonk.ShellScreenshotTest -e updateScreenshots 1
     sh tools/pull-screenshots.sh "{{serial}}"
 
+# §6.8 timings on the device the serial names: create, unlock (Argon2 and the
+# database open), issue (UBL and PDF) and the draft preview render. The test
+# creates its own archive, so it replaces what is in the app's storage there;
+# `just demo-android` reseeds the demo archive afterwards.
+#
+# Usage: just mobile-budgets [serial]
+mobile-budgets serial="":
+    cd mobile && ./gradlew :androidApp:assembleDebug :androidApp:assembleDebugAndroidTest
+    sh tools/run-android-test.sh "{{serial}}" com.github.sdgoij.bonk.BudgetTest
+
+# Cold start of the release build to the lock screen, as the platform reports
+# it. Installs the release APK over whatever is on the device.
+#
+# Usage: just mobile-cold-start [serial]
+mobile-cold-start serial="":
+    cd mobile && ./gradlew :androidApp:assembleRelease
+    sh tools/measure-cold-start.sh "{{serial}}"
+
 # Seed a demo archive into a connected Android device.
 #
 # Runs the same generator as `just demo`, then hands the archive to the app
