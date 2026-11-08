@@ -121,7 +121,7 @@ jobs:
           cmdline-tools-version: "14742923"
 
       - name: SDK packages
-        run: sdkmanager --install "platforms;android-37" "build-tools;36.0.0" "ndk;30.0.16248370"
+        run: sdkmanager --install "platforms;android-37.0" "build-tools;36.0.0" "ndk;30.0.16248370"
 
       - name: NDK environment
         run: |
