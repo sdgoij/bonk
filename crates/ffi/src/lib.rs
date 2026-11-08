@@ -9,7 +9,9 @@
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use application::{Archive as AppArchive, CustomerDto, DraftDto, DraftLineDto, FindingDto, PrecedingInvoiceDto};
+use application::{
+    Archive as AppArchive, CustomerDto, DraftDto, DraftLineDto, DraftTotalsDto, FindingDto, PrecedingInvoiceDto,
+};
 use argon2::{Algorithm, Argon2, Params, Version};
 use crux::{
     Address, CountryCode, Currency, DocType, DraftLine, LineId, LocalDate, Money, Party, Quantity, TaxTreatment,
@@ -376,6 +378,27 @@ impl From<FindingDto> for FindingRecord {
     }
 }
 
+/// Totals for a draft preview, in micro-units.
+#[derive(uniffi::Record)]
+pub struct DraftTotalsRecord {
+    /// Sum of line nets (BT-106).
+    pub net_micros: i64,
+    /// Sum of tax per category (BT-110).
+    pub tax_micros: i64,
+    /// Net plus tax (BT-112).
+    pub gross_micros: i64,
+}
+
+impl From<DraftTotalsDto> for DraftTotalsRecord {
+    fn from(dto: DraftTotalsDto) -> Self {
+        Self {
+            net_micros: dto.net_micros,
+            tax_micros: dto.tax_micros,
+            gross_micros: dto.gross_micros,
+        }
+    }
+}
+
 /// An unlocked archive, owned by the caller and closed explicitly.
 ///
 /// Every method takes `&self`; the mutex serialises access, matching SQLite's
@@ -517,6 +540,20 @@ impl Archive {
             .into_iter()
             .map(FindingRecord::from)
             .collect())
+    }
+
+    /// Totals for the editor preview.
+    pub fn draft_totals(&self, draft: DraftRecord) -> Result<DraftTotalsRecord, AppError> {
+        let guard = self.inner.lock().map_err(|_| AppError::Closed)?;
+        let archive = guard.as_ref().ok_or(AppError::Closed)?;
+        Ok(archive.draft_totals(&DraftDto::from(draft))?.into())
+    }
+
+    /// A new invoice draft for a customer, dated today and saved.
+    pub fn new_draft(&self, customer_id: String) -> Result<DraftRecord, AppError> {
+        let guard = self.inner.lock().map_err(|_| AppError::Closed)?;
+        let archive = guard.as_ref().ok_or(AppError::Closed)?;
+        Ok(archive.new_draft(&customer_id)?.into())
     }
 
     /// Lists customers, ordered by display name.

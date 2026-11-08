@@ -66,14 +66,31 @@ private sealed interface Screen {
     data object Create : Screen
     data object Unlock : Screen
     data object Reset : Screen
-    data class AddRecovery(val summary: ArchiveSummary) : Screen
-    data class RecoveryKey(val summary: ArchiveSummary, val key: String) : Screen
-    data class Unlocked(val summary: ArchiveSummary) : Screen
+    data object AddRecovery : Screen
+    data class RecoveryKey(val key: String) : Screen
+    data object Unlocked : Screen
+    data object Customers : Screen
+    data class CustomerEdit(val customer: Customer) : Screen
+    data object Drafts : Screen
+    data class DraftEditor(val draft: Draft, val customers: List<Customer>) : Screen
+}
+
+private fun Screen.isArchiveContent(): Boolean = when (this) {
+    Screen.Unlocked,
+    Screen.AddRecovery,
+    Screen.Customers,
+    Screen.Drafts,
+    is Screen.CustomerEdit,
+    is Screen.DraftEditor,
+    -> true
+
+    else -> false
 }
 
 @Composable
 fun App() {
     var screen by remember { mutableStateOf<Screen>(Screen.Checking) }
+    var summary by remember { mutableStateOf(ArchiveSummary(0, 0, 0)) }
     var passphrase by remember { mutableStateOf("") }
     var confirmation by remember { mutableStateOf("") }
     var recoveryKey by remember { mutableStateOf("") }
@@ -105,7 +122,7 @@ fun App() {
     // configuration change also closes the handle through the activity's
     // onDestroy, and LockOnBackground covers leaving the app.
     LaunchedEffect(screen, interactions) {
-        if (screen is Screen.Unlocked || screen is Screen.AddRecovery) {
+        if (screen.isArchiveContent()) {
             delay(5 * 60 * 1000L)
             lockArchive()
             passphrase = ""
@@ -116,7 +133,7 @@ fun App() {
     }
 
     LockOnBackground {
-        if (screen is Screen.Unlocked || screen is Screen.AddRecovery || screen is Screen.RecoveryKey) {
+        if (screen.isArchiveContent() || screen is Screen.RecoveryKey) {
             lockArchive()
             passphrase = ""
             confirmation = ""
@@ -153,7 +170,8 @@ fun App() {
             result.onSuccess {
                 passphrase = ""
                 confirmation = ""
-                screen = Screen.Unlocked(it)
+                summary = it
+                screen = Screen.Unlocked
             }.onFailure(::fail)
             busy = false
         }
@@ -184,16 +202,17 @@ fun App() {
                             (remembered.exceptionOrNull()?.message ?: "unknown error")
                     }
                 }
-                val summary = result.getOrThrow()
+                val created = result.getOrThrow()
+                summary = created
                 val recovery = withContext(Dispatchers.IO) { runCatching { addRecoveryKey(chosen) } }
                 passphrase = ""
                 confirmation = ""
                 screen = if (recovery.isSuccess) {
-                    Screen.RecoveryKey(summary, recovery.getOrThrow())
+                    Screen.RecoveryKey(recovery.getOrThrow())
                 } else {
                     notice = "The archive was created, but no recovery key was generated: " +
                         (recovery.exceptionOrNull()?.message ?: "unknown error")
-                    Screen.Unlocked(summary)
+                    Screen.Unlocked
                 }
             } else {
                 fail(result.exceptionOrNull() ?: IllegalStateException("unknown error"))
@@ -225,7 +244,8 @@ fun App() {
                 recoveryKey = ""
                 passphrase = ""
                 confirmation = ""
-                screen = Screen.RecoveryKey(it.summary, it.replacementKey)
+                summary = it.summary
+                screen = Screen.RecoveryKey(it.replacementKey)
             }.onFailure(::fail)
             busy = false
         }
@@ -236,7 +256,7 @@ fun App() {
             error = "Enter the current passphrase."
             return
         }
-        val current = screen as? Screen.AddRecovery ?: return
+        if (screen !is Screen.AddRecovery) return
         val phrase = passphrase
         busy = true
         error = null
@@ -244,7 +264,7 @@ fun App() {
             val result = withContext(Dispatchers.IO) { runCatching { addRecoveryKey(phrase) } }
             result.onSuccess {
                 passphrase = ""
-                screen = Screen.RecoveryKey(current.summary, it)
+                screen = Screen.RecoveryKey(it)
             }.onFailure(::fail)
             busy = false
         }
@@ -258,7 +278,8 @@ fun App() {
             if (result.isSuccess) {
                 passphrase = ""
                 confirmation = ""
-                screen = Screen.Unlocked(result.getOrThrow())
+                summary = result.getOrThrow()
+                screen = Screen.Unlocked
             } else {
                 fail(result.exceptionOrNull() ?: IllegalStateException("unknown error"))
                 // A Keystore invalidation deletes the wrapped entry. If it is
@@ -403,16 +424,16 @@ fun App() {
                                     onBack = {
                                         passphrase = ""
                                         error = null
-                                        screen = Screen.Unlocked(current.summary)
+                                        screen = Screen.Unlocked
                                     },
                                 )
                                 is Screen.RecoveryKey -> RecoveryKeyShown(
                                     key = current.key,
                                     notice = notice,
-                                    onDone = { screen = Screen.Unlocked(current.summary) },
+                                    onDone = { screen = Screen.Unlocked },
                                 )
-                                is Screen.Unlocked -> Unlocked(
-                                    summary = current.summary,
+                                Screen.Unlocked -> Unlocked(
+                                    summary = summary,
                                     deviceAvailable = deviceAvailable,
                                     notice = notice,
                                     onLock = {
@@ -427,8 +448,36 @@ fun App() {
                                     onAddRecovery = {
                                         passphrase = ""
                                         error = null
-                                        screen = Screen.AddRecovery(current.summary)
+                                        screen = Screen.AddRecovery
                                     },
+                                    onCustomers = { screen = Screen.Customers },
+                                    onDrafts = { screen = Screen.Drafts },
+                                )
+                                Screen.Customers -> CustomerListScreen(
+                                    onBack = { screen = Screen.Unlocked },
+                                    onEdit = { screen = Screen.CustomerEdit(it) },
+                                    onAdd = { screen = Screen.CustomerEdit(Customer()) },
+                                    onInteraction = ::touch,
+                                )
+                                is Screen.CustomerEdit -> CustomerEditScreen(
+                                    customer = current.customer,
+                                    onBack = { screen = Screen.Customers },
+                                    onSaved = { screen = Screen.Customers },
+                                    onInteraction = ::touch,
+                                )
+                                Screen.Drafts -> DraftListScreen(
+                                    onBack = { screen = Screen.Unlocked },
+                                    onOpen = { draft, customers ->
+                                        screen = Screen.DraftEditor(draft, customers)
+                                    },
+                                    onCustomers = { screen = Screen.Customers },
+                                    onInteraction = ::touch,
+                                )
+                                is Screen.DraftEditor -> DraftEditorScreen(
+                                    draft = current.draft,
+                                    customers = current.customers,
+                                    onBack = { screen = Screen.Drafts },
+                                    onInteraction = ::touch,
                                 )
                             }
                         }
@@ -671,6 +720,8 @@ private fun Unlocked(
     onLock: () -> Unit,
     onForgetDevice: () -> Unit,
     onAddRecovery: () -> Unit,
+    onCustomers: () -> Unit,
+    onDrafts: () -> Unit,
 ) {
     Text("Unlocked", style = MaterialTheme.typography.titleLarge)
     Spacer(Modifier.height(16.dp))
@@ -691,6 +742,14 @@ private fun Unlocked(
         )
     }
     Spacer(Modifier.height(20.dp))
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Button(onClick = onCustomers, modifier = Modifier.weight(1f)) { Text("Customers") }
+        Button(onClick = onDrafts, modifier = Modifier.weight(1f)) { Text("Drafts") }
+    }
+    Spacer(Modifier.height(8.dp))
     Button(
         onClick = onLock,
         modifier = Modifier.fillMaxWidth(),

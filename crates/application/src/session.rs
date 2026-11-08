@@ -10,7 +10,7 @@ use std::path::Path;
 use store::{Database, KdfParams, KeyStore, StoreError};
 use zeroize::Zeroizing;
 
-use crate::dto::{CustomerDto, DraftDto, FindingDto, Summary};
+use crate::dto::{CustomerDto, DraftDto, DraftTotalsDto, FindingDto, Summary};
 
 /// An unlocked application session: one database, one keystore.
 pub struct Archive {
@@ -155,6 +155,53 @@ impl Archive {
         let customer = store::load_customer(self.database.connection(), domain.customer_id)?;
         let findings = crux::validate_draft(&domain, &seller.party, &customer.party);
         Ok(findings.iter().map(FindingDto::from).collect())
+    }
+
+    /// Totals for the editor preview, computed by the domain.
+    pub fn draft_totals(&self, draft: &DraftDto) -> Result<DraftTotalsDto, StoreError> {
+        let domain = draft
+            .clone()
+            .into_draft()
+            .map_err(|error| StoreError::Data(error.to_string()))?;
+        if domain.lines.is_empty() {
+            // The domain refuses to sum an empty set because it has no currency,
+            // but a draft knows its currency, so an empty draft is zero.
+            return Ok(DraftTotalsDto {
+                net_micros: 0,
+                tax_micros: 0,
+                gross_micros: 0,
+            });
+        }
+        let totals = crux::calculate_totals(&domain.lines).map_err(|error| StoreError::Data(error.to_string()))?;
+        Ok(DraftTotalsDto::from(&totals))
+    }
+
+    /// The default seller's id, creating a placeholder party when there is none.
+    ///
+    /// The mobile shell has no seller setup screen yet and a draft needs an
+    /// owner; the settings work replaces this party.
+    pub fn ensure_seller(&self) -> Result<String, StoreError> {
+        if let Some(seller) = store::first_seller(self.database.connection())? {
+            return Ok(seller.id.to_string());
+        }
+        let seller = store::SellerRecord {
+            id: crux::SellerId::new(),
+            party: crux::Party::new("My company", crux::Address::new("Amsterdam", crux::CountryCode::NL)),
+            default_currency: crux::Currency::EUR,
+            default_locale: "en".to_owned(),
+        };
+        store::insert_seller(self.database.connection(), &seller, &store::now_rfc3339())?;
+        Ok(seller.id.to_string())
+    }
+
+    /// A new invoice draft for a customer, dated today, saved immediately.
+    pub fn new_draft(&self, customer_id: &str) -> Result<DraftDto, StoreError> {
+        let seller =
+            crux::SellerId::parse_str(&self.ensure_seller()?).map_err(|error| StoreError::Data(error.to_string()))?;
+        let customer = crux::CustomerId::parse_str(customer_id).map_err(|error| StoreError::Data(error.to_string()))?;
+        let draft = crux::InvoiceDraft::new(seller, customer, crux::Currency::EUR, crux::LocalDate::today_utc());
+        store::save_draft(self.database.connection(), &draft, &store::now_rfc3339())?;
+        DraftDto::from_draft(&draft).map_err(|error| StoreError::Data(error.to_string()))
     }
 
     /// Runs SQLite's integrity check on the open database.
@@ -497,5 +544,10 @@ mod tests {
         assert_eq!(archive.list_drafts().unwrap(), vec![draft.clone()]);
         assert_eq!(archive.load_draft(&draft.id).unwrap(), draft);
         assert!(archive.validate_draft(&draft).is_ok());
+
+        let totals = archive.draft_totals(&draft).unwrap();
+        assert_eq!(totals.net_micros, 100_000_000);
+        assert_eq!(totals.tax_micros, 21_000_000);
+        assert_eq!(totals.gross_micros, 121_000_000);
     }
 }

@@ -158,6 +158,33 @@ On the API 37 x86_64 AVD: create showed a key, the reset flow accepted it and
 showed the replacement, the old passphrase then failed, the new one opened the
 archive, and **Add recovery key** rotated the key again.
 
+## Customers and drafts
+
+The unlocked card has **Customers** and **Drafts** buttons. Customers are listed
+with a search box over name, city, and VAT identifier; the editor carries the
+party fields the invoice needs. Saving a customer with an empty id inserts one,
+otherwise it updates the row on file.
+
+A draft is created from the drafts screen with the first customer and today's
+date, saved immediately, and then edited. The compact editor switches the
+customer, edits dates and note, and adds or removes lines with quantity, unit,
+unit price, and VAT rate. Totals come from `application::Archive::draft_totals`,
+which runs the domain's `calculate_totals`, so the preview and the issued invoice
+use the same rounding. Findings come from the same `crux::validate_draft` the
+desktop editor uses and show the severity, code, BT reference, field path, and
+message inline.
+
+Edits save 500 ms after the last change and the draft survives a process death;
+reopening the archive reloads it from the database. On the API 37 x86_64
+emulator a customer and a one-line draft were created, the totals read 100.00 net,
+21.00 VAT, and 121.00 gross, the empty-draft finding disappeared once the line
+was added, and the draft was still listed after a force-stop and relaunch.
+
+A draft needs an owner, and the mobile shell has no seller screen yet, so the
+first new draft inserts a placeholder seller ("My company", Amsterdam, NL). The
+settings work replaces it. Drafts need a customer, so the drafts screen asks for
+one first when the archive has none.
+
 ## S4 Argon2 benchmark
 
 The **Bench Argon2 (64 MiB)** diagnostic times the exact keystore KDF parameters

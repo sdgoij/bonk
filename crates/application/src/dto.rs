@@ -14,9 +14,9 @@
 //! `uniffi` out of this crate.
 
 use crux::{
-    CountryCode, Currency, CustomerId, DocType, DocumentId, DomainError, DraftLine, Finding, InvoiceDraft, LineId,
-    LocalDate, Money, Party, PhoneNumber, PrecedingInvoice, Quantity, SellerId, Severity, TaxTreatment, UnitCode,
-    VatCategory, VatRate,
+    CountryCode, Currency, CustomerId, DocType, DocumentId, DomainError, DraftLine, Finding, InvoiceDraft,
+    InvoiceTotals, LineId, LocalDate, Money, Party, PhoneNumber, PrecedingInvoice, Quantity, SellerId, Severity,
+    TaxTreatment, UnitCode, VatCategory, VatRate,
 };
 use store::{CustomerRecord, DocumentRecord, DocumentStatus};
 
@@ -283,6 +283,27 @@ impl DraftDto {
             preceding_invoice,
             lines,
         })
+    }
+}
+
+/// Totals for a draft preview, in micro-units.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct DraftTotalsDto {
+    /// Sum of line nets (BT-106).
+    pub net_micros: i64,
+    /// Sum of tax per category (BT-110).
+    pub tax_micros: i64,
+    /// Net plus tax (BT-112).
+    pub gross_micros: i64,
+}
+
+impl From<&InvoiceTotals> for DraftTotalsDto {
+    fn from(totals: &InvoiceTotals) -> Self {
+        Self {
+            net_micros: totals.net.micros(),
+            tax_micros: totals.tax.micros(),
+            gross_micros: totals.gross.micros(),
+        }
     }
 }
 

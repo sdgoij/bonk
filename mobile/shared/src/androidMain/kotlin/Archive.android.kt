@@ -120,6 +120,46 @@ object MobileArchiveHost {
         return if (checked.isEmpty()) "no archive files found" else checked.joinToString(", ")
     }
 
+    fun listCustomers(): List<Customer> {
+        val opened = archive ?: error("the archive is not open")
+        return opened.listCustomers().map { it.toCommon() }
+    }
+
+    fun saveCustomer(customer: Customer): Customer {
+        val opened = archive ?: error("the archive is not open")
+        return opened.saveCustomer(customer.toFfi()).toCommon()
+    }
+
+    fun listDrafts(): List<Draft> {
+        val opened = archive ?: error("the archive is not open")
+        return opened.listDrafts().map { it.toCommon() }
+    }
+
+    fun loadDraft(id: String): Draft {
+        val opened = archive ?: error("the archive is not open")
+        return opened.loadDraft(id).toCommon()
+    }
+
+    fun saveDraft(draft: Draft): Draft {
+        val opened = archive ?: error("the archive is not open")
+        return opened.saveDraft(draft.toFfi()).toCommon()
+    }
+
+    fun validateDraft(draft: Draft): List<Finding> {
+        val opened = archive ?: error("the archive is not open")
+        return opened.validateDraft(draft.toFfi()).map { it.toCommon() }
+    }
+
+    fun draftTotals(draft: Draft): DraftTotals {
+        val opened = archive ?: error("the archive is not open")
+        return opened.draftTotals(draft.toFfi()).toCommon()
+    }
+
+    fun newDraft(customerId: String): Draft {
+        val opened = archive ?: error("the archive is not open")
+        return opened.newDraft(customerId).toCommon()
+    }
+
     fun forgetDevice(): Boolean {
         val opened = archive ?: error("the archive is not open")
         return opened.forgetDevice(KeystoreHost.deviceStore())
@@ -134,6 +174,116 @@ object MobileArchiveHost {
 
 private fun uniffi.bonkc.ArchiveSummary.toCommon() =
     ArchiveSummary(sellers = sellers, drafts = drafts, schemaVersion = schemaVersion)
+
+private fun uniffi.bonkc.CustomerRecord.toCommon() = Customer(
+    id = id,
+    name = name,
+    street = street.orEmpty(),
+    postal = postal.orEmpty(),
+    city = city,
+    country = country,
+    vat = vat.orEmpty(),
+    kvk = kvk.orEmpty(),
+    peppol = peppol.orEmpty(),
+    contact = contact.orEmpty(),
+    email = email.orEmpty(),
+    phone = phone.orEmpty(),
+)
+
+private fun Customer.toFfi() = uniffi.bonkc.CustomerRecord(
+    id = id,
+    name = name,
+    street = street.ifBlank { null },
+    postal = postal.ifBlank { null },
+    city = city,
+    country = country,
+    vat = vat.ifBlank { null },
+    kvk = kvk.ifBlank { null },
+    peppol = peppol.ifBlank { null },
+    contact = contact.ifBlank { null },
+    email = email.ifBlank { null },
+    phone = phone.ifBlank { null },
+)
+
+private fun uniffi.bonkc.DraftRecord.toCommon() = Draft(
+    id = id,
+    sellerId = sellerId,
+    customerId = customerId,
+    docType = docType,
+    currency = currency,
+    issueDate = issueDate,
+    dueDate = dueDate.orEmpty(),
+    deliveryDate = deliveryDate.orEmpty(),
+    buyerReference = buyerReference.orEmpty(),
+    orderReference = orderReference.orEmpty(),
+    note = note.orEmpty(),
+    template = template.orEmpty(),
+    precedingInvoice = precedingInvoice?.let { PrecedingInvoice(it.number, it.issueDate) },
+    lines = lines.map { it.toCommon() },
+)
+
+private fun Draft.toFfi() = uniffi.bonkc.DraftRecord(
+    id = id,
+    sellerId = sellerId,
+    customerId = customerId,
+    docType = docType,
+    currency = currency,
+    issueDate = issueDate,
+    dueDate = dueDate.ifBlank { null },
+    deliveryDate = deliveryDate.ifBlank { null },
+    buyerReference = buyerReference.ifBlank { null },
+    orderReference = orderReference.ifBlank { null },
+    note = note.ifBlank { null },
+    template = template.ifBlank { null },
+    precedingInvoice = precedingInvoice?.let { uniffi.bonkc.PrecedingInvoiceRecord(it.number, it.issueDate) },
+    lines = lines.map { it.toFfi() },
+)
+
+private fun uniffi.bonkc.DraftLineRecord.toCommon() = DraftLine(
+    id = id,
+    position = position.toInt(),
+    name = name,
+    description = description.orEmpty(),
+    quantityMicros = quantityMicros,
+    unit = unit,
+    unitPriceMicros = unitPriceMicros,
+    priceBaseQuantityMicros = priceBaseQuantityMicros,
+    taxCategory = taxCategory,
+    taxRateBp = taxRateBp.toInt(),
+    lineNetMicros = lineNetMicros,
+    exemptionReason = exemptionReason.orEmpty(),
+    exemptionReasonCode = exemptionReasonCode.orEmpty(),
+)
+
+private fun DraftLine.toFfi() = uniffi.bonkc.DraftLineRecord(
+    id = id,
+    position = position.toUInt(),
+    name = name,
+    description = description.ifBlank { null },
+    quantityMicros = quantityMicros,
+    unit = unit,
+    unitPriceMicros = unitPriceMicros,
+    priceBaseQuantityMicros = priceBaseQuantityMicros,
+    taxCategory = taxCategory,
+    taxRateBp = taxRateBp.toUShort(),
+    lineNetMicros = lineNetMicros,
+    exemptionReason = exemptionReason.ifBlank { null },
+    exemptionReasonCode = exemptionReasonCode.ifBlank { null },
+)
+
+private fun uniffi.bonkc.FindingRecord.toCommon() = Finding(
+    code = code,
+    severity = severity,
+    bt = bt.orEmpty(),
+    field = field,
+    message = detail,
+)
+
+private fun uniffi.bonkc.DraftTotalsRecord.toCommon() = DraftTotals(
+    netMicros = netMicros,
+    taxMicros = taxMicros,
+    grossMicros = grossMicros,
+)
 
 actual fun archiveExists(): Boolean = MobileArchiveHost.exists()
 
@@ -198,7 +348,7 @@ private fun ByteArray.containsSequence(needle: ByteArray): Boolean {
     return false
 }
 
-private inline fun <T> withUserError(block: () -> T): T = try {
+internal inline fun <T> withUserError(block: () -> T): T = try {
     block()
 } catch (error: AppException) {
     throw ArchiveException(error.toUserMessage())
