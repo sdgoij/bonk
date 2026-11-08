@@ -87,6 +87,18 @@ mobile-android:
 mobile-release:
     cd mobile && ./gradlew :androidApp:assembleRelease -Pnative
 
+# Seed a demo archive into a connected Android device.
+#
+# Runs the same generator as `just demo`, then hands the archive to the app
+# through run-as, which a debuggable build allows. The device keeps whatever
+# archive it had in files/archive.bak. Pass a serial when more than one device
+# is attached; a debug build must already be installed (`just mobile-android`).
+demo-android serial="":
+    rm -rf target/demo-android
+    mkdir -p target/demo-android
+    BONK_PASSPHRASE=bonk-demo {{cargo}} run -q -p cli -- --db target/demo-android/bonk.db demo-seed --force
+    sh tools/push-archive.sh "{{serial}}" target/demo-android bonk-demo
+
 # Test one crate: `just test-crate store`.
 test-crate crate:
     {{cargo}} test -p {{crate}}

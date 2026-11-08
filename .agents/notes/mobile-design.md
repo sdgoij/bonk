@@ -1226,6 +1226,15 @@ gate-mobile: mobile-test mobile-android
 Keep `just gate` as the desktop gate. AGENTS.md should say that `gate-mobile`
 needs the Android SDK/NDK and is not required for a desktop-only change.
 
+The seeded-archive recipe is `just demo-android [serial]`. It runs the same
+generator as `just demo`, then hands the database and keystore to a debuggable
+build through `run-as`, because Android keeps app data private. The device's
+previous archive is kept in `files/archive.bak`, a stale write-ahead log is
+removed so it cannot be replayed over the new database, and the app is started
+once when its storage is not readable yet, which covers a fresh install. The
+passphrase is `bonk-demo`; a locked device stops the script with a message,
+since its app storage is encrypted until it is unlocked.
+
 ### 8.5 Distribution
 
 - **Android:** Play internal testing → closed → production. Generate an AAB,
