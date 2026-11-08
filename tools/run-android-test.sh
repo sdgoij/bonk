@@ -12,8 +12,9 @@ serial=${1:--}
 test_class=${2:-}
 shift 2
 package=com.github.sdgoij.bonk
-apk=mobile/androidApp/build/outputs/apk/debug/androidApp-debug.apk
-test_apk=mobile/androidApp/build/outputs/apk/androidTest/debug/androidApp-debug-androidTest.apk
+# CI hands over the APKs it built; a local run uses the Gradle outputs.
+apk=${BONK_APK:-mobile/androidApp/build/outputs/apk/debug/androidApp-debug.apk}
+test_apk=${BONK_TEST_APK:-mobile/androidApp/build/outputs/apk/androidTest/debug/androidApp-debug-androidTest.apk}
 
 if [ -z "$test_class" ]; then
     echo "error: name the test class to run" >&2

@@ -87,9 +87,12 @@ jobs:
       - name: Application and FFI tests
         run: cargo test -p application -p ffi
 
-  mobile-cross:
-    name: mobile Android cross-build
-    needs: [checks, deny]
+  # The Android side: the native libraries, the Kotlin host tests, and the two
+  # APKs. The instrumented job runs the same APKs on an emulator, so this job
+  # publishes them as an artifact instead of making it rebuild.
+  android:
+    name: android build and tests
+    needs: [checks, deny, mobile-rust]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -99,7 +102,14 @@ jobs:
           targets: aarch64-linux-android,x86_64-linux-android
       - uses: Swatinem/rust-cache@v2
         with:
-          key: mobile-cross
+          key: android
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v4
 
       # v4 installs `platform-tools` and nothing else by default. v3 ran
       # `sdkmanager tools`, and Google has removed the legacy `tools` package
@@ -110,8 +120,8 @@ jobs:
         with:
           cmdline-tools-version: "14742923"
 
-      - name: NDK r30
-        run: sdkmanager --install "ndk;30.0.16248370"
+      - name: SDK packages
+        run: sdkmanager --install "platforms;android-37" "build-tools;36.0.0" "ndk;30.0.16248370"
 
       - name: NDK environment
         run: |
@@ -121,8 +131,10 @@ jobs:
       - name: cargo-ndk
         run: cargo install cargo-ndk --locked --version 4.1.2
 
-      - name: Cross-build the FFI
-        run: cargo ndk --platform 26 -t arm64-v8a -t x86_64 build --release -p ffi
+      # `-Pnative` builds both ABIs and regenerates the UniFFI bindings, so the
+      # Kotlin below compiles against the surface this commit actually exports.
+      - name: Shared Kotlin host tests
+        run: cd mobile && ./gradlew :shared:testAndroidHostTest -Pnative
 
       - name: Verify the libraries
         run: |
@@ -136,6 +148,76 @@ jobs:
           sh tools/check-page-size.sh \
             target/aarch64-linux-android/release/libbonkc.so \
             target/x86_64-linux-android/release/libbonkc.so
+
+      # The debug pair is what the emulator installs; the release APK is what a
+      # tag publishes. Both come from the same tree as the tests above.
+      - name: APKs
+        run: cd mobile && ./gradlew :androidApp:assembleDebug :androidApp:assembleDebugAndroidTest :androidApp:assembleRelease
+
+      # A regression guard, not the §6.8 number: that budget is a per-device
+      # download from Play, while this APK carries both ABIs for a manual
+      # install and so is roughly twice the size. Measured against the
+      # universal APK, 32 MB catches a dependency that arrives unnoticed.
+      - name: Download size guard
+        run: |
+          set -eu
+          apk=mobile/androidApp/build/outputs/apk/release/androidApp-release.apk
+          size=$(stat -c %s "$apk")
+          echo "universal release APK: $size bytes"
+          test "$size" -lt 33554432
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: instrumented-apks
+          path: |
+            mobile/androidApp/build/outputs/apk/debug/androidApp-debug.apk
+            mobile/androidApp/build/outputs/apk/androidTest/debug/androidApp-debug-androidTest.apk
+          if-no-files-found: error
+          retention-days: 7
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: bonk-android
+          path: mobile/androidApp/build/outputs/apk/release/androidApp-release.apk
+          if-no-files-found: error
+          retention-days: 14
+
+  # An emulator run is the only place the golden artefact hashes and the
+  # screenshot images can be checked. The runner's KVM makes the boot a couple
+  # of minutes, and the tablet profile gives the 1280 dp window the screenshots
+  # were drawn for. API 33 rather than 37: the Compose test rule starts Espresso,
+  # which calls InputManager.getInstance, and API 37 removed it.
+  android-instrumented:
+    name: android instrumented tests
+    needs: [android]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: instrumented-apks
+          path: mobile/apks
+
+      - name: Golden hashes and shell screenshots
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 33
+          target: google_apis
+          arch: x86_64
+          profile: pixel_tablet
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
+          script: |
+            export BONK_APK=mobile/apks/androidApp-debug.apk
+            export BONK_TEST_APK=mobile/apks/androidApp-debug-androidTest.apk
+            sh tools/run-android-test.sh - com.github.sdgoij.bonk.ArtefactDeterminismTest
+            sh tools/run-android-test.sh - com.github.sdgoij.bonk.ShellScreenshotTest
 
   plain:
     name: unencrypted fallback builds
@@ -342,7 +424,7 @@ jobs:
 
   release:
     name: release
-    needs: [build, build-macos, conformance]
+    needs: [build, build-macos, conformance, android, android-instrumented]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
@@ -380,8 +462,18 @@ jobs:
 
       - uses: actions/download-artifact@v8
         with:
+          # Everything a tag publishes is named bonk-*; the emulator's debug pair
+          # is called instrumented-apks and stays out of the release.
+          pattern: bonk-*
           path: dist
           merge-multiple: true
+
+      # The asset name says what it is; the APK is signed with the debug key,
+      # because there is no release key yet.
+      - name: Name the APK
+        run: |
+          set -eu
+          mv dist/androidApp-release.apk dist/bonk-android.apk
 
       # Every asset, including the SBOMs, so a download can be checked offline.
       # The counts are asserted first: a short set means an archive or a target
@@ -390,8 +482,9 @@ jobs:
         run: |
           cd dist
           test "$(ls bonk-*.tar.gz bonk-*.zip | wc -l)" -eq 5
+          test "$(ls bonk-*.apk | wc -l)" -eq 1
           test "$(ls bonk-*.cdx.json | wc -l)" -eq 5
-          sha256sum bonk-*.tar.gz bonk-*.zip bonk-*.cdx.json > SHA256SUMS
+          sha256sum bonk-*.tar.gz bonk-*.zip bonk-*.apk bonk-*.cdx.json > SHA256SUMS
           cat SHA256SUMS
 
       - name: List the assets
@@ -402,6 +495,7 @@ jobs:
           files: |
             dist/*.tar.gz
             dist/*.zip
+            dist/*.apk
             dist/*.cdx.json
             dist/SHA256SUMS
           fail_on_unmatched_files: true

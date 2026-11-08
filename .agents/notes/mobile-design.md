@@ -1376,7 +1376,7 @@ single place to update progress; the tables stay as the plan.
 - [x] Android archive probe on API 37 x86_64: `create=ok schema=17 locked open=ok drafts=0`; golden artefact hashes unchanged
 - [x] Import service (`application::import`) wraps bytes and files; `app` and `cli` call it for received documents
 - [x] `BonkApp` owns a `Box<dyn DeviceStore>`; `Workspace::with_device` and `ui_with_device` take the injected store
-- [x] Android cross-build job (`mobile-cross`) with NDK r30, cargo-ndk, and a symbol check
+- [x] Android cross-build job (`mobile-cross`, now folded into `android`) with NDK r30, cargo-ndk, and a symbol check
 - [x] DTOs frozen: `Summary`, `DraftDto`, `DraftLineDto`, `FindingDto`, `DocumentSummary`, `IssueOutcome`
 
 **Status 2026-11-07:** M11.1 is complete. `just gate` is green; debug and release APKs build with `-Pnative`; archive create/lock/open and remember-device ran on the API 37 x86_64 emulator. The two mobile CI jobs are added but have not run on GitHub yet.
@@ -1501,6 +1501,8 @@ The width bands are pinned by a host test that fails if a threshold moves, and t
 `ShellScreenshotTest` draws the rail and the dashboard, which is the one archive screen that takes its data as parameters and so can be drawn without opening an archive, at 360, 700 and 1280 dp wide. It draws at one pixel per dp and pins the light palette, so the images do not depend on the device's density or its day/night choice. The test compares every pixel against the committed image and allows a fifth of a percent to differ, which covers antialiasing without hiding a moved control. A missing image fails the test and writes the one the device drew; `just mobile-screenshots [serial]` runs the comparison and `just mobile-screenshots-update [serial]` pulls regenerated images into `assets/screenshots`. The three images show the phone without a rail, and the medium and tablet windows with the rail and the dashboard's two columns.
 
 Run on an API 33 AVD with a 1280x800 dp window: the images matched on a second run. The same test cannot run on the API 37 images: the Compose test rule starts Espresso, whose input injection looks up `InputManager.getInstance`, a method API 37 removed, so the run fails before any test body executes.
+
+CI has an `android` job that builds both ABIs with the bindings, runs the shared Kotlin host tests, checks the exported symbol and the page alignment, assembles the debug pair and the release APK, and guards the universal APK's size at 32 MiB. An `android-instrumented` job installs those APKs on an API 33 tablet emulator and runs the golden artefact hashes and the screenshot images, so a tag cannot publish past a failing device test. The universal release APK is 30.5 MB; the §6.8 budget is a per-ABI Play download, which needs a bundle measurement that this APK cannot stand in for. A tag's release now carries `bonk-android.apk` beside the desktop archives and in `SHA256SUMS`, signed with the debug key until there is a release key.
 
 What TalkBack announces has not been verified: the rows keep Material's clickable semantics, which the screen reader merges and reads as one stop, but there is no way to hear the result here and the uiautomator dump shows the raw view tree rather than the spoken output. A walkthrough on a device is still due.
 
