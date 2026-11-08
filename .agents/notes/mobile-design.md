@@ -1449,15 +1449,19 @@ The register switches between Issued and Received with tabs, and the status filt
 
 Match supplier opens the customer list and records the decision. Approve and Mark paid move the document through the payable register, and both actions re-read the document, so the status, the match and the history shown are what the archive holds.
 
+The Backup screen exports the two halves. A backup is copied into the app's cache with `VACUUM INTO`, checked there by reopening it read-only and recomputing the audit chain, then streamed in chunks to the destination the user picks; the cache copy goes once the write returns. The screen refuses to start when the cache volume cannot hold about twice the archive, rather than failing midway. A recovery kit writes the keystore and `RECOVERY.txt` together into a folder the user picks through the system tree picker, because a key without the note that explains it is not a kit.
+
+Run on a device: the exported copy verified on the host with `bonk verify-backup` against the same keystore, reporting 787 audit events and a matching chain head, and the kit's `keystore.bin` hashed identically to the archive's own.
+
 Run on an emulator: a seeded UBL picked from Downloads reported its number and "Not matched to a customer" (the document's seller is this archive), a second import of the same bytes reported the duplicate, a view intent delivered before unlock landed on the Import screen after unlocking, and a send intent delivered to the running app replaced the result on screen without a restart. The Received side listed the demo archive's inbound documents with `not matched` on the parked ones; matching one to a customer, approving it and marking it paid walked its status through the register, and returning from the document kept the Received side.
 
 - [x] SAF import and `ACTION_VIEW` / `ACTION_SEND` import
 - [x] Received list and supplier match
 - [x] Approve and mark-paid actions
 - [ ] Backup export (verify, then stream) and two-file restore
-- [ ] Recovery-kit export
+- [x] Recovery-kit export
 - [ ] Settings: seller, UI language, document language, audit chain head
-- [ ] Free-space preflight for backup
+- [x] Free-space preflight for backup
 
 #### M11.6 — Tablet, accessibility, performance (2 weeks)
 

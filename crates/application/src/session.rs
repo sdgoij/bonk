@@ -611,6 +611,33 @@ impl Archive {
     ) -> Result<store::BackupReport, StoreError> {
         store::backup::backup_with_key(&self.database, &self.dek, directory, stamp, keep)
     }
+
+    /// Writes a verified copy for a front end to hand to the user.
+    ///
+    /// The copy is made and checked here, before anything leaves the app; the
+    /// caller streams the file wherever the user chose and deletes it. One copy
+    /// per directory is enough, so an earlier export in the same place goes.
+    pub fn write_backup(&self, directory: impl AsRef<Path>) -> Result<crate::BackupExport, StoreError> {
+        let report = self.backup(directory, &store::now_rfc3339(), 1)?;
+        Ok(crate::BackupExport {
+            path: report.path.display().to_string(),
+            bytes: report.bytes as i64,
+        })
+    }
+
+    /// The keystore bytes, for a recovery kit.
+    ///
+    /// Nothing is decrypted: the same file that unwraps the data key with the
+    /// passphrase, or with the recovery key, is what the user keeps apart from
+    /// the backups.
+    pub fn recovery_key(&self) -> Result<Vec<u8>, StoreError> {
+        std::fs::read(&self.keystore_path).map_err(StoreError::Io)
+    }
+
+    /// The note that must travel with a recovery key.
+    pub fn recovery_note(&self) -> String {
+        store::kit::instructions(&self.database_path, &store::now_rfc3339())
+    }
 }
 
 #[cfg(test)]
@@ -657,6 +684,33 @@ mod tests {
         let report = archive.backup(&backups, "20261107T120000Z", 3).unwrap();
         assert!(report.path.exists());
         assert!(report.bytes > 0);
+    }
+
+    #[test]
+    fn an_exported_backup_checks_out_and_the_kit_holds_the_key() {
+        let (directory, archive) = archive();
+        seed(&archive);
+        let cache = directory.path().join("export");
+
+        let export = archive.write_backup(&cache).unwrap();
+        assert!(export.bytes > 0);
+        let path = std::path::Path::new(&export.path);
+        assert!(path.exists());
+        assert!(
+            path.file_name().unwrap().to_string_lossy().starts_with("backup-"),
+            "the name carries the timestamp: {}",
+            export.path
+        );
+
+        // The copy opens with the key it was written under, and its chain holds.
+        let summary = store::backup::inspect(path, &archive.dek).unwrap();
+        assert!(summary.schema_version > 0);
+
+        let key = archive.recovery_key().unwrap();
+        assert_eq!(key, std::fs::read(directory.path().join("keystore.bin")).unwrap());
+        let note = archive.recovery_note();
+        assert!(note.contains("another medium"), "{note}");
+        assert!(note.contains("bonk.db"), "{note}");
     }
 
     #[test]

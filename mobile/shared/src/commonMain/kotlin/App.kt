@@ -78,6 +78,7 @@ private sealed interface Screen {
     data object Documents : Screen
     data class DocumentView(val id: String) : Screen
     data object Import : Screen
+    data object Backup : Screen
     data object Seller : Screen
 }
 
@@ -497,6 +498,7 @@ fun App() {
                                     onDocuments = { screen = Screen.Documents },
                                     onSeller = { screen = Screen.Seller },
                                     onImport = { screen = Screen.Import },
+                                    onBackup = { screen = Screen.Backup },
                                 )
                                 Screen.Customers -> CustomerListScreen(
                                     onBack = { screen = Screen.Unlocked },
@@ -542,6 +544,10 @@ fun App() {
                                 Screen.Import -> ImportScreen(
                                     onBack = { screen = Screen.Unlocked },
                                     onOpen = { screen = Screen.DocumentView(it) },
+                                    onInteraction = ::touch,
+                                )
+                                Screen.Backup -> BackupScreen(
+                                    onBack = { screen = Screen.Unlocked },
                                     onInteraction = ::touch,
                                 )
                                 Screen.Seller -> SellerEditScreen(
@@ -794,6 +800,7 @@ private fun Unlocked(
     onDocuments: () -> Unit,
     onSeller: () -> Unit,
     onImport: () -> Unit,
+    onBackup: () -> Unit,
 ) {
     Text("Unlocked", style = MaterialTheme.typography.titleLarge)
     Spacer(Modifier.height(16.dp))
@@ -830,8 +837,12 @@ private fun Unlocked(
         Button(onClick = onSeller, modifier = Modifier.weight(1f)) { Text("Seller") }
     }
     Spacer(Modifier.height(8.dp))
-    Button(onClick = onImport, modifier = Modifier.fillMaxWidth()) {
-        Text("Import invoice")
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Button(onClick = onImport, modifier = Modifier.weight(1f)) { Text("Import invoice") }
+        Button(onClick = onBackup, modifier = Modifier.weight(1f)) { Text("Backup") }
     }
     Spacer(Modifier.height(8.dp))
     Button(

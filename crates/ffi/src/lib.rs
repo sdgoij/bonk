@@ -10,9 +10,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use application::{
-    Archive as AppArchive, CustomerDto, CustomerImportDto, DocumentArtefact, DocumentDetail, DocumentEvent,
-    DocumentHit, DocumentLine, DocumentSummary, DraftDto, DraftLineDto, DraftTotalsDto, FindingDto, ImportDto,
-    IssueOutcome, PrecedingInvoiceDto, SellerDto,
+    Archive as AppArchive, BackupExport, CustomerDto, CustomerImportDto, DocumentArtefact, DocumentDetail,
+    DocumentEvent, DocumentHit, DocumentLine, DocumentSummary, DraftDto, DraftLineDto, DraftTotalsDto, FindingDto,
+    ImportDto, IssueOutcome, PrecedingInvoiceDto, SellerDto,
 };
 use argon2::{Algorithm, Argon2, Params, Version};
 use crux::{
@@ -320,6 +320,24 @@ impl From<ImportDto> for ImportRecord {
             document_id: dto.document_id,
             supplier: dto.supplier,
             duplicate: dto.duplicate,
+        }
+    }
+}
+
+/// A verified copy written for export.
+#[derive(uniffi::Record)]
+pub struct BackupRecord {
+    /// File the copy was written to.
+    pub path: String,
+    /// Size of the copy in bytes.
+    pub bytes: i64,
+}
+
+impl From<BackupExport> for BackupRecord {
+    fn from(dto: BackupExport) -> Self {
+        Self {
+            path: dto.path,
+            bytes: dto.bytes,
         }
     }
 }
@@ -1141,6 +1159,30 @@ impl Archive {
         let archive = guard.as_ref().ok_or(AppError::Closed)?;
         Ok(archive.database_path().display().to_string())
     }
+
+    /// Writes a verified copy of the archive into `directory` and names it.
+    ///
+    /// The copy is checked here, before the host streams it anywhere; the host
+    /// deletes it once the user's destination holds it.
+    pub fn write_backup(&self, directory: String) -> Result<BackupRecord, AppError> {
+        let guard = self.inner.lock().map_err(|_| AppError::Closed)?;
+        let archive = guard.as_ref().ok_or(AppError::Closed)?;
+        Ok(archive.write_backup(directory)?.into())
+    }
+
+    /// The keystore bytes, for a recovery kit.
+    pub fn recovery_key(&self) -> Result<Vec<u8>, AppError> {
+        let guard = self.inner.lock().map_err(|_| AppError::Closed)?;
+        let archive = guard.as_ref().ok_or(AppError::Closed)?;
+        Ok(archive.recovery_key()?)
+    }
+
+    /// The note that must travel with a recovery key.
+    pub fn recovery_note(&self) -> Result<String, AppError> {
+        let guard = self.inner.lock().map_err(|_| AppError::Closed)?;
+        let archive = guard.as_ref().ok_or(AppError::Closed)?;
+        Ok(archive.recovery_note())
+    }
 }
 
 /// True when this device holds a key for the archive at this keystore path.
@@ -1669,6 +1711,24 @@ mod tests {
 
         let reopened = Archive::open(database, keystore, "passphrase".to_owned()).expect("an existing archive");
         assert_eq!(reopened.summary().expect("a summary").sellers, 0);
+    }
+
+    #[test]
+    fn a_backup_and_a_recovery_key_come_out_of_the_archive() {
+        let directory = tempfile::TempDir::new().expect("a temporary directory");
+        let database = directory.path().join("bonk.db").display().to_string();
+        let keystore = directory.path().join("keystore.bin").display().to_string();
+        let archive = Archive::create(database, keystore, "passphrase".to_owned()).expect("a new archive");
+
+        let cache = directory.path().join("export").display().to_string();
+        let backup = archive.write_backup(cache).expect("a backup");
+        assert!(backup.bytes > 0);
+        assert!(std::path::Path::new(&backup.path).exists());
+
+        let key = archive.recovery_key().expect("the keystore bytes");
+        assert!(!key.is_empty());
+        let note = archive.recovery_note().expect("the note");
+        assert!(note.contains("another medium"), "{note}");
     }
 
     #[test]

@@ -32,6 +32,7 @@ kotlin {
         androidMain.dependencies {
             implementation(libs.androidx.activity.compose)
             implementation(libs.androidx.biometric)
+            implementation(libs.androidx.documentfile)
             implementation(libs.androidx.fragment.ktx)
             implementation(libs.kotlinx.coroutines.android)
             // The AAR carries libjnidispatch.so for the Android ABIs.

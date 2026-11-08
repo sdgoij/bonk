@@ -69,6 +69,15 @@ pub fn write(
 }
 
 /// The note that travels with the key.
+///
+/// Public because a front end that streams the key somewhere other than a
+/// directory, which is what the mobile share and save pickers do, has to write
+/// the same words beside it.
+pub fn instructions(archive: &Path, stamp: &str) -> String {
+    note(archive, stamp)
+}
+
+/// The note that travels with the key.
 fn note(archive: &Path, stamp: &str) -> String {
     let name = archive
         .file_name()

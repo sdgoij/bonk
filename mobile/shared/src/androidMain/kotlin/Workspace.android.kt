@@ -50,5 +50,15 @@ actual fun importDocument(name: String, bytes: ByteArray): ImportReport = withUs
     MobileArchiveHost.importDocument(name, bytes)
 }
 
+actual fun writeBackup(): BackupExport = withUserError { MobileArchiveHost.writeBackup() }
+
+actual fun recoveryKey(): ByteArray = withUserError { MobileArchiveHost.recoveryKey() }
+
+actual fun recoveryNote(): String = withUserError { MobileArchiveHost.recoveryNote() }
+
+actual fun freeSpaceBytes(): Long = MobileArchiveHost.freeSpaceBytes()
+
+actual fun databaseBytes(): Long = MobileArchiveHost.databaseBytes()
+
 actual fun suppressFinding(draftId: String, code: String, field: String, reason: String) =
     withUserError { MobileArchiveHost.suppressFinding(draftId, code, field, reason) }

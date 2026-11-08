@@ -23,9 +23,9 @@ pub mod session;
 pub mod templates;
 
 pub use dto::{
-    CustomerDto, CustomerImportDto, DocumentArtefact, DocumentDetail, DocumentEvent, DocumentHit, DocumentLine,
-    DocumentSummary, DraftDto, DraftLineDto, DraftTotalsDto, FindingDto, ImportDto, IssueOutcome, PrecedingInvoiceDto,
-    SellerDto, Summary,
+    BackupExport, CustomerDto, CustomerImportDto, DocumentArtefact, DocumentDetail, DocumentEvent, DocumentHit,
+    DocumentLine, DocumentSummary, DraftDto, DraftLineDto, DraftTotalsDto, FindingDto, ImportDto, IssueOutcome,
+    PrecedingInvoiceDto, SellerDto, Summary,
 };
 pub use issue::{DocumentLanguage, invoice_pdf, pdf_data, render_issue};
 pub use session::Archive;

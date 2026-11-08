@@ -813,6 +813,121 @@ fun ImportScreen(
     }
 }
 
+/** Backup and the recovery kit: the two halves a restore needs. */
+@Composable
+fun BackupScreen(onBack: () -> Unit, onInteraction: () -> Unit) {
+    val io = rememberBackupIo()
+    val scope = rememberCoroutineScope()
+    var busy by remember { mutableStateOf(false) }
+    var message by remember { mutableStateOf<String?>(null) }
+    var error by remember { mutableStateOf<String?>(null) }
+
+    fun exportBackup() {
+        if (busy) return
+        busy = true
+        error = null
+        message = null
+        onInteraction()
+        scope.launch {
+            val result = withContext(Dispatchers.IO) {
+                runCatching {
+                    // The copy is about the size of the archive, and SQLite writes
+                    // through a temporary of its own while copying.
+                    val needed = databaseBytes() * 2
+                    val free = freeSpaceBytes()
+                    check(free >= needed) {
+                        "Not enough free space: a copy needs about ${megabytes(needed)}, and " +
+                            "${megabytes(free)} is free."
+                    }
+                    writeBackup()
+                }
+            }
+            busy = false
+            result.onSuccess { export ->
+                io.export(
+                    path = export.path,
+                    name = export.path.substringAfterLast('/'),
+                    mime = "application/octet-stream",
+                    onDone = { name -> message = "Saved $name (${kilobytes(export.bytes)} KB), verified." },
+                    onError = { error = it },
+                )
+            }.onFailure { error = it.message ?: it.toString() }
+        }
+    }
+
+    fun exportKit() {
+        if (busy) return
+        busy = true
+        error = null
+        message = null
+        onInteraction()
+        scope.launch {
+            val result = withContext(Dispatchers.IO) { runCatching { recoveryKey() to recoveryNote() } }
+            busy = false
+            result.onSuccess { (key, note) ->
+                io.exportKit(
+                    key = key,
+                    note = note,
+                    onDone = { where ->
+                        message = "Recovery kit written to $where. Keep it apart from the backups."
+                    },
+                    onError = { error = it },
+                )
+            }.onFailure { error = it.message ?: it.toString() }
+        }
+    }
+
+    Column(Modifier.fillMaxWidth()) {
+        ScreenHeader("Backup", onBack) { }
+        Text(
+            "The archive is two files: the database and the key that opens it. A backup holds the data, " +
+                "the recovery kit holds the key, and neither is enough on its own.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+
+        Spacer(Modifier.height(16.dp))
+        Text("Backup", style = MaterialTheme.typography.titleMedium)
+        Text(
+            "A verified, encrypted copy. It is checked here before you choose where it goes, and the " +
+                "app's own copy is deleted once it is written.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(8.dp))
+        Button(onClick = ::exportBackup, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
+            Text(if (busy) "Working..." else "Export backup")
+        }
+
+        Spacer(Modifier.height(20.dp))
+        Text("Recovery kit", style = MaterialTheme.typography.titleMedium)
+        Text(
+            "The key, with the note that explains what it is. Keep it on another medium from the " +
+                "backups: anyone who has both this file and the passphrase has the archive.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(8.dp))
+        Button(onClick = ::exportKit, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
+            Text("Export recovery kit")
+        }
+
+        message?.let {
+            Spacer(Modifier.height(12.dp))
+            Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+        }
+        error?.let {
+            Spacer(Modifier.height(12.dp))
+            Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+        }
+    }
+}
+
+/** Rounded up, so a message never says zero megabytes for a file that has bytes. */
+private fun megabytes(bytes: Long): String = "${(bytes + 1_048_575) / 1_048_576} MB"
+
+private fun kilobytes(bytes: Long): Long = (bytes + 1023) / 1024
+
 /** The party invoices are issued by. */
 @Composable
 fun SellerEditScreen(onBack: () -> Unit, onInteraction: () -> Unit) {

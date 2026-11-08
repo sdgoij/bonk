@@ -252,6 +252,24 @@ data class ImportReport(
     val duplicate: Boolean = false,
 )
 
+/** A verified copy written for export. */
+data class BackupExport(val path: String, val bytes: Long)
+
+/** Writes a verified copy of the archive, for the user to keep. */
+expect fun writeBackup(): BackupExport
+
+/** The keystore bytes, for a recovery kit. */
+expect fun recoveryKey(): ByteArray
+
+/** The note that must travel with a recovery key. */
+expect fun recoveryNote(): String
+
+/** Free space where a copy is written before it is handed out. */
+expect fun freeSpaceBytes(): Long
+
+/** Size of the archive database on disk. */
+expect fun databaseBytes(): Long
+
 /**
  * Imports received invoice bytes, as a picker or a share hand-off delivers them.
  *
@@ -307,6 +325,19 @@ interface DocumentPicker {
 /** The platform picker, created in a composable so Android can use its launchers. */
 @Composable
 expect fun rememberDocumentPicker(): DocumentPicker
+
+/** Writing the archive's own files where the user keeps them. */
+interface BackupIo {
+    /** Asks where to put a copy of [path] and streams it there. */
+    fun export(path: String, name: String, mime: String, onDone: (String) -> Unit, onError: (String) -> Unit)
+
+    /** Writes the key and its note into a folder the user picks. */
+    fun exportKit(key: ByteArray, note: String, onDone: (String) -> Unit, onError: (String) -> Unit)
+}
+
+/** The platform writing, created in a composable so Android can use its launchers. */
+@Composable
+expect fun rememberBackupIo(): BackupIo
 
 /** A document the system handed to the app, waiting for the archive to unlock. */
 class ImportRequest(val name: String, val bytes: ByteArray)

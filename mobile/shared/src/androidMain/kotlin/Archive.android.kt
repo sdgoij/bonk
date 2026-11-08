@@ -1,6 +1,7 @@
 package com.github.sdgoij.bonk
 
 import android.content.Context
+import android.os.StatFs
 import uniffi.bonkc.AppException
 import uniffi.bonkc.Archive
 import uniffi.bonkc.archiveExists
@@ -13,16 +14,20 @@ import java.io.File
  */
 object MobileArchiveHost {
     private var directory: File? = null
+    private var cache: File? = null
     private var archive: Archive? = null
 
     fun attach(context: Context) {
         directory = File(context.filesDir, "archive")
+        // Where a verified copy waits for the user to choose a destination.
+        cache = File(context.cacheDir, "export")
     }
 
     fun detach() {
         archive?.close()
         archive = null
         directory = null
+        cache = null
     }
 
     fun exists(): Boolean {
@@ -193,6 +198,34 @@ object MobileArchiveHost {
     fun importDocument(name: String, bytes: ByteArray): ImportReport {
         val opened = archive ?: error("the archive is not open")
         return opened.importDocument(name.ifBlank { null }, bytes).toCommon()
+    }
+
+    fun writeBackup(): BackupExport {
+        val opened = archive ?: error("the archive is not open")
+        val target = cache ?: error("the archive host is not attached")
+        target.mkdirs()
+        return opened.writeBackup(target.absolutePath).toCommon()
+    }
+
+    fun recoveryKey(): ByteArray {
+        val opened = archive ?: error("the archive is not open")
+        return opened.recoveryKey()
+    }
+
+    fun recoveryNote(): String {
+        val opened = archive ?: error("the archive is not open")
+        return opened.recoveryNote()
+    }
+
+    fun freeSpaceBytes(): Long {
+        val target = cache ?: error("the archive host is not attached")
+        target.mkdirs()
+        return StatFs(target.absolutePath).availableBytes
+    }
+
+    fun databaseBytes(): Long {
+        val (database, _) = paths()
+        return File(database).length()
     }
 
     fun loadSeller(): Seller {
@@ -437,6 +470,8 @@ private fun uniffi.bonkc.ImportRecord.toCommon() = ImportReport(
     supplier = supplier.orEmpty(),
     duplicate = duplicate,
 )
+
+private fun uniffi.bonkc.BackupRecord.toCommon() = BackupExport(path = path, bytes = bytes)
 
 private fun uniffi.bonkc.DocumentEventRecord.toCommon() = DocumentEvent(
     kind = kind,

@@ -55,6 +55,15 @@ pub struct ImportDto {
     pub duplicate: bool,
 }
 
+/// A verified copy written for export.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct BackupExport {
+    /// File the copy was written to.
+    pub path: String,
+    /// Size of the copy in bytes.
+    pub bytes: i64,
+}
+
 /// A customer as a front end edits it.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct CustomerDto {

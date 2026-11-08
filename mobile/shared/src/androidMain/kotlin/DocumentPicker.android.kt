@@ -92,7 +92,7 @@ internal fun readDocument(context: Context, uri: Uri): Pair<String, ByteArray> {
  * `OpenableColumns` is what the system picker itself reports, so the name the
  * archive records is the one the user saw in the list.
  */
-private fun displayName(context: Context, uri: Uri): String {
+internal fun displayName(context: Context, uri: Uri): String {
     val projection = arrayOf(OpenableColumns.DISPLAY_NAME)
     context.contentResolver.query(uri, projection, null, null, null)?.use { cursor ->
         if (cursor.moveToFirst()) {
