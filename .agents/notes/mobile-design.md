@@ -1480,9 +1480,16 @@ Run on an emulator: a seeded UBL picked from Downloads reported its number and "
 
 #### M11.6 — Tablet, accessibility, performance (2 weeks)
 
-- [ ] Medium layout: navigation rail and collapsible list-detail
-- [ ] Expanded layout: two-pane, preview, inline findings
-- [ ] Foldable hinge avoidance and multi-window handling
+**Status 2026-11-08:** The shell reads a width class from `BoxWithConstraints` and not from the device type, so a split-screen window, a rotated phone, and a folded tablet all land in the band their remaining width deserves. Compact keeps the single centered card. From 600 dp the window gains a navigation rail (Home, Customers, Drafts, Documents, Settings) and the dashboard lays its actions out in two columns. From either band, Customers and Documents become two-pane: the list on the left, the selected customer or document on the right, with a hint when nothing is selected. Each pane owns its scroll, so the editor's save action stays reachable and the register keeps its lazy list. Saving a customer or advancing a document's status refreshes the list beside it, so the two panes agree without leaving the screen.
+
+Run on a phone emulator at its own size: the compact layout is unchanged, with the rail absent and customers still opening a full-page editor. The same emulator with `wm size 1700x2400` at 420 dpi (647 dp wide) showed the rail and the two-pane customer list, and the layout followed the window when it changed size because the activity redraws and the class is recomputed.
+
+Run on a tablet emulator (1280x800 dp): the rail, the two-column dashboard, and the two-pane customer list; selecting a customer loaded the editor beside it, selecting another swapped the form, and Save cleared the right pane and refreshed the list. On Documents, the Register's Issued and Received tabs keep their list while a document opens beside them, scrolling the detail pane independently, and approving a received invoice moved its row to Approved without touching the list's state.
+
+- [x] Width classes and a navigation rail on medium and expanded windows
+- [x] Two-pane list-detail for customers and documents, each pane scrolling on its own
+- [ ] Editor preview pane and inline findings on expanded windows
+- [ ] Foldable hinge avoidance and posture-aware split
 - [ ] Font scale 200%, dark/light, RTL layout
 - [ ] TalkBack traversal and 48 dp targets
 - [ ] Screenshot tests for phone and tablet sizes

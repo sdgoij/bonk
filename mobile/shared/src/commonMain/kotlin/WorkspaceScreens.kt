@@ -30,6 +30,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.PrimaryTabRow
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -57,6 +58,8 @@ fun CustomerListScreen(
     onEdit: (Customer) -> Unit,
     onAdd: () -> Unit,
     onInteraction: () -> Unit,
+    selectedId: String? = null,
+    version: Int = 0,
 ) {
     var customers by remember { mutableStateOf<List<Customer>>(emptyList()) }
     var query by remember { mutableStateOf("") }
@@ -67,7 +70,7 @@ fun CustomerListScreen(
     val scope = rememberCoroutineScope()
     val csvIo = rememberCsvIo()
 
-    LaunchedEffect(refresh) {
+    LaunchedEffect(refresh, version) {
         withContext(Dispatchers.IO) { runCatching { listCustomers() } }
             .onSuccess { customers = it }
             .onFailure { error = it.message ?: it.toString() }
@@ -150,7 +153,7 @@ fun CustomerListScreen(
             Text(strings.noCustomers, modifier = Modifier.padding(16.dp))
         } else {
             visible.forEach { customer ->
-                CustomerRow(customer) { onInteraction(); onEdit(customer) }
+                CustomerRow(customer, customer.id == selectedId) { onInteraction(); onEdit(customer) }
                 HorizontalDivider()
             }
         }
@@ -1258,6 +1261,8 @@ fun DocumentListScreen(
     onBack: () -> Unit,
     onOpen: (String) -> Unit,
     onInteraction: () -> Unit,
+    selectedId: String? = null,
+    version: Int = 0,
 ) {
     var documents by remember { mutableStateOf<List<DocumentHit>>(emptyList()) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -1265,7 +1270,7 @@ fun DocumentListScreen(
     val listState = rememberLazyListState()
     val filters = rememberScrollState()
 
-    LaunchedEffect(state.query, state.status, state.direction) {
+    LaunchedEffect(state.query, state.status, state.direction, version) {
         if (state.query.isNotBlank()) delay(300)
         loading = true
         val result = withContext(Dispatchers.IO) {
@@ -1357,7 +1362,7 @@ fun DocumentListScreen(
                     verticalArrangement = Arrangement.spacedBy(2.dp),
                 ) {
                     items(documents, key = { it.id }) { hit ->
-                        DocumentRow(hit) { onOpen(hit.id) }
+                        DocumentRow(hit, hit.id == selectedId) { onOpen(hit.id) }
                     }
                 }
             }
@@ -1367,7 +1372,11 @@ fun DocumentListScreen(
 
 /** One stored document: the facts, the lines, the artefacts and the history. */
 @Composable
-fun DocumentDetailScreen(id: String, onBack: () -> Unit) {
+fun DocumentDetailScreen(
+    id: String,
+    onBack: () -> Unit,
+    onChanged: () -> Unit = {},
+) {
     var document by remember { mutableStateOf<DocumentDetail?>(null) }
     var customers by remember { mutableStateOf<List<Customer>>(emptyList()) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -1397,6 +1406,7 @@ fun DocumentDetailScreen(id: String, onBack: () -> Unit) {
             busy = false
             result.onSuccess { message = strings.supplierMatched(customer.name) }
                 .onFailure { error = it.message ?: it.toString() }
+            if (result.isSuccess) onChanged()
             refresh++
         }
     }
@@ -1411,6 +1421,7 @@ fun DocumentDetailScreen(id: String, onBack: () -> Unit) {
             busy = false
             result.onSuccess { message = strings.nowStatus(it) }
                 .onFailure { error = it.message ?: it.toString() }
+            if (result.isSuccess) onChanged()
             refresh++
         }
     }
@@ -1592,24 +1603,29 @@ private fun Fact(label: String, value: String) {
 }
 
 @Composable
-private fun DocumentRow(hit: DocumentHit, onClick: () -> Unit) {
-    TextButton(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
-        Column(Modifier.fillMaxWidth()) {
-            Text(hit.number.ifBlank { strings.noNumber }, style = MaterialTheme.typography.titleMedium)
-            val detail = buildList {
-                add(hit.party)
-                add(hit.issueDate)
-                add("${formatMoney(hit.grossMicros)} ${hit.currency}")
-                add(strings.status(hit.status))
-                if (hit.direction == "inbound" && !hit.matched) add(strings.notMatched)
+private fun DocumentRow(hit: DocumentHit, selected: Boolean, onClick: () -> Unit) {
+    Surface(
+        color = if (selected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surface,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        TextButton(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
+            Column(Modifier.fillMaxWidth()) {
+                Text(hit.number.ifBlank { strings.noNumber }, style = MaterialTheme.typography.titleMedium)
+                val detail = buildList {
+                    add(hit.party)
+                    add(hit.issueDate)
+                    add("${formatMoney(hit.grossMicros)} ${hit.currency}")
+                    add(strings.status(hit.status))
+                    if (hit.direction == "inbound" && !hit.matched) add(strings.notMatched)
+                }
+                    .filter { it.isNotBlank() }
+                    .joinToString(" · ")
+                Text(
+                    detail,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
-                .filter { it.isNotBlank() }
-                .joinToString(" · ")
-            Text(
-                detail,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
         }
     }
 }
@@ -1710,13 +1726,22 @@ private fun ScreenHeader(title: String, onBack: () -> Unit, action: @Composable 
 }
 
 @Composable
-private fun CustomerRow(customer: Customer, onClick: () -> Unit) {
-    TextButton(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
-        Column(Modifier.fillMaxWidth()) {
-            Text(customer.name, style = MaterialTheme.typography.titleMedium)
-            val detail = listOf(customer.city, customer.vat).filter { it.isNotBlank() }.joinToString(" · ")
-            if (detail.isNotBlank()) {
-                Text(detail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+private fun CustomerRow(customer: Customer, selected: Boolean, onClick: () -> Unit) {
+    Surface(
+        color = if (selected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surface,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        TextButton(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
+            Column(Modifier.fillMaxWidth()) {
+                Text(customer.name, style = MaterialTheme.typography.titleMedium)
+                val detail = listOf(customer.city, customer.vat).filter { it.isNotBlank() }.joinToString(" · ")
+                if (detail.isNotBlank()) {
+                    Text(
+                        detail,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
         }
     }

@@ -1,20 +1,25 @@
 package com.github.sdgoij.bonk
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
@@ -24,9 +29,12 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -36,6 +44,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -125,6 +134,19 @@ fun App() {
         interactions++
     }
 
+    // A wide window keeps the list beside the thing it opens, so the selection
+    // needs a home outside the screen stack. The counters refresh the list when
+    // its neighbour changes something the list shows.
+    var selectedCustomer by remember { mutableStateOf<Customer?>(null) }
+    var selectedDocument by remember { mutableStateOf<String?>(null) }
+    var customersVersion by remember { mutableStateOf(0) }
+    var documentsVersion by remember { mutableStateOf(0) }
+
+    fun forgetSelection() {
+        selectedCustomer = null
+        selectedDocument = null
+    }
+
     LaunchedEffect(Unit) {
         rememberSupported = runCatching { deviceUnlockAvailable() }.getOrDefault(false)
         val state = withContext(Dispatchers.IO) {
@@ -148,6 +170,7 @@ fun App() {
                 passphrase = ""
                 confirmation = ""
                 recoveryKey = ""
+                forgetSelection()
                 screen = Screen.Unlock
             }
         }
@@ -160,6 +183,7 @@ fun App() {
             confirmation = ""
             recoveryKey = ""
             error = null
+            forgetSelection()
             screen = Screen.Unlock
         }
     }
@@ -340,241 +364,312 @@ fun App() {
     MaterialTheme {
         Surface(modifier = Modifier.fillMaxSize()) {
             BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-                val contentWidth = if (maxWidth > 720.dp) 560.dp else maxWidth
-                val tall = maxHeight > 800.dp
-                // The register draws its rows lazily, so it needs a bounded height
-                // rather than the scrolling root the other screens share.
-                val virtualised = screen is Screen.Documents
-                val scroll = rememberScrollState()
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .imePadding()
-                        .then(if (virtualised) Modifier else Modifier.verticalScroll(scroll))
-                        .padding(24.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                ) {
-                    Spacer(Modifier.height(if (tall) 72.dp else 16.dp))
-                    Text("Bonk", style = MaterialTheme.typography.headlineLarge)
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        text = strings.tagline,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                val width = WindowWidth.of(maxWidth)
+                val wide = width.isAtLeastMedium
+                // A list that keeps its detail beside it, and the register's lazy
+                // rows, need a bounded height; the other screens scroll as a column.
+                val panes = wide && (
+                    screen is Screen.Customers || screen is Screen.CustomerEdit ||
+                        screen is Screen.Documents || screen is Screen.DocumentView
                     )
-                    Spacer(Modifier.height(24.dp))
-
-                    val card = Modifier.widthIn(max = contentWidth).fillMaxWidth()
-                    Card(modifier = if (virtualised) card.weight(1f) else card) {
+                val contentWidth = when (width) {
+                    WindowWidth.Compact -> if (maxWidth > 720.dp) 560.dp else maxWidth
+                    WindowWidth.Medium -> 720.dp
+                    WindowWidth.Expanded -> 960.dp
+                }
+                val tall = maxHeight > 800.dp
+                val virtualised = screen is Screen.Documents || panes
+                val scroll = rememberScrollState()
+                CompositionLocalProvider(LocalWindowWidth provides width) {
+                    Row(Modifier.fillMaxSize()) {
+                        if (wide && screen.usesShell()) {
+                            NavigationRailPanel(screen.destination()) { destination ->
+                                forgetSelection()
+                                screen = destination.screen
+                                touch()
+                            }
+                            VerticalDivider()
+                        }
                         Column(
-                            modifier = if (virtualised) {
-                                Modifier.fillMaxSize().padding(24.dp)
-                            } else {
-                                Modifier.padding(24.dp)
-                            },
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxHeight()
+                                .imePadding()
+                                .then(if (virtualised) Modifier else Modifier.verticalScroll(scroll))
+                                .padding(24.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
                         ) {
-                            when (val current = screen) {
-                                Screen.Checking -> {
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.Center,
-                                    ) {
-                                        CircularProgressIndicator()
+                            Spacer(Modifier.height(if (tall) 72.dp else 16.dp))
+                            Text("Bonk", style = MaterialTheme.typography.headlineLarge)
+                            Spacer(Modifier.height(8.dp))
+                            Text(
+                                text = strings.tagline,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Spacer(Modifier.height(24.dp))
+
+                            val card = Modifier.widthIn(max = contentWidth).fillMaxWidth()
+                            Card(modifier = if (virtualised) card.weight(1f) else card) {
+                                Column(
+                                    modifier = if (virtualised) {
+                                        Modifier.fillMaxSize().padding(24.dp)
+                                    } else {
+                                        Modifier.padding(24.dp)
+                                    },
+                                ) {
+                                    when (val current = screen) {
+                                        Screen.Checking -> {
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                horizontalArrangement = Arrangement.Center,
+                                            ) {
+                                                CircularProgressIndicator()
+                                            }
+                                        }
+                                        Screen.Create -> CreateForm(
+                                            passphrase = passphrase,
+                                            confirmation = confirmation,
+                                            remember = rememberOnCreate,
+                                            rememberSupported = rememberSupported,
+                                            busy = busy,
+                                            error = error,
+                                            onPassphrase = {
+                                                passphrase = it
+                                                error = null
+                                                touch()
+                                            },
+                                            onConfirmation = {
+                                                confirmation = it
+                                                error = null
+                                                touch()
+                                            },
+                                            onRemember = {
+                                                rememberOnCreate = it
+                                                touch()
+                                            },
+                                            onSubmit = ::create,
+                                        )
+                                        Screen.Unlock -> UnlockForm(
+                                            passphrase = passphrase,
+                                            deviceAvailable = deviceAvailable,
+                                            busy = busy,
+                                            error = error,
+                                            onPassphrase = {
+                                                passphrase = it
+                                                error = null
+                                                touch()
+                                            },
+                                            onSubmit = ::unlock,
+                                            onUnlockWithDevice = ::unlockWithDevice,
+                                            onForgot = {
+                                                recoveryKey = ""
+                                                passphrase = ""
+                                                confirmation = ""
+                                                error = null
+                                                screen = Screen.Reset
+                                            },
+                                        )
+                                        Screen.Reset -> ResetForm(
+                                            recoveryKey = recoveryKey,
+                                            passphrase = passphrase,
+                                            confirmation = confirmation,
+                                            busy = busy,
+                                            error = error,
+                                            onRecoveryKey = {
+                                                recoveryKey = it
+                                                error = null
+                                                touch()
+                                            },
+                                            onPassphrase = {
+                                                passphrase = it
+                                                error = null
+                                                touch()
+                                            },
+                                            onConfirmation = {
+                                                confirmation = it
+                                                error = null
+                                                touch()
+                                            },
+                                            onSubmit = ::reset,
+                                            onBack = {
+                                                recoveryKey = ""
+                                                passphrase = ""
+                                                confirmation = ""
+                                                error = null
+                                                screen = Screen.Unlock
+                                            },
+                                        )
+                                        is Screen.AddRecovery -> AddRecoveryForm(
+                                            passphrase = passphrase,
+                                            busy = busy,
+                                            error = error,
+                                            onPassphrase = {
+                                                passphrase = it
+                                                error = null
+                                                touch()
+                                            },
+                                            onSubmit = ::addRecovery,
+                                            onBack = {
+                                                passphrase = ""
+                                                error = null
+                                                screen = Screen.Unlocked
+                                            },
+                                        )
+                                        is Screen.RecoveryKey -> RecoveryKeyShown(
+                                            key = current.key,
+                                            notice = notice,
+                                            onDone = { screen = Screen.Unlocked },
+                                        )
+                                        Screen.Unlocked -> Unlocked(
+                                            summary = summary,
+                                            deviceAvailable = deviceAvailable,
+                                            notice = notice,
+                                            wide = wide,
+                                            onLock = {
+                                                lockArchive()
+                                                passphrase = ""
+                                                confirmation = ""
+                                                recoveryKey = ""
+                                                error = null
+                                                forgetSelection()
+                                                screen = Screen.Unlock
+                                            },
+                                            onForgetDevice = ::forgetDeviceKey,
+                                            onCustomers = { screen = Screen.Customers },
+                                            onDrafts = { screen = Screen.Drafts },
+                                            onDocuments = { screen = Screen.Documents },
+                                            onImport = { screen = Screen.Import },
+                                            onBackup = { screen = Screen.Backup },
+                                            onSettings = { screen = Screen.Settings },
+                                        )
+                                        Screen.Customers -> if (panes) {
+                                            CustomerPanes(
+                                                selected = selectedCustomer,
+                                                version = customersVersion,
+                                                onBack = { screen = Screen.Unlocked },
+                                                onSelect = { selectedCustomer = it },
+                                                onSaved = { customersVersion++ },
+                                                onInteraction = ::touch,
+                                            )
+                                        } else {
+                                            CustomerListScreen(
+                                                onBack = { screen = Screen.Unlocked },
+                                                onEdit = { screen = Screen.CustomerEdit(it) },
+                                                onAdd = { screen = Screen.CustomerEdit(Customer()) },
+                                                onInteraction = ::touch,
+                                            )
+                                        }
+                                        is Screen.CustomerEdit -> if (panes) {
+                                            CustomerPanes(
+                                                selected = selectedCustomer ?: current.customer,
+                                                version = customersVersion,
+                                                onBack = { screen = Screen.Unlocked },
+                                                onSelect = { selectedCustomer = it },
+                                                onSaved = { customersVersion++ },
+                                                onInteraction = ::touch,
+                                            )
+                                        } else {
+                                            CustomerEditScreen(
+                                                customer = current.customer,
+                                                onBack = { screen = Screen.Customers },
+                                                onSaved = { screen = Screen.Customers },
+                                                onInteraction = ::touch,
+                                            )
+                                        }
+                                        Screen.Drafts -> DraftListScreen(
+                                            onBack = { screen = Screen.Unlocked },
+                                            onOpen = { draft, customers ->
+                                                screen = Screen.DraftEditor(draft, customers)
+                                            },
+                                            onCustomers = { screen = Screen.Customers },
+                                            onInteraction = ::touch,
+                                        )
+                                        is Screen.DraftEditor -> DraftEditorScreen(
+                                            draft = current.draft,
+                                            customers = current.customers,
+                                            onBack = { screen = Screen.Drafts },
+                                            onInteraction = ::touch,
+                                            onIssued = { screen = Screen.Issued(it) },
+                                        )
+                                        is Screen.Issued -> IssueResultScreen(current.result) {
+                                            val id = current.result.issued?.id
+                                            screen = if (id.isNullOrBlank()) Screen.Documents else Screen.DocumentView(id)
+                                        }
+                                        Screen.Documents -> if (panes) {
+                                            DocumentPanes(
+                                                state = register,
+                                                selectedId = selectedDocument,
+                                                version = documentsVersion,
+                                                onBack = { screen = Screen.Unlocked },
+                                                onSelect = { selectedDocument = it },
+                                                onChanged = { documentsVersion++ },
+                                                onInteraction = ::touch,
+                                            )
+                                        } else {
+                                            DocumentListScreen(
+                                                state = register,
+                                                onBack = { screen = Screen.Unlocked },
+                                                onOpen = { screen = Screen.DocumentView(it) },
+                                                onInteraction = ::touch,
+                                            )
+                                        }
+                                        is Screen.DocumentView -> if (panes) {
+                                            DocumentPanes(
+                                                state = register,
+                                                selectedId = selectedDocument ?: current.id,
+                                                version = documentsVersion,
+                                                onBack = { screen = Screen.Unlocked },
+                                                onSelect = { selectedDocument = it },
+                                                onChanged = { documentsVersion++ },
+                                                onInteraction = ::touch,
+                                            )
+                                        } else {
+                                            DocumentDetailScreen(
+                                                id = current.id,
+                                                onBack = { screen = Screen.Documents },
+                                            )
+                                        }
+                                        Screen.Import -> ImportScreen(
+                                            onBack = { screen = Screen.Unlocked },
+                                            onOpen = { screen = Screen.DocumentView(it) },
+                                            onInteraction = ::touch,
+                                        )
+                                        Screen.Backup -> BackupScreen(
+                                            onBack = { screen = Screen.Unlocked },
+                                            onRestored = {
+                                                summary = it
+                                                notice = strings.archiveRestored
+                                                screen = Screen.Unlocked
+                                            },
+                                            onLocked = {
+                                                error = it
+                                                screen = Screen.Unlock
+                                            },
+                                            onInteraction = ::touch,
+                                        )
+                                        Screen.Seller -> SellerEditScreen(
+                                            onBack = { screen = Screen.Settings },
+                                            onInteraction = ::touch,
+                                        )
+                                        Screen.Settings -> SettingsScreen(
+                                            onBack = { screen = Screen.Unlocked },
+                                            onSeller = { screen = Screen.Seller },
+                                            onAddRecovery = { screen = Screen.AddRecovery },
+                                            onInteraction = ::touch,
+                                        )
                                     }
                                 }
-                                Screen.Create -> CreateForm(
-                                    passphrase = passphrase,
-                                    confirmation = confirmation,
-                                    remember = rememberOnCreate,
-                                    rememberSupported = rememberSupported,
-                                    busy = busy,
-                                    error = error,
-                                    onPassphrase = {
-                                        passphrase = it
-                                        error = null
-                                        touch()
-                                    },
-                                    onConfirmation = {
-                                        confirmation = it
-                                        error = null
-                                        touch()
-                                    },
-                                    onRemember = {
-                                        rememberOnCreate = it
-                                        touch()
-                                    },
-                                    onSubmit = ::create,
-                                )
-                                Screen.Unlock -> UnlockForm(
-                                    passphrase = passphrase,
-                                    deviceAvailable = deviceAvailable,
-                                    busy = busy,
-                                    error = error,
-                                    onPassphrase = {
-                                        passphrase = it
-                                        error = null
-                                        touch()
-                                    },
-                                    onSubmit = ::unlock,
-                                    onUnlockWithDevice = ::unlockWithDevice,
-                                    onForgot = {
-                                        recoveryKey = ""
-                                        passphrase = ""
-                                        confirmation = ""
-                                        error = null
-                                        screen = Screen.Reset
-                                    },
-                                )
-                                Screen.Reset -> ResetForm(
-                                    recoveryKey = recoveryKey,
-                                    passphrase = passphrase,
-                                    confirmation = confirmation,
-                                    busy = busy,
-                                    error = error,
-                                    onRecoveryKey = {
-                                        recoveryKey = it
-                                        error = null
-                                        touch()
-                                    },
-                                    onPassphrase = {
-                                        passphrase = it
-                                        error = null
-                                        touch()
-                                    },
-                                    onConfirmation = {
-                                        confirmation = it
-                                        error = null
-                                        touch()
-                                    },
-                                    onSubmit = ::reset,
-                                    onBack = {
-                                        recoveryKey = ""
-                                        passphrase = ""
-                                        confirmation = ""
-                                        error = null
-                                        screen = Screen.Unlock
-                                    },
-                                )
-                                is Screen.AddRecovery -> AddRecoveryForm(
-                                    passphrase = passphrase,
-                                    busy = busy,
-                                    error = error,
-                                    onPassphrase = {
-                                        passphrase = it
-                                        error = null
-                                        touch()
-                                    },
-                                    onSubmit = ::addRecovery,
-                                    onBack = {
-                                        passphrase = ""
-                                        error = null
-                                        screen = Screen.Unlocked
-                                    },
-                                )
-                                is Screen.RecoveryKey -> RecoveryKeyShown(
-                                    key = current.key,
-                                    notice = notice,
-                                    onDone = { screen = Screen.Unlocked },
-                                )
-                                Screen.Unlocked -> Unlocked(
-                                    summary = summary,
-                                    deviceAvailable = deviceAvailable,
-                                    notice = notice,
-                                    onLock = {
-                                        lockArchive()
-                                        passphrase = ""
-                                        confirmation = ""
-                                        recoveryKey = ""
-                                        error = null
-                                        screen = Screen.Unlock
-                                    },
-                                    onForgetDevice = ::forgetDeviceKey,
-                                    onCustomers = { screen = Screen.Customers },
-                                    onDrafts = { screen = Screen.Drafts },
-                                    onDocuments = { screen = Screen.Documents },
-                                    onImport = { screen = Screen.Import },
-                                    onBackup = { screen = Screen.Backup },
-                                    onSettings = { screen = Screen.Settings },
-                                )
-                                Screen.Customers -> CustomerListScreen(
-                                    onBack = { screen = Screen.Unlocked },
-                                    onEdit = { screen = Screen.CustomerEdit(it) },
-                                    onAdd = { screen = Screen.CustomerEdit(Customer()) },
-                                    onInteraction = ::touch,
-                                )
-                                is Screen.CustomerEdit -> CustomerEditScreen(
-                                    customer = current.customer,
-                                    onBack = { screen = Screen.Customers },
-                                    onSaved = { screen = Screen.Customers },
-                                    onInteraction = ::touch,
-                                )
-                                Screen.Drafts -> DraftListScreen(
-                                    onBack = { screen = Screen.Unlocked },
-                                    onOpen = { draft, customers ->
-                                        screen = Screen.DraftEditor(draft, customers)
-                                    },
-                                    onCustomers = { screen = Screen.Customers },
-                                    onInteraction = ::touch,
-                                )
-                                is Screen.DraftEditor -> DraftEditorScreen(
-                                    draft = current.draft,
-                                    customers = current.customers,
-                                    onBack = { screen = Screen.Drafts },
-                                    onInteraction = ::touch,
-                                    onIssued = { screen = Screen.Issued(it) },
-                                )
-                                is Screen.Issued -> IssueResultScreen(current.result) {
-                                    val id = current.result.issued?.id
-                                    screen = if (id.isNullOrBlank()) Screen.Documents else Screen.DocumentView(id)
-                                }
-                                Screen.Documents -> DocumentListScreen(
-                                    state = register,
-                                    onBack = { screen = Screen.Unlocked },
-                                    onOpen = { screen = Screen.DocumentView(it) },
-                                    onInteraction = ::touch,
-                                )
-                                is Screen.DocumentView -> DocumentDetailScreen(
-                                    id = current.id,
-                                    onBack = { screen = Screen.Documents },
-                                )
-                                Screen.Import -> ImportScreen(
-                                    onBack = { screen = Screen.Unlocked },
-                                    onOpen = { screen = Screen.DocumentView(it) },
-                                    onInteraction = ::touch,
-                                )
-                                Screen.Backup -> BackupScreen(
-                                    onBack = { screen = Screen.Unlocked },
-                                    onRestored = {
-                                        summary = it
-                                        notice = strings.archiveRestored
-                                        screen = Screen.Unlocked
-                                    },
-                                    onLocked = {
-                                        error = it
-                                        screen = Screen.Unlock
-                                    },
-                                    onInteraction = ::touch,
-                                )
-                                Screen.Seller -> SellerEditScreen(
-                                    onBack = { screen = Screen.Settings },
-                                    onInteraction = ::touch,
-                                )
-                                Screen.Settings -> SettingsScreen(
-                                    onBack = { screen = Screen.Unlocked },
-                                    onSeller = { screen = Screen.Seller },
-                                    onAddRecovery = { screen = Screen.AddRecovery },
+                            }
+
+                            if (screen is Screen.Settings) {
+                                Spacer(Modifier.height(24.dp))
+                                Diagnostics(
+                                    modifier = Modifier.widthIn(max = contentWidth).fillMaxWidth(),
                                     onInteraction = ::touch,
                                 )
                             }
                         }
-                    }
-
-                    if (screen is Screen.Settings) {
-                        Spacer(Modifier.height(24.dp))
-                        Diagnostics(
-                            modifier = Modifier.widthIn(max = contentWidth).fillMaxWidth(),
-                            onInteraction = ::touch,
-                        )
                     }
                 }
             }
@@ -808,6 +903,7 @@ private fun Unlocked(
     summary: ArchiveSummary,
     deviceAvailable: Boolean,
     notice: String?,
+    wide: Boolean,
     onLock: () -> Unit,
     onForgetDevice: () -> Unit,
     onCustomers: () -> Unit,
@@ -836,28 +932,45 @@ private fun Unlocked(
         )
     }
     Spacer(Modifier.height(20.dp))
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        Button(onClick = onCustomers, modifier = Modifier.weight(1f)) { Text(strings.customers) }
-        Button(onClick = onDrafts, modifier = Modifier.weight(1f)) { Text(strings.drafts) }
-    }
-    Spacer(Modifier.height(8.dp))
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        Button(onClick = onDocuments, modifier = Modifier.weight(1f)) { Text(strings.documents) }
-        Button(onClick = onImport, modifier = Modifier.weight(1f)) { Text(strings.importInvoice) }
-    }
-    Spacer(Modifier.height(8.dp))
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        Button(onClick = onBackup, modifier = Modifier.weight(1f)) { Text(strings.backup) }
-        Button(onClick = onSettings, modifier = Modifier.weight(1f)) { Text(strings.settings) }
+    if (wide) {
+        // Tablets and landscape phones get two columns; the rail above already
+        // names the places, so the cards only need to stay reachable.
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = onCustomers, modifier = Modifier.fillMaxWidth()) { Text(strings.customers) }
+                Button(onClick = onDocuments, modifier = Modifier.fillMaxWidth()) { Text(strings.documents) }
+                Button(onClick = onBackup, modifier = Modifier.fillMaxWidth()) { Text(strings.backup) }
+            }
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = onDrafts, modifier = Modifier.fillMaxWidth()) { Text(strings.drafts) }
+                Button(onClick = onImport, modifier = Modifier.fillMaxWidth()) { Text(strings.importInvoice) }
+                Button(onClick = onSettings, modifier = Modifier.fillMaxWidth()) { Text(strings.settings) }
+            }
+        }
+    } else {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Button(onClick = onCustomers, modifier = Modifier.weight(1f)) { Text(strings.customers) }
+            Button(onClick = onDrafts, modifier = Modifier.weight(1f)) { Text(strings.drafts) }
+        }
+        Spacer(Modifier.height(8.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Button(onClick = onDocuments, modifier = Modifier.weight(1f)) { Text(strings.documents) }
+            Button(onClick = onImport, modifier = Modifier.weight(1f)) { Text(strings.importInvoice) }
+        }
+        Spacer(Modifier.height(8.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Button(onClick = onBackup, modifier = Modifier.weight(1f)) { Text(strings.backup) }
+            Button(onClick = onSettings, modifier = Modifier.weight(1f)) { Text(strings.settings) }
+        }
     }
     Spacer(Modifier.height(8.dp))
     Button(
@@ -1023,4 +1136,156 @@ private fun ProbeButton(
     }
     Spacer(Modifier.height(6.dp))
     Text(result, style = MaterialTheme.typography.bodySmall)
+}
+
+/** Where the rail can take an open archive. */
+private enum class RailDestination(val screen: Screen) {
+    Home(Screen.Unlocked),
+    Customers(Screen.Customers),
+    Drafts(Screen.Drafts),
+    Documents(Screen.Documents),
+    Settings(Screen.Settings),
+}
+
+private fun Screen.destination(): RailDestination = when (this) {
+    Screen.Customers, is Screen.CustomerEdit -> RailDestination.Customers
+    Screen.Drafts, is Screen.DraftEditor -> RailDestination.Drafts
+    Screen.Documents, is Screen.DocumentView -> RailDestination.Documents
+    Screen.Settings, Screen.Seller, Screen.AddRecovery -> RailDestination.Settings
+    else -> RailDestination.Home
+}
+
+/** Screens that sit beside the rail; the lock screens keep the whole window. */
+private fun Screen.usesShell(): Boolean =
+    isArchiveContent() || this is Screen.Import || this is Screen.Backup || this is Screen.Settings
+
+@Composable
+private fun NavigationRailPanel(destination: RailDestination, onSelect: (RailDestination) -> Unit) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        modifier = Modifier.fillMaxHeight().width(200.dp),
+    ) {
+        Column(
+            modifier = Modifier.fillMaxHeight().padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Text("Bonk", style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(12.dp))
+            Spacer(Modifier.height(8.dp))
+            RailEntry(strings.home, destination == RailDestination.Home) { onSelect(RailDestination.Home) }
+            RailEntry(strings.customers, destination == RailDestination.Customers) {
+                onSelect(RailDestination.Customers)
+            }
+            RailEntry(strings.drafts, destination == RailDestination.Drafts) { onSelect(RailDestination.Drafts) }
+            RailEntry(strings.documents, destination == RailDestination.Documents) {
+                onSelect(RailDestination.Documents)
+            }
+            RailEntry(strings.settings, destination == RailDestination.Settings) {
+                onSelect(RailDestination.Settings)
+            }
+        }
+    }
+}
+
+@Composable
+private fun RailEntry(label: String, selected: Boolean, onClick: () -> Unit) {
+    TextButton(
+        onClick = onClick,
+        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+        colors = if (selected) ButtonDefaults.filledTonalButtonColors() else ButtonDefaults.textButtonColors(),
+    ) {
+        Text(label, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Start)
+    }
+}
+
+/** Customers on the left, the customer being edited or added on the right. */
+@Composable
+private fun CustomerPanes(
+    selected: Customer?,
+    version: Int,
+    onBack: () -> Unit,
+    onSelect: (Customer?) -> Unit,
+    onSaved: () -> Unit,
+    onInteraction: () -> Unit,
+) {
+    Row(Modifier.fillMaxSize()) {
+        Box(Modifier.weight(2f).fillMaxHeight().verticalScroll(rememberScrollState())) {
+            CustomerListScreen(
+                onBack = onBack,
+                onEdit = onSelect,
+                onAdd = { onSelect(Customer()) },
+                onInteraction = onInteraction,
+                selectedId = selected?.id,
+                version = version,
+            )
+        }
+        VerticalDivider()
+        Box(Modifier.weight(3f).fillMaxHeight().verticalScroll(rememberScrollState())) {
+            val current = selected
+            if (current == null) {
+                EmptyPane(strings.chooseCustomerToEdit)
+            } else {
+                // A different customer is a different form, not a refresh of this one.
+                key(current.id) {
+                    CustomerEditScreen(
+                        customer = current,
+                        onBack = { onSelect(null) },
+                        onSaved = {
+                            onSelect(null)
+                            onSaved()
+                        },
+                        onInteraction = onInteraction,
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** The register on the left, the document it opens on the right. */
+@Composable
+private fun DocumentPanes(
+    state: DocumentRegisterState,
+    selectedId: String?,
+    version: Int,
+    onBack: () -> Unit,
+    onSelect: (String?) -> Unit,
+    onChanged: () -> Unit,
+    onInteraction: () -> Unit,
+) {
+    Row(Modifier.fillMaxSize()) {
+        Box(Modifier.weight(2f).fillMaxHeight()) {
+            DocumentListScreen(
+                state = state,
+                onBack = onBack,
+                onOpen = onSelect,
+                onInteraction = onInteraction,
+                selectedId = selectedId,
+                version = version,
+            )
+        }
+        VerticalDivider()
+        Box(Modifier.weight(3f).fillMaxHeight().verticalScroll(rememberScrollState())) {
+            if (selectedId == null) {
+                EmptyPane(strings.chooseDocumentToOpen)
+            } else {
+                DocumentDetailScreen(
+                    id = selectedId,
+                    onBack = { onSelect(null) },
+                    onChanged = onChanged,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun EmptyPane(text: String) {
+    Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
+        Text(
+            text,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center,
+        )
+    }
 }

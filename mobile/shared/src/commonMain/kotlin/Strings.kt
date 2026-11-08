@@ -33,6 +33,7 @@ class Strings(private val dutch: Boolean) {
     val tagline = t("Local-first e-invoicing", "Factureren zonder server")
     val unknownError = t("unknown error", "onbekende fout")
     val back = t("Back", "Terug")
+    val home = t("Home", "Start")
     val close = t("Close", "Sluiten")
     val cancel = t("Cancel", "Annuleren")
     val saved = t("Saved.", "Opgeslagen.")
@@ -144,6 +145,7 @@ class Strings(private val dutch: Boolean) {
     val importCsv = t("Import CSV", "CSV importeren")
     val exportCsv = t("Export CSV", "CSV exporteren")
     val noCustomers = t("No customers yet.", "Nog geen klanten.")
+    val chooseCustomerToEdit = t("Choose a customer to edit.", "Kies een klant om te bewerken.")
     val enterName = t("Enter a name.", "Vul een naam in.")
     val enterCity = t("Enter a city.", "Vul een plaats in.")
     val newCustomer = t("New customer", "Nieuwe klant")
@@ -360,6 +362,7 @@ class Strings(private val dutch: Boolean) {
         "Zoek op nummer, partij, referentie",
     )
     val nothingMatches = t("Nothing matches that search.", "Niets gevonden met die zoekopdracht.")
+    val chooseDocumentToOpen = t("Choose a document to open.", "Kies een document om te openen.")
     val noReceived = t(
         "No received invoices yet. Import one to file it here.",
         "Nog geen ontvangen facturen. Importeer er een om hem hier te bewaren.",
