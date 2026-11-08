@@ -31,7 +31,7 @@ if [ ! -f "$apk" ]; then
     exit 1
 fi
 
-adb_of install -r "$apk" >/dev/null
+adb_of install -r --no-streaming "$apk" >/dev/null
 adb_of shell am force-stop "$package"
 adb_of logcat -c
 

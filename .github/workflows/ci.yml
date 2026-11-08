@@ -214,7 +214,7 @@ jobs:
           target: google_apis
           arch: x86_64
           disable-animations: true
-          emulator-boot-timeout: 900
+          emulator-boot-timeout: 1200
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none -camera-front none
           script: |
             # A phone profile boots far more reliably than a tablet one under the

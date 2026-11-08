@@ -25,9 +25,35 @@ apk=$(find_apk androidApp-debug.apk)
 test_apk=$(find_apk androidApp-debug-androidTest.apk)
 release_apk=$(find_apk androidApp-release.apk)
 
-# Installed once; the runner script would otherwise repeat it per class.
-adb install -r "$apk" >/dev/null
-adb install -r "$test_apk" >/dev/null
+# `sys.boot_completed` can land before the package service is ready, and an
+# install that arrives then fails with a broken pipe. Wait for the service
+# itself, then install from a pushed file rather than a stream, which is the
+# other half of that failure on an emulator.
+i=0
+while [ "$i" -lt 60 ]; do
+    if adb shell cmd package list packages >/dev/null 2>&1; then
+        break
+    fi
+    i=$((i + 1))
+    sleep 2
+done
+
+install_apk() {
+    attempt=1
+    while [ "$attempt" -le 3 ]; do
+        if adb install -r --no-streaming "$1"; then
+            return 0
+        fi
+        echo "install attempt $attempt failed; retrying" >&2
+        attempt=$((attempt + 1))
+        sleep 10
+    done
+    echo "error: could not install $1" >&2
+    return 1
+}
+
+install_apk "$apk"
+install_apk "$test_apk"
 
 export BONK_APK="$apk"
 export BONK_TEST_APK="$test_apk"
