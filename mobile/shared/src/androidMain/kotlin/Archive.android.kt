@@ -180,6 +180,11 @@ object MobileArchiveHost {
         return opened.documentArtefact(id, kind)
     }
 
+    fun importDocument(name: String, bytes: ByteArray): ImportReport {
+        val opened = archive ?: error("the archive is not open")
+        return opened.importDocument(name.ifBlank { null }, bytes).toCommon()
+    }
+
     fun loadSeller(): Seller {
         val opened = archive ?: error("the archive is not open")
         return opened.seller().toCommon()
@@ -415,6 +420,13 @@ private fun uniffi.bonkc.DocumentArtefactRecord.toCommon() = DocumentArtefact(
     rendererVersion = rendererVersion,
 )
 
+private fun uniffi.bonkc.ImportRecord.toCommon() = ImportReport(
+    number = number,
+    documentId = documentId,
+    supplier = supplier.orEmpty(),
+    duplicate = duplicate,
+)
+
 private fun uniffi.bonkc.DocumentEventRecord.toCommon() = DocumentEvent(
     kind = kind,
     at = at,
@@ -530,6 +542,7 @@ private fun AppException.toUserMessage(): String = when (this) {
     is AppException.Io -> "Storage error: $detail"
     is AppException.Store -> detail
     is AppException.Artefact -> "Rendering failed: $detail"
+    is AppException.Import -> "Could not import the file: $detail"
     is AppException.AuthFailed -> "Authentication failed: $detail"
     is AppException.Invalidated -> "The device secret was invalidated."
     is AppException.Closed -> "The archive is locked."

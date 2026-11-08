@@ -11,8 +11,8 @@ use std::time::Instant;
 
 use application::{
     Archive as AppArchive, CustomerDto, CustomerImportDto, DocumentArtefact, DocumentDetail, DocumentEvent,
-    DocumentHit, DocumentLine, DocumentSummary, DraftDto, DraftLineDto, DraftTotalsDto, FindingDto, IssueOutcome,
-    PrecedingInvoiceDto, SellerDto,
+    DocumentHit, DocumentLine, DocumentSummary, DraftDto, DraftLineDto, DraftTotalsDto, FindingDto, ImportDto,
+    IssueOutcome, PrecedingInvoiceDto, SellerDto,
 };
 use argon2::{Algorithm, Argon2, Params, Version};
 use crux::{
@@ -62,6 +62,9 @@ pub enum AppError {
     /// A filesystem operation failed.
     #[error("I/O error: {detail}")]
     Io { detail: String },
+    /// The file handed to the archive is not an invoice it can read.
+    #[error("import: {detail}")]
+    Import { detail: String },
 }
 
 impl From<store::StoreError> for AppError {
@@ -77,6 +80,14 @@ impl From<store::StoreError> for AppError {
             other => Self::Store {
                 detail: other.to_string(),
             },
+        }
+    }
+}
+
+impl From<application::import::ImportError> for AppError {
+    fn from(error: application::import::ImportError) -> Self {
+        Self::Import {
+            detail: error.to_string(),
         }
     }
 }
@@ -285,6 +296,30 @@ impl From<CustomerImportDto> for CustomerImportRecord {
             imported: dto.imported,
             skipped: dto.skipped,
             errors: dto.errors,
+        }
+    }
+}
+
+/// What became of one imported invoice.
+#[derive(uniffi::Record)]
+pub struct ImportRecord {
+    /// Number as the sender wrote it.
+    pub number: String,
+    /// Document identity in the archive.
+    pub document_id: String,
+    /// Supplier name, when the party table matched one.
+    pub supplier: Option<String>,
+    /// True when the archive already held this document, so nothing was added.
+    pub duplicate: bool,
+}
+
+impl From<ImportDto> for ImportRecord {
+    fn from(dto: ImportDto) -> Self {
+        Self {
+            number: dto.number,
+            document_id: dto.document_id,
+            supplier: dto.supplier,
+            duplicate: dto.duplicate,
         }
     }
 }
@@ -1035,6 +1070,18 @@ impl Archive {
         let guard = self.inner.lock().map_err(|_| AppError::Closed)?;
         let archive = guard.as_ref().ok_or(AppError::Closed)?;
         Ok(archive.import_customers_csv(&text)?.into())
+    }
+
+    /// Imports a received invoice from bytes, as a file picker or a share
+    /// hand-off delivers them.
+    ///
+    /// The name is provenance for the record, not a path. A document the archive
+    /// already holds comes back with `duplicate` set rather than being written
+    /// twice.
+    pub fn import_document(&self, name: Option<String>, bytes: Vec<u8>) -> Result<ImportRecord, AppError> {
+        let guard = self.inner.lock().map_err(|_| AppError::Closed)?;
+        let archive = guard.as_ref().ok_or(AppError::Closed)?;
+        Ok(archive.import_document(name.as_deref(), &bytes)?.into())
     }
 
     /// Drops the archive and zeroizes the data key. Later calls return `Closed`.
@@ -1821,6 +1868,26 @@ mod tests {
             .document_artefact(summary.id.clone(), "pdf".to_owned())
             .expect("the pdf");
         assert_eq!(sha256_hex(&pdf), issued.pdf_sha256.clone().expect("a hash"));
+
+        // The same bytes, handed back as a received document, are stored once.
+        let ubl = archive
+            .document_artefact(summary.id.clone(), "ubl".to_owned())
+            .expect("the ubl");
+        let imported = archive
+            .import_document(Some("2026-0001.xml".to_owned()), ubl.clone())
+            .expect("an import");
+        assert_eq!(imported.number, "2026-0001");
+        assert!(!imported.duplicate);
+        let repeat = archive
+            .import_document(Some("2026-0001.xml".to_owned()), ubl)
+            .expect("the same bytes again");
+        assert!(repeat.duplicate);
+        assert_eq!(repeat.document_id, imported.document_id);
+
+        assert!(matches!(
+            archive.import_document(Some("notes.txt".to_owned()), b"not an invoice".to_vec()),
+            Err(AppError::Import { .. })
+        ));
 
         assert!(matches!(
             archive.document("not-a-document".to_owned()),

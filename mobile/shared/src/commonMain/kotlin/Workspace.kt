@@ -1,6 +1,9 @@
 package com.github.sdgoij.bonk
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 
 /** A customer as the editor and the list use it. */
 data class Customer(
@@ -233,6 +236,22 @@ data class CustomerImportReport(
 /** The customer table as CSV. */
 expect fun customersCsv(): String
 
+/** What became of one imported invoice. */
+data class ImportReport(
+    val number: String,
+    val documentId: String,
+    val supplier: String = "",
+    val duplicate: Boolean = false,
+)
+
+/**
+ * Imports received invoice bytes, as a picker or a share hand-off delivers them.
+ *
+ * `name` is provenance for the record, not a path: nothing is read from the
+ * filesystem and the archive decides the format from the bytes.
+ */
+expect fun importDocument(name: String, bytes: ByteArray): ImportReport
+
 /** Imports customers from CSV, skipping parties already on file. */
 expect fun importCustomersCsv(text: String): CustomerImportReport
 
@@ -270,6 +289,39 @@ interface ArtefactIo {
 /** The platform actions, created in a composable so Android can use its launchers. */
 @Composable
 expect fun rememberArtefactIo(): ArtefactIo
+
+/** Picking one document file and reading its bytes. */
+interface DocumentPicker {
+    /** Opens a picker for an invoice and passes its display name and bytes. */
+    fun pick(onFile: (name: String, bytes: ByteArray) -> Unit, onError: (String) -> Unit)
+}
+
+/** The platform picker, created in a composable so Android can use its launchers. */
+@Composable
+expect fun rememberDocumentPicker(): DocumentPicker
+
+/** A document the system handed to the app, waiting for the archive to unlock. */
+class ImportRequest(val name: String, val bytes: ByteArray)
+
+/**
+ * The hand-off between the activity and the app: `ACTION_VIEW` and `ACTION_SEND`
+ * can arrive before the archive is open, so the bytes wait here until a screen
+ * takes them.
+ */
+object PendingImport {
+    var request: ImportRequest? by mutableStateOf(null)
+        private set
+
+    fun offer(name: String?, bytes: ByteArray) {
+        request = ImportRequest(name ?: "document", bytes)
+    }
+
+    fun take(): ImportRequest? {
+        val current = request
+        request = null
+        return current
+    }
+}
 
 /** Lets a platform file picker suspend the background lock while it is open. */
 object PickerGuard {

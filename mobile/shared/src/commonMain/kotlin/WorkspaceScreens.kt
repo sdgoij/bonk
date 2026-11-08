@@ -723,6 +723,93 @@ private fun artefactFileName(number: String, kind: String): String {
     return "$stem.$extension"
 }
 
+/** Receiving one invoice: a file the user picks, or one another app handed over. */
+@Composable
+fun ImportScreen(
+    onBack: () -> Unit,
+    onOpen: (String) -> Unit,
+    onInteraction: () -> Unit,
+) {
+    val picker = rememberDocumentPicker()
+    val scope = rememberCoroutineScope()
+    var report by remember { mutableStateOf<ImportReport?>(null) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var source by remember { mutableStateOf("") }
+    var busy by remember { mutableStateOf(false) }
+
+    // A share or view intent waits until the archive is open; the screen takes
+    // it when it arrives, including while this screen is already showing.
+    val incoming = PendingImport.request
+
+    fun receive(name: String, bytes: ByteArray) {
+        if (busy) return
+        busy = true
+        error = null
+        report = null
+        source = name
+        scope.launch {
+            val result = withContext(Dispatchers.IO) { runCatching { importDocument(name, bytes) } }
+            busy = false
+            result.onSuccess { report = it }
+                .onFailure { error = it.message ?: it.toString() }
+        }
+    }
+
+    LaunchedEffect(incoming) {
+        if (incoming != null) {
+            PendingImport.take()
+            receive(incoming.name, incoming.bytes)
+        }
+    }
+
+    Column(Modifier.fillMaxWidth()) {
+        ScreenHeader("Import", onBack) { }
+        Text(
+            "A received invoice arrives as UBL or PDF. The archive reads the sender, the number " +
+                "and the totals, and refuses to store the same document twice.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(12.dp))
+        Button(
+            onClick = {
+                onInteraction()
+                picker.pick(::receive) { error = it }
+            },
+            enabled = !busy,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text(if (busy) "Importing..." else "Choose a file")
+        }
+
+        error?.let {
+            Spacer(Modifier.height(8.dp))
+            Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+        }
+
+        val received = report
+        if (received != null) {
+            Spacer(Modifier.height(12.dp))
+            Text("Received", style = MaterialTheme.typography.titleMedium)
+            Fact("File", source)
+            Fact("Number", received.number)
+            Fact("Supplier", received.supplier.ifBlank { "Not matched to a customer" })
+            if (received.duplicate) {
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "The archive already held this document, so nothing was added.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Spacer(Modifier.height(8.dp))
+            Button(onClick = { onOpen(received.documentId) }, modifier = Modifier.fillMaxWidth()) {
+                Text("Open document")
+            }
+        }
+    }
+}
+
 /** The party invoices are issued by. */
 @Composable
 fun SellerEditScreen(onBack: () -> Unit, onInteraction: () -> Unit) {

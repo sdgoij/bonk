@@ -1437,7 +1437,17 @@ Share, Save and Open fetch the artefact on the IO dispatcher and hand it to the 
 
 #### M11.5 — Import and settings (2 weeks)
 
-- [ ] SAF import and `ACTION_VIEW` / `ACTION_SEND` import
+**Status 2026-11-08:** An invoice arrives two ways: the Import screen's file picker, and a share or view intent from another app. Both hand bytes and a display name to the application layer, which sniffs UBL, CII, or a PDF carrying an embedded invoice, matches the supplier against the party table, and reports the number and whether the archive already held the document. The picker and the hand-off both hold the background lock while the system UI is in front, so the archive is still open on return.
+
+The hand-off is read when the intent arrives, because a share grant can be short-lived, and waits in `PendingImport` until a screen that is not behind the lock can take it. `singleTop` on the activity keeps a second share from stacking a second copy of the app, and the intent is cleared after it is handled so a configuration change does not import twice.
+
+A PDF without an embedded invoice is refused with a message instead of being read as text. The importer handles Factur-X and ZUGFeRD attachments from suppliers; our own rendered PDFs do not embed the UBL yet, so importing one of ours fails with that message.
+
+The imported document opens in the shared detail screen, which is still written for outbound documents: the counterparty sits in the buyer position and our own name is labelled Seller. The received list will make those labels follow the direction.
+
+Run on an emulator: a seeded UBL picked from Downloads reported its number and "Not matched to a customer" (the document's seller is this archive), a second import of the same bytes reported the duplicate, a view intent delivered before unlock landed on the Import screen after unlocking, and a send intent delivered to the running app replaced the result on screen without a restart.
+
+- [x] SAF import and `ACTION_VIEW` / `ACTION_SEND` import
 - [ ] Received list and supplier match
 - [ ] Approve and mark-paid actions
 - [ ] Backup export (verify, then stream) and two-file restore

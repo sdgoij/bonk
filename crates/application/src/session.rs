@@ -11,8 +11,8 @@ use store::{Database, KdfParams, KeyStore, StoreError};
 use zeroize::Zeroizing;
 
 use crate::dto::{
-    CustomerDto, CustomerImportDto, DocumentDetail, DocumentHit, DraftDto, DraftTotalsDto, FindingDto, SellerDto,
-    Summary,
+    CustomerDto, CustomerImportDto, DocumentDetail, DocumentHit, DraftDto, DraftTotalsDto, FindingDto, ImportDto,
+    SellerDto, Summary,
 };
 
 /// An unlocked application session: one database, one keystore.
@@ -251,6 +251,30 @@ impl Archive {
     pub fn document_artefact(&self, id: &str, kind: &str) -> Result<Vec<u8>, StoreError> {
         let id = crux::DocumentId::parse_str(id).map_err(|error| StoreError::Data(error.to_string()))?;
         store::archive::artefact_bytes(self.database.connection(), id, kind)
+    }
+
+    /// Imports a received invoice from bytes, as a picker or a share hand-off
+    /// delivers them.
+    ///
+    /// `name` is provenance for the record, not a path: nothing is read from the
+    /// filesystem. The archive sniffs the format, matches the supplier against
+    /// the party table and returns the existing document when the same bytes, or
+    /// the same supplier number, are already here.
+    pub fn import_document(&self, name: Option<&str>, bytes: &[u8]) -> Result<ImportDto, crate::import::ImportError> {
+        let owner = self.ensure_seller()?;
+        let owner = crux::SellerId::parse_str(&owner).map_err(|error| StoreError::Data(error.to_string()))?;
+        let outcome = crate::import::import_bytes(&self.database, owner, name, bytes, &store::now_rfc3339())?;
+        let supplier = outcome
+            .supplier
+            .map(|id| store::load_customer(self.database.connection(), id))
+            .transpose()?
+            .map(|record| record.party.legal_name);
+        Ok(ImportDto {
+            number: outcome.number,
+            document_id: outcome.document_id.to_string(),
+            supplier,
+            duplicate: outcome.duplicate,
+        })
     }
 
     /// Records a reason for accepting a non-blocking finding.
@@ -966,6 +990,48 @@ mod tests {
         // An unknown artefact kind and an unknown document are both errors.
         assert!(archive.document_artefact(&issued.id, "xml").is_err());
         assert!(archive.document("not-a-document").is_err());
+    }
+
+    #[test]
+    fn an_imported_invoice_is_stored_once_with_its_supplier() {
+        // One archive issues an invoice; another receives its UBL bytes, the way
+        // a file picker or a share hand-off delivers them.
+        let (_source_directory, mut source) = archive();
+        let (seller, customer) = seed(&source);
+        let issued = source
+            .issue(
+                &draft(&seller, &customer, "Consultancy"),
+                crate::DocumentLanguage::English,
+                None,
+                "test",
+            )
+            .unwrap()
+            .issued
+            .expect("an issued document");
+        let ubl = source.document_artefact(&issued.id, "ubl").unwrap();
+
+        let (_target_directory, target) = archive();
+        seed(&target);
+        // On this side of the books the supplier is a customer; the identifier
+        // printed in the document is what the match keys on.
+        let supplier = store::CustomerRecord {
+            id: crux::CustomerId::new(),
+            party: party("Seller BV", "Delft", Some("NL123456782B01")),
+        };
+        store::insert_customer(target.database().connection(), &supplier, NOW).unwrap();
+
+        let imported = target.import_document(Some("2026-0001.xml"), &ubl).unwrap();
+        assert_eq!(imported.number, "2026-0001");
+        assert_eq!(imported.supplier.as_deref(), Some("Seller BV"));
+        assert!(!imported.duplicate);
+
+        // The same bytes are not stored twice, whatever name they arrive under.
+        let again = target.import_document(Some("copy of 2026-0001.xml"), &ubl).unwrap();
+        assert!(again.duplicate);
+        assert_eq!(again.document_id, imported.document_id);
+
+        // A file that is not a UBL invoice is refused rather than stored.
+        assert!(target.import_document(Some("notes.txt"), b"not an invoice").is_err());
     }
 
     #[test]

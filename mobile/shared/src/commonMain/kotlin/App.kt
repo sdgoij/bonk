@@ -77,7 +77,14 @@ private sealed interface Screen {
     data class Issued(val result: IssueResult) : Screen
     data object Documents : Screen
     data class DocumentView(val id: String) : Screen
+    data object Import : Screen
     data object Seller : Screen
+}
+
+/** True while the archive is still closed, so a hand-off has to wait. */
+private fun Screen.waitsForUnlock(): Boolean = when (this) {
+    Screen.Checking, Screen.Create, Screen.Unlock, Screen.Reset, Screen.AddRecovery, is Screen.RecoveryKey -> true
+    else -> false
 }
 
 private fun Screen.isArchiveContent(): Boolean = when (this) {
@@ -317,6 +324,14 @@ fun App() {
         }
     }
 
+    // A document another app handed over waits for the archive to open.
+    val pendingImport = PendingImport.request
+    LaunchedEffect(screen, pendingImport) {
+        if (pendingImport != null && !screen.waitsForUnlock()) {
+            screen = Screen.Import
+        }
+    }
+
     MaterialTheme {
         Surface(modifier = Modifier.fillMaxSize()) {
             BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
@@ -478,6 +493,7 @@ fun App() {
                                     onDrafts = { screen = Screen.Drafts },
                                     onDocuments = { screen = Screen.Documents },
                                     onSeller = { screen = Screen.Seller },
+                                    onImport = { screen = Screen.Import },
                                 )
                                 Screen.Customers -> CustomerListScreen(
                                     onBack = { screen = Screen.Unlocked },
@@ -518,6 +534,11 @@ fun App() {
                                 is Screen.DocumentView -> DocumentDetailScreen(
                                     id = current.id,
                                     onBack = { screen = Screen.Documents },
+                                )
+                                Screen.Import -> ImportScreen(
+                                    onBack = { screen = Screen.Unlocked },
+                                    onOpen = { screen = Screen.DocumentView(it) },
+                                    onInteraction = ::touch,
                                 )
                                 Screen.Seller -> SellerEditScreen(
                                     onBack = { screen = Screen.Unlocked },
@@ -768,6 +789,7 @@ private fun Unlocked(
     onDrafts: () -> Unit,
     onDocuments: () -> Unit,
     onSeller: () -> Unit,
+    onImport: () -> Unit,
 ) {
     Text("Unlocked", style = MaterialTheme.typography.titleLarge)
     Spacer(Modifier.height(16.dp))
@@ -802,6 +824,10 @@ private fun Unlocked(
     ) {
         Button(onClick = onDocuments, modifier = Modifier.weight(1f)) { Text("Documents") }
         Button(onClick = onSeller, modifier = Modifier.weight(1f)) { Text("Seller") }
+    }
+    Spacer(Modifier.height(8.dp))
+    Button(onClick = onImport, modifier = Modifier.fillMaxWidth()) {
+        Text("Import invoice")
     }
     Spacer(Modifier.height(8.dp))
     Button(

@@ -42,6 +42,19 @@ pub struct CustomerImportDto {
     pub errors: Vec<String>,
 }
 
+/// What became of one imported invoice.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct ImportDto {
+    /// Number as the sender wrote it.
+    pub number: String,
+    /// Document identity in the archive.
+    pub document_id: String,
+    /// Supplier name, when the party table matched one.
+    pub supplier: Option<String>,
+    /// True when the archive already held this document, so nothing was added.
+    pub duplicate: bool,
+}
+
 /// A customer as a front end edits it.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct CustomerDto {
