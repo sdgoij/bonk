@@ -937,10 +937,15 @@ unlocked.
   `AUTH_DEVICE_CREDENTIAL` and `setInvalidatedByBiometricEnrollment` only takes
   effect for biometric-only keys; and a cold start calls `device_ready`, which
   unwraps the key and shows the prompt before the user asks for the device route.
-  ADR-025 must choose biometric-only with a passphrase fallback, and the readiness
-  check must stop unwrapping the key.
-- The invalidated path surfaces `AppException.Invalidated` to the host; the
-  archive unlock fallback itself lands with the M11.1 application integration.
+  Both are fixed: the key is biometric-only with the passphrase as the
+  fallback, and `device_ready` asks the store whether an entry exists without
+  reading it (`DeviceStore::has`, added to the FFI port). Adding a third
+  fingerprint on the emulator then invalidated the key, the device route
+  disappeared, and the passphrase opened the archive.
+- The invalidated path surfaces `AppException.Invalidated` to the host. The app
+  deletes the wrapped copy, hides the device route, and marks a revocation; the
+  revocation is written to the audit chain after the next successful passphrase
+  unlock, because the chain needs the open archive.
 - iOS: store the DEK in the Keychain with
   `kSecAttrAccessibleWhenUnlockedThisDeviceOnly` and an access control of
   `.biometryCurrentSet` (or `.userPresence` if passcode fallback is acceptable).
@@ -1357,13 +1362,14 @@ single place to update progress; the tables stay as the plan.
 
 #### M11.2 — Unlock and security (2 weeks)
 
-**Status 2026-11-08:** Locking, backup exclusion, the canary scan, the backup/restore review, and the privacy and threat-model text are done. Auto-lock runs five minutes after the last interaction and on `ON_STOP`; device extraction rules exclude the archive from cloud backup and device transfer; the canary scan reported clean DB, WAL, and keystore on the API 37 x86_64 emulator. A simulated fingerprint authenticated create and device unlock, and the run found that device-credential fallback defeats enrolment-change invalidation and that a cold start prompts while checking readiness; ADR-025 decides the policy.
+**Status 2026-11-08:** Locking, backup exclusion, the canary scan, the backup/restore review, and the privacy and threat-model text are done. Auto-lock runs five minutes after the last interaction and on `ON_STOP`; device extraction rules exclude the archive from cloud backup and device transfer; the canary scan reported clean DB, WAL, and keystore on the API 37 x86_64 emulator. A simulated fingerprint authenticated create and device unlock; the device key is now biometric-only, so adding a fingerprint invalidates it, and the readiness check no longer prompts. A physical fingerprint and an enrolment-change test on real hardware remain.
 
 - [x] Create and open with a passphrase; create twice-checks the phrase, and a wrong passphrase is reported by variant
 - [x] Passphrase reset with the recovery key; a used key is spent and the replacement is shown once
 - [x] Recovery-key flow: generated at create, rotatable from the unlocked screen, reset from the lock screen
 - [x] Remember-device through the Android Keystore; passphrase fallback, and forget records the audit event
-- [ ] Enrolment-change invalidation and a non-prompting readiness check, then a physical fingerprint test (ADR-025)
+- [x] Enrolment-change invalidation and a non-prompting readiness check; the key is biometric-only with a passphrase fallback
+- [ ] Physical fingerprint and enrolment-change invalidation on a real device
 - [x] Lock drops the archive and zeroizes the DEK; activity destruction closes the handle
 - [x] Five-minute auto-lock while the archive is unlocked, reset on interaction
 - [x] Background lock on `ON_STOP`; the single state machine has no screen back stack, so Back exits and `onDestroy` closes the handle

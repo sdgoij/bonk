@@ -30,11 +30,12 @@ import uniffi.bonkc.DeviceSecretStore
  * S3: an Android Keystore implementation of the UniFFI `DeviceSecretStore`
  * callback.
  *
- * The Keystore key is AES-256-GCM and requires authentication for every use.
- * The prompt allows biometrics or the device credential, so an emulator with a
- * PIN can exercise the same code path as a phone with a fingerprint. The
- * wrapped secret is `iv || ciphertext` in `noBackupFilesDir`, which the OS does
- * not back up.
+ * The Keystore key is AES-256-GCM and requires biometric authentication for
+ * every use. It is biometric-only on purpose: a key that also allows the device
+ * credential is not invalidated when a new fingerprint or face is enrolled. The
+ * passphrase is the fallback when biometrics are unavailable or have changed.
+ * The wrapped secret is `iv || ciphertext` in `noBackupFilesDir`, which the OS
+ * does not back up.
  */
 class KeystoreDeviceStore(private val activity: FragmentActivity) : DeviceSecretStore {
     private val keyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
@@ -44,6 +45,9 @@ class KeystoreDeviceStore(private val activity: FragmentActivity) : DeviceSecret
     override fun put(account: String, secret: ByteArray) {
         if (secret.size != SECRET_LENGTH) {
             throw AppException.Store("expected a $SECRET_LENGTH-byte secret")
+        }
+        if (!biometricAvailable()) {
+            throw AppException.Store("this device has no biometric authentication to protect the key")
         }
         ensureKey()
         val cipher = newCipher()
@@ -76,6 +80,10 @@ class KeystoreDeviceStore(private val activity: FragmentActivity) : DeviceSecret
     override fun get(account: String): ByteArray? {
         val file = fileFor(account)
         if (!file.exists()) return null
+        if (!biometricAvailable()) {
+            file.delete()
+            throw AppException.Invalidated()
+        }
 
         val bytes = try {
             file.readBytes()
@@ -99,12 +107,29 @@ class KeystoreDeviceStore(private val activity: FragmentActivity) : DeviceSecret
         } catch (error: UnrecoverableKeyException) {
             file.delete()
             throw AppException.Invalidated()
+        } catch (error: AppException.Invalidated) {
+            file.delete()
+            throw error
         } catch (error: GeneralSecurityException) {
             throw AppException.Store(error.message ?: "the stored entry could not be opened")
         }
 
         return withAuthentication(cipher) { authorized -> authorized.doFinal(ciphertext) }
     }
+
+    /**
+     * Whether an entry exists and this device can still authenticate it.
+     *
+     * This never reads the entry: reading unwraps the key and shows the prompt.
+     */
+    override fun has(account: String): Boolean =
+        fileFor(account).exists() && biometricAvailable()
+
+    /** True when the device has an enrolled strong biometric. */
+    fun biometricAvailable(): Boolean =
+        BiometricManager.from(activity)
+            .canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_STRONG) ==
+            BiometricManager.BIOMETRIC_SUCCESS
 
     override fun delete(account: String): Boolean {
         val file = fileFor(account)
@@ -135,7 +160,7 @@ class KeystoreDeviceStore(private val activity: FragmentActivity) : DeviceSecret
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 builder.setUserAuthenticationParameters(
                     0,
-                    KeyProperties.AUTH_BIOMETRIC_STRONG or KeyProperties.AUTH_DEVICE_CREDENTIAL,
+                    KeyProperties.AUTH_BIOMETRIC_STRONG,
                 )
             } else {
                 @Suppress("DEPRECATION")
@@ -148,6 +173,9 @@ class KeystoreDeviceStore(private val activity: FragmentActivity) : DeviceSecret
             val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore")
             generator.init(builder.build())
             generator.generateKey()
+            // A fresh key cannot open entries wrapped under the previous one, so
+            // remove them rather than leave undecryptable files behind.
+            File(activity.noBackupFilesDir, "device").deleteRecursively()
         } catch (error: GeneralSecurityException) {
             throw AppException.Store(error.message ?: "the Keystore key could not be created")
         } catch (error: IllegalArgumentException) {
@@ -213,11 +241,9 @@ class KeystoreDeviceStore(private val activity: FragmentActivity) : DeviceSecret
             )
             val info = BiometricPrompt.PromptInfo.Builder()
                 .setTitle("Unlock Bonk")
-                .setSubtitle("Use your fingerprint, face, or device PIN")
-                .setAllowedAuthenticators(
-                    BiometricManager.Authenticators.BIOMETRIC_STRONG or
-                        BiometricManager.Authenticators.DEVICE_CREDENTIAL,
-                )
+                .setSubtitle("Use your fingerprint or face")
+                .setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG)
+                .setNegativeButtonText("Use passphrase")
                 .build()
             prompt.authenticate(info, BiometricPrompt.CryptoObject(cipher))
         }
@@ -234,7 +260,7 @@ class KeystoreDeviceStore(private val activity: FragmentActivity) : DeviceSecret
     }
 
     private companion object {
-        const val KEY_ALIAS = "bonk.device.s3"
+        const val KEY_ALIAS = "bonk.device.biometric"
         const val SECRET_LENGTH = 32
         const val IV_LENGTH = 12
         const val TAG_BITS = 128

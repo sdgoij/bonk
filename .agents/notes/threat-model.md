@@ -137,7 +137,7 @@ these threats.
 | Clipboard leakage | Nothing sensitive is copied automatically, and copies are marked sensitive on Android 13 and later | Other apps on the device can read the clipboard |
 | Rooted or jailbroken device | Out of scope, as on desktop; the app does not pretend to detect it reliably | Full compromise of the archive while unlocked |
 | Overlay or tapjacking | `filterTouchesWhenObscured` on sensitive actions, plus the platform overlay protections | A sophisticated overlay attack |
-| Biometric enrolment change | When the key is biometric-only, the Keystore entry is invalidated, the app falls back to the passphrase and stops offering the device route, and the revocation is recorded after the next unlock because the database needs the key. The current build also allows the device credential, which defeats the invalidation | A user who ignores the passphrase fallback |
+| Biometric enrolment change | The key is biometric-only, so the Keystore entry is invalidated when a fingerprint or face is added; the app deletes the wrapped copy, stops offering the device route, and falls back to the passphrase, and the revocation is recorded after the next unlock because the database needs the key | A user who ignores the passphrase fallback |
 | App killed while editing | Debounced save and process-death restore (later milestone) | The last few hundred milliseconds of typing |
 | Clock manipulation | Audit order is total and independent of the wall clock, and issue dates are user-entered | A mis-set date is a user error |
 
@@ -247,6 +247,7 @@ it off deletes the entry and appends `device_forgotten` to the chain.
 | The mobile archive is excluded from platform backup | `mobile/androidApp/src/main/res/xml/data_extraction_rules.xml` and `android:allowBackup="false"`, inspected on the emulator |
 | The mobile archive and WAL have no plaintext header on the device | the Diagnostics canary scan, run on the API 37 x86_64 emulator |
 | Leaving the mobile app locks the archive | manual: Home, relaunch, the unlock screen appears |
+| A new fingerprint invalidates the device key | manual on the API 37 x86_64 emulator: add a fingerprint, tap Unlock with device, the route disappears and the passphrase opens the archive |
 
 ## 8. Open items
 

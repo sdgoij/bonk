@@ -25,8 +25,11 @@ expect fun createArchive(passphrase: String): ArchiveSummary
 /** Opens the archive with a passphrase and returns its summary. */
 expect fun openArchive(passphrase: String): ArchiveSummary
 
-/** True when this device holds a key for the archive. */
+/** True when this device holds a key for the archive, without prompting. */
 expect fun deviceReady(): Boolean
+
+/** True when this device can offer biometric device unlock. */
+expect fun deviceUnlockAvailable(): Boolean
 
 /** Opens the archive with the key this device kept, authenticating the user. */
 expect fun openArchiveWithDevice(): ArchiveSummary
@@ -45,6 +48,15 @@ expect fun addRecoveryKey(passphrase: String): String
 
 /** Drops the open archive and zeroizes its key. */
 expect fun lockArchive()
+
+/** Records that a device key was revoked by an enrolment change. */
+expect fun recordDeviceRevocation()
+
+/** Remembers that the device key was invalidated, until the next unlock. */
+expect fun markDeviceRevoked()
+
+/** True once after a revocation was marked. */
+expect fun takeDeviceRevoked(): Boolean
 
 /** Scans the archive files for a plaintext SQLite header. */
 expect fun runCanaryScan(): String

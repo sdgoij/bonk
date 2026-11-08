@@ -205,9 +205,27 @@ impl Archive {
         Ok(forgotten)
     }
 
+    /// Records that this device's retained key was revoked, for example by an
+    /// enrolment change that invalidated it.
+    ///
+    /// The record needs the open archive, so the host defers it until the next
+    /// successful unlock; this method is that deferred write.
+    pub fn record_device_revocation(&self) -> Result<(), StoreError> {
+        store::audit::record_device_forget(
+            self.database.connection(),
+            &store::now_rfc3339(),
+            "gui",
+            &self.keystore_path().display().to_string(),
+        )
+    }
+
     /// True when this device holds a key for the archive at these paths.
+    ///
+    /// This asks whether an entry exists without reading it, so a host whose read
+    /// prompts for authentication does not show a prompt just to decide whether
+    /// the device route should be offered.
     pub fn device_ready(keystore_path: impl AsRef<Path>, store: &dyn store::DeviceStore) -> bool {
-        matches!(store::device::recall(store, keystore_path.as_ref()), Ok(Some(_)))
+        matches!(store::device::exists(store, keystore_path.as_ref()), Ok(true))
     }
 
     /// Opens the archive with the key this device kept.
@@ -339,5 +357,21 @@ mod tests {
         let report = archive.backup(&backups, "20261107T120000Z", 3).unwrap();
         assert!(report.path.exists());
         assert!(report.bytes > 0);
+    }
+
+    #[test]
+    fn a_device_revocation_is_recorded_after_the_archive_opens() {
+        let (_directory, archive) = archive();
+        archive.record_device_revocation().unwrap();
+        let forgotten: i64 = archive
+            .database
+            .connection()
+            .query_row(
+                "SELECT COUNT(*) FROM audit_event WHERE kind = 'device_forgotten'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(forgotten, 1);
     }
 }

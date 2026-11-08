@@ -81,6 +81,7 @@ fun App() {
     var notice by remember { mutableStateOf<String?>(null) }
     var deviceAvailable by remember { mutableStateOf(false) }
     var rememberOnCreate by remember { mutableStateOf(false) }
+    var rememberSupported by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
     var interactions by remember { mutableStateOf(0) }
     val scope = rememberCoroutineScope()
@@ -90,6 +91,7 @@ fun App() {
     }
 
     LaunchedEffect(Unit) {
+        rememberSupported = runCatching { deviceUnlockAvailable() }.getOrDefault(false)
         val state = withContext(Dispatchers.IO) {
             val exists = runCatching { archiveExists() }.getOrDefault(false)
             val device = exists && runCatching { deviceReady() }.getOrDefault(false)
@@ -137,7 +139,17 @@ fun App() {
         busy = true
         error = null
         scope.launch {
-            val result = withContext(Dispatchers.IO) { runCatching { openArchive(passphrase) } }
+            val result = withContext(Dispatchers.IO) {
+                runCatching {
+                    val summary = openArchive(passphrase)
+                    // A revoked device key is recorded after the archive opens; a
+                    // failure here must not turn a good unlock into an error.
+                    runCatching {
+                        if (takeDeviceRevoked()) recordDeviceRevocation()
+                    }
+                    summary
+                }
+            }
             result.onSuccess {
                 passphrase = ""
                 confirmation = ""
@@ -254,6 +266,7 @@ fun App() {
                 deviceAvailable = withContext(Dispatchers.IO) { runCatching { deviceReady() }.getOrDefault(false) }
                 if (!deviceAvailable) {
                     error = "The device key is no longer valid. Unlock with the passphrase."
+                    runCatching { markDeviceRevoked() }
                 }
             }
             busy = false
@@ -308,6 +321,7 @@ fun App() {
                                     passphrase = passphrase,
                                     confirmation = confirmation,
                                     remember = rememberOnCreate,
+                                    rememberSupported = rememberSupported,
                                     busy = busy,
                                     error = error,
                                     onPassphrase = {
@@ -438,6 +452,7 @@ private fun CreateForm(
     passphrase: String,
     confirmation: String,
     remember: Boolean,
+    rememberSupported: Boolean,
     busy: Boolean,
     error: String?,
     onPassphrase: (String) -> Unit,
@@ -459,19 +474,21 @@ private fun CreateForm(
     Spacer(Modifier.height(8.dp))
     ErrorText(error)
     Spacer(Modifier.height(8.dp))
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Checkbox(checked = remember, onCheckedChange = onRemember, enabled = !busy)
-        Text("Remember this device", style = MaterialTheme.typography.bodyMedium)
+    if (rememberSupported) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Checkbox(checked = remember, onCheckedChange = onRemember, enabled = !busy)
+            Text("Remember this device", style = MaterialTheme.typography.bodyMedium)
+        }
+        Text(
+            text = "Unlocks with your fingerprint or face next time. The passphrase still works.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(8.dp))
     }
-    Text(
-        text = "Unlocks with your fingerprint, face, or device PIN next time.",
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-    )
-    Spacer(Modifier.height(8.dp))
     Button(
         onClick = onSubmit,
         enabled = !busy,
@@ -635,7 +652,7 @@ private fun UnlockForm(
         }
         Spacer(Modifier.height(6.dp))
         Text(
-            text = "Uses your fingerprint, face, or device PIN.",
+            text = "Uses your fingerprint or face. The passphrase still works.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )

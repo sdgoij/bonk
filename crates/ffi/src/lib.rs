@@ -88,6 +88,11 @@ pub trait DeviceSecretStore: Send + Sync {
     fn put(&self, account: String, secret: Vec<u8>) -> Result<(), AppError>;
     /// Reads a secret, or `None` when the account has no entry.
     fn get(&self, account: String) -> Result<Option<Vec<u8>>, AppError>;
+    /// True when the account has an entry, without reading it.
+    ///
+    /// This must not prompt for authentication: the app calls it to decide
+    /// whether to offer the device-unlock route.
+    fn has(&self, account: String) -> Result<bool, AppError>;
     /// Removes an entry; false when there was nothing to remove.
     fn delete(&self, account: String) -> Result<bool, AppError>;
 }
@@ -203,6 +208,17 @@ impl Archive {
         Ok(archive.forget_device(&adapter)?)
     }
 
+    /// Records that the kept device key was revoked by an enrolment change.
+    ///
+    /// Call this after the next successful unlock, because the audit chain needs
+    /// the open archive.
+    pub fn record_device_revocation(&self) -> Result<(), AppError> {
+        let guard = self.inner.lock().map_err(|_| AppError::Closed)?;
+        let archive = guard.as_ref().ok_or(AppError::Closed)?;
+        archive.record_device_revocation()?;
+        Ok(())
+    }
+
     /// Drops the archive and zeroizes the data key. Later calls return `Closed`.
     pub fn lock(&self) {
         if let Ok(mut guard) = self.inner.lock() {
@@ -252,6 +268,10 @@ impl store::DeviceStore for DeviceAdapter {
 
     fn get(&self, account: &str) -> Result<Option<Vec<u8>>, store::StoreError> {
         self.0.get(account.to_owned()).map_err(device_error)
+    }
+
+    fn has(&self, account: &str) -> Result<bool, store::StoreError> {
+        self.0.has(account.to_owned()).map_err(device_error)
     }
 
     fn delete(&self, account: &str) -> Result<bool, store::StoreError> {
@@ -633,6 +653,14 @@ mod tests {
                 .cloned())
         }
 
+        fn has(&self, account: String) -> Result<bool, AppError> {
+            Ok(self
+                .entries
+                .lock()
+                .expect("the test store is not poisoned")
+                .contains_key(&account))
+        }
+
         fn delete(&self, account: String) -> Result<bool, AppError> {
             Ok(self
                 .entries
@@ -665,6 +693,27 @@ mod tests {
     fn the_device_store_probe_round_trips() {
         let report = probe_device_store(Box::new(MemoryStore::default()), "s3-account".to_owned());
         assert_eq!(report.unwrap(), "put=ok get=ok delete=true after=none");
+    }
+
+    #[test]
+    fn device_ready_does_not_read_the_secret() {
+        struct Unreadable;
+        impl DeviceSecretStore for Unreadable {
+            fn put(&self, _: String, _: Vec<u8>) -> Result<(), AppError> {
+                Ok(())
+            }
+            fn get(&self, _: String) -> Result<Option<Vec<u8>>, AppError> {
+                panic!("a readiness check must not read the secret")
+            }
+            fn has(&self, _: String) -> Result<bool, AppError> {
+                Ok(true)
+            }
+            fn delete(&self, _: String) -> Result<bool, AppError> {
+                Ok(false)
+            }
+        }
+
+        assert!(device_ready("/tmp/bonk/keystore.bin".to_owned(), Box::new(Unreadable)));
     }
 
     #[test]

@@ -100,17 +100,26 @@ unlocked card.
 
 ## Remember this device
 
-The create screen has a **Remember this device** checkbox, off by default. With
-it on, the archive key is wrapped by the Android Keystore and stored in
-`noBackupFilesDir`; creating the archive shows the system prompt. Later launches
-offer **Unlock with device** beside the passphrase field, and the unlocked
-screen offers **Forget this device**, which removes the key and records the
-audit event.
+The create screen has a **Remember this device** checkbox, off by default and
+shown only when the device has an enrolled strong biometric. With it on, the
+archive key is wrapped by the Android Keystore and stored in
+`noBackupFilesDir`; creating the archive shows the biometric prompt. Later
+launches offer **Unlock with device** beside the passphrase field, and the
+unlocked screen offers **Forget this device**, which removes the key and records
+the audit event.
 
-On the API 37 x86_64 AVD, with no fingerprint enrolled, the prompt used the
-device-PIN path: create + remember succeeded, lock → device unlock succeeded,
-and forget removed the button. A physical fingerprint and a real
-enrolment-change invalidation remain in the device matrix.
+The key is biometric-only. A key that also allows the device PIN is not
+invalidated when a new fingerprint or face is enrolled, so allowing the PIN
+would let an enrolment change go unnoticed. When the biometric set changes, the
+Keystore invalidates the key, the device route disappears, and the app says so;
+the passphrase always works. The readiness check asks whether an entry exists
+without unwrapping it, so opening the app does not show a prompt.
+
+On the API 37 x86_64 AVD, with a simulated fingerprint enrolled, create and
+device unlock both authenticated, a cold start showed no prompt, adding a third
+fingerprint invalidated the key, and the next tap reported "The device key is no
+longer valid. Unlock with the passphrase." The passphrase then opened the
+archive. A physical fingerprint remains in the device matrix.
 
 ## Locking and backup exclusion
 

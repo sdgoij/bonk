@@ -39,6 +39,15 @@ pub trait DeviceStore {
 
     /// Removes an entry. Returns false when there was nothing to remove.
     fn delete(&self, account: &str) -> Result<bool, StoreError>;
+
+    /// True when the store holds an entry, without reading it.
+    ///
+    /// A host whose read prompts for authentication must override this, so a
+    /// readiness check does not show a prompt. The default reads the entry, which
+    /// is right for stores that answer without authentication.
+    fn has(&self, account: &str) -> Result<bool, StoreError> {
+        self.get(account).map(|secret| secret.is_some())
+    }
 }
 
 /// The operating system's credential store.
@@ -96,6 +105,11 @@ pub fn recall(store: &dyn DeviceStore, keystore: &Path) -> Result<Option<Zeroizi
     let mut key = Zeroizing::new([0u8; KEY_LEN]);
     key.copy_from_slice(&secret);
     Ok(Some(key))
+}
+
+/// Whether a key is kept for the archive at `keystore`, without reading it.
+pub fn exists(store: &dyn DeviceStore, keystore: &Path) -> Result<bool, StoreError> {
+    store.has(&account(keystore))
 }
 
 /// Forgets the key for the archive at `keystore`. False when there was none.
@@ -192,6 +206,38 @@ mod tests {
         let keystore = Path::new("/tmp/bonk/keystore.bin");
         store.put(&account(keystore), b"short").unwrap();
         assert!(recall(&store, keystore).is_err());
+    }
+
+    #[test]
+    fn the_readiness_check_does_not_read_the_secret() {
+        struct Unreadable;
+        impl DeviceStore for Unreadable {
+            fn put(&self, _: &str, _: &[u8]) -> Result<(), StoreError> {
+                Ok(())
+            }
+            fn get(&self, _: &str) -> Result<Option<Vec<u8>>, StoreError> {
+                panic!("a readiness check must not read the secret")
+            }
+            fn delete(&self, _: &str) -> Result<bool, StoreError> {
+                Ok(false)
+            }
+            fn has(&self, _: &str) -> Result<bool, StoreError> {
+                Ok(true)
+            }
+        }
+
+        assert!(exists(&Unreadable, Path::new("/tmp/bonk/keystore.bin")).unwrap());
+    }
+
+    #[test]
+    fn exists_follows_remember_and_forget() {
+        let store = MemoryStore::default();
+        let keystore = Path::new("/tmp/bonk/keystore.bin");
+        assert!(!exists(&store, keystore).unwrap());
+        remember(&store, keystore, &[3u8; KEY_LEN]).unwrap();
+        assert!(exists(&store, keystore).unwrap());
+        forget(&store, keystore).unwrap();
+        assert!(!exists(&store, keystore).unwrap());
     }
 
     #[test]

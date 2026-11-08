@@ -54,6 +54,24 @@ object MobileArchiveHost {
         archive = null
     }
 
+    fun recordDeviceRevocation() {
+        val opened = archive ?: error("the archive is not open")
+        opened.recordDeviceRevocation()
+    }
+
+    fun markDeviceRevoked() {
+        val base = directory ?: return
+        File(base, "device-revoked").writeText("1")
+    }
+
+    fun takeDeviceRevoked(): Boolean {
+        val base = directory ?: return false
+        val flag = File(base, "device-revoked")
+        if (!flag.exists()) return false
+        flag.delete()
+        return true
+    }
+
     fun deviceReady(): Boolean {
         val (_, keystore) = paths()
         return ffiDeviceReady(keystore, KeystoreHost.deviceStore())
@@ -152,6 +170,15 @@ actual fun addRecoveryKey(passphrase: String): String = withUserError {
 }
 
 actual fun lockArchive() = MobileArchiveHost.lock()
+
+actual fun recordDeviceRevocation() = withUserError { MobileArchiveHost.recordDeviceRevocation() }
+
+actual fun markDeviceRevoked() = MobileArchiveHost.markDeviceRevoked()
+
+actual fun takeDeviceRevoked(): Boolean = MobileArchiveHost.takeDeviceRevoked()
+
+actual fun deviceUnlockAvailable(): Boolean =
+    runCatching { KeystoreHost.biometricAvailable() }.getOrDefault(false)
 
 actual fun runCanaryScan(): String = MobileArchiveHost.canaryScan()
 

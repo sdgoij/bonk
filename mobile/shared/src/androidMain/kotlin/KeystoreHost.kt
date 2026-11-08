@@ -22,6 +22,9 @@ object KeystoreHost {
 
     fun deviceStore(): KeystoreDeviceStore = store ?: throw IllegalStateException("the Keystore store is not attached")
 
+    /** True when the device can offer biometric device unlock. */
+    fun biometricAvailable(): Boolean = store?.biometricAvailable() ?: false
+
     fun detach() {
         store = null
     }
