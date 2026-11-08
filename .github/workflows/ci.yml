@@ -150,9 +150,11 @@ jobs:
             target/x86_64-linux-android/release/libbonkc.so
 
       # The debug pair is what the emulator installs; the release APK is what a
-      # tag publishes. Both come from the same tree as the tests above.
+      # tag publishes. `-Pnative` is not only about rebuilding: it is what puts
+      # `stripNdk` in the graph, and an unstripped libbonkc.so adds six megabytes
+      # to the APK.
       - name: APKs
-        run: cd mobile && ./gradlew :androidApp:assembleDebug :androidApp:assembleDebugAndroidTest :androidApp:assembleRelease
+        run: cd mobile && ./gradlew :androidApp:assembleDebug :androidApp:assembleDebugAndroidTest :androidApp:assembleRelease -Pnative
 
       # A regression guard, not the §6.8 number: that budget is a per-device
       # download from Play, while this APK carries both ABIs for a manual
