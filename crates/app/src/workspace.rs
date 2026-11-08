@@ -5920,6 +5920,7 @@ mod tests {
                 currency: Currency::EUR,
                 gross: Money::from_major_units(20, Currency::EUR).unwrap(),
                 status: DocumentStatus::Issued,
+                matched: true,
             },
             SearchHit {
                 id: DocumentId::new(),
@@ -5930,6 +5931,7 @@ mod tests {
                 currency: Currency::EUR,
                 gross: Money::from_major_units(10, Currency::EUR).unwrap(),
                 status: DocumentStatus::Issued,
+                matched: true,
             },
         ];
 

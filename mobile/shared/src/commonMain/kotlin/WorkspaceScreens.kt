@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -28,6 +29,8 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.PrimaryTabRow
+import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -879,33 +882,45 @@ fun SellerEditScreen(onBack: () -> Unit, onInteraction: () -> Unit) {
     }
 }
 
-/** The statuses an issued document can stand in, as the filter offers them. */
-private val DOCUMENT_FILTERS = listOf(
-    null to "All",
-    "issued" to "Issued",
-    "paid" to "Paid",
-    "archived" to "Archived",
+/** The two sides of the books, as the register switches between them. */
+private val DOCUMENT_SIDES = listOf(
+    "outbound" to "Issued",
+    "inbound" to "Received",
 )
 
-/** Issued documents, newest first, with a search and a status filter. */
+/** The statuses each side can stand in, as the filter offers them. */
+private val DOCUMENT_FILTERS = mapOf(
+    "outbound" to listOf(null to "All", "paid" to "Paid", "archived" to "Archived"),
+    "inbound" to listOf(null to "All", "received" to "Received", "approved" to "Approved", "paid" to "Paid"),
+)
+
+/** What the register was showing, kept across a trip into a document. */
+class DocumentRegisterState {
+    var direction by mutableStateOf("outbound")
+    var query by mutableStateOf("")
+    var status by mutableStateOf<String?>(null)
+}
+
+/** Documents on one side of the books, newest first, with a search and filters. */
 @Composable
 fun DocumentListScreen(
+    state: DocumentRegisterState,
     onBack: () -> Unit,
     onOpen: (String) -> Unit,
     onInteraction: () -> Unit,
 ) {
     var documents by remember { mutableStateOf<List<DocumentHit>>(emptyList()) }
-    var query by remember { mutableStateOf("") }
-    var status by remember { mutableStateOf<String?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     var loading by remember { mutableStateOf(true) }
     val listState = rememberLazyListState()
     val filters = rememberScrollState()
 
-    LaunchedEffect(query, status) {
-        if (query.isNotBlank()) delay(300)
+    LaunchedEffect(state.query, state.status, state.direction) {
+        if (state.query.isNotBlank()) delay(300)
         loading = true
-        val result = withContext(Dispatchers.IO) { runCatching { listDocuments(query, status) } }
+        val result = withContext(Dispatchers.IO) {
+            runCatching { listDocuments(state.query, state.status, state.direction) }
+        }
         result.onSuccess { documents = it; error = null }
             .onFailure { error = it.message ?: it.toString() }
         loading = false
@@ -918,12 +933,29 @@ fun DocumentListScreen(
 
     Column(Modifier.fillMaxSize()) {
         ScreenHeader("Documents", onBack) { }
+        PrimaryTabRow(selectedTabIndex = DOCUMENT_SIDES.indexOfFirst { it.first == state.direction }) {
+            DOCUMENT_SIDES.forEach { (code, label) ->
+                Tab(
+                    selected = state.direction == code,
+                    onClick = {
+                        if (state.direction != code) {
+                            // The statuses differ per side, so a filter from one
+                            // does not carry into the other.
+                            state.direction = code
+                            state.status = null
+                            onInteraction()
+                        }
+                    },
+                    text = { Text(label) },
+                )
+            }
+        }
         OutlinedTextField(
-            value = query,
-            onValueChange = { query = it; onInteraction() },
+            value = state.query,
+            onValueChange = { state.query = it; onInteraction() },
             label = { Text("Search numbers, parties, references") },
             singleLine = true,
-            supportingText = if (documents.isNotEmpty() && (query.isNotBlank() || status != null)) {
+            supportingText = if (documents.isNotEmpty() && (state.query.isNotBlank() || state.status != null)) {
                 {
                     Text(
                         if (documents.size == 1) "1 match" else "${documents.size} matches",
@@ -939,11 +971,11 @@ fun DocumentListScreen(
             modifier = Modifier.fillMaxWidth().horizontalScroll(filters),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            DOCUMENT_FILTERS.forEach { (code, label) ->
+            DOCUMENT_FILTERS.getValue(state.direction).forEach { (code, label) ->
                 FilterChip(
-                    selected = status == code,
+                    selected = state.status == code,
                     onClick = {
-                        status = code
+                        state.status = code
                         onInteraction()
                     },
                     label = { Text(label) },
@@ -956,8 +988,9 @@ fun DocumentListScreen(
             loading && documents.isEmpty() -> CircularProgressIndicator()
             documents.isEmpty() -> Text(
                 when {
-                    query.isNotBlank() -> "Nothing matches that search."
-                    status != null -> "No ${status} documents yet."
+                    state.query.isNotBlank() -> "Nothing matches that search."
+                    state.direction == "inbound" -> "No received invoices yet. Import one to file it here."
+                    state.status != null -> "No ${state.status} documents yet."
                     else -> "No documents yet. Issue a draft and it is filed here."
                 },
                 style = MaterialTheme.typography.bodyMedium,
@@ -983,12 +1016,50 @@ fun DocumentListScreen(
 @Composable
 fun DocumentDetailScreen(id: String, onBack: () -> Unit) {
     var document by remember { mutableStateOf<DocumentDetail?>(null) }
+    var customers by remember { mutableStateOf<List<Customer>>(emptyList()) }
     var error by remember { mutableStateOf<String?>(null) }
     var message by remember { mutableStateOf<String?>(null) }
+    var artefactError by remember { mutableStateOf<String?>(null) }
+    var busy by remember { mutableStateOf(false) }
+    var matching by remember { mutableStateOf(false) }
+    var refresh by remember { mutableStateOf(0) }
+    val scope = rememberCoroutineScope()
 
-    LaunchedEffect(id) {
-        val result = withContext(Dispatchers.IO) { runCatching { loadDocument(id) } }
-        result.onSuccess { document = it }.onFailure { error = it.message ?: it.toString() }
+    LaunchedEffect(id, refresh) {
+        val result = withContext(Dispatchers.IO) { runCatching { loadDocument(id) to listCustomers() } }
+        result.onSuccess { loaded ->
+            document = loaded.first
+            customers = loaded.second
+            error = null
+        }.onFailure { error = it.message ?: it.toString() }
+    }
+
+    fun match(customer: Customer) {
+        val doc = document ?: return
+        if (busy) return
+        busy = true
+        error = null
+        scope.launch {
+            val result = withContext(Dispatchers.IO) { runCatching { matchSupplier(doc.id, customer.id) } }
+            busy = false
+            result.onSuccess { message = "Supplier matched to ${customer.name}." }
+                .onFailure { error = it.message ?: it.toString() }
+            refresh++
+        }
+    }
+
+    fun advance(target: String) {
+        val doc = document ?: return
+        if (busy) return
+        busy = true
+        error = null
+        scope.launch {
+            val result = withContext(Dispatchers.IO) { runCatching { advanceDocument(doc.id, target) } }
+            busy = false
+            result.onSuccess { message = "The document is now $it." }
+                .onFailure { error = it.message ?: it.toString() }
+            refresh++
+        }
     }
 
     Column(Modifier.fillMaxWidth()) {
@@ -999,19 +1070,57 @@ fun DocumentDetailScreen(id: String, onBack: () -> Unit) {
             return@Column
         }
 
+        // On what we issued the header is the customer; on what we received it is
+        // the supplier who sent it, and our own name is the buyer.
+        val inbound = doc.direction == "inbound"
+        val supplier = customers.firstOrNull { it.id == doc.supplierId }
+
         Text(
             doc.status.uppercase(),
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Spacer(Modifier.height(4.dp))
-        Text(doc.buyer, style = MaterialTheme.typography.titleMedium)
+        Text(if (inbound) doc.seller else doc.buyer, style = MaterialTheme.typography.titleMedium)
         Fact("Issued", doc.issueDate)
         Fact("Due", doc.dueDate)
-        Fact("Seller", doc.seller)
+        if (inbound) {
+            Fact("Supplier", supplier?.name ?: "Not matched")
+            Fact("Buyer", doc.buyer)
+        } else {
+            Fact("Seller", doc.seller)
+        }
         Fact("Buyer reference", doc.buyerReference)
         Fact("Order reference", doc.orderReference)
         Fact("Note", doc.note)
+
+        if (inbound) {
+            Spacer(Modifier.height(8.dp))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = { matching = true }, enabled = !busy, modifier = Modifier.weight(1f)) {
+                    Text(if (supplier == null) "Match supplier" else "Change supplier")
+                }
+                val next = when (doc.status) {
+                    "received" -> "approved" to "Approve"
+                    "approved" -> "paid" to "Mark paid"
+                    else -> null
+                }
+                if (next != null) {
+                    Button(onClick = { advance(next.first) }, enabled = !busy, modifier = Modifier.weight(1f)) {
+                        Text(next.second)
+                    }
+                }
+            }
+        }
+
+        message?.let {
+            Spacer(Modifier.height(4.dp))
+            Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+        }
+        error?.let {
+            Spacer(Modifier.height(4.dp))
+            Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+        }
 
         Spacer(Modifier.height(12.dp))
         Text("Lines", style = MaterialTheme.typography.titleMedium)
@@ -1051,10 +1160,10 @@ fun DocumentDetailScreen(id: String, onBack: () -> Unit) {
                 style = MaterialTheme.typography.bodySmall,
             )
             ArtefactBlock(artefact.kind.uppercase(), doc.id, doc.number, artefact.kind, artefact.bytesHash) {
-                message = it
+                artefactError = it
             }
         }
-        message?.let { text ->
+        artefactError?.let { text ->
             Spacer(Modifier.height(4.dp))
             Text(text, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
         }
@@ -1070,6 +1179,35 @@ fun DocumentDetailScreen(id: String, onBack: () -> Unit) {
                 )
             }
         }
+    }
+
+    if (matching) {
+        AlertDialog(
+            onDismissRequest = { matching = false },
+            title = { Text("Match supplier") },
+            text = {
+                if (customers.isEmpty()) {
+                    Text("No customers yet. Add one in Customers first.")
+                } else {
+                    LazyColumn(Modifier.heightIn(max = 360.dp)) {
+                        items(customers, key = { it.id }) { customer ->
+                            TextButton(
+                                onClick = {
+                                    matching = false
+                                    match(customer)
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Text(customer.name)
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { matching = false }) { Text("Cancel") }
+            },
+        )
     }
 }
 
@@ -1092,12 +1230,13 @@ private fun DocumentRow(hit: DocumentHit, onClick: () -> Unit) {
     TextButton(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.fillMaxWidth()) {
             Text(hit.number.ifBlank { "No number" }, style = MaterialTheme.typography.titleMedium)
-            val detail = listOf(
-                hit.party,
-                hit.issueDate,
-                "${formatMoney(hit.grossMicros)} ${hit.currency}",
-                hit.status,
-            )
+            val detail = buildList {
+                add(hit.party)
+                add(hit.issueDate)
+                add("${formatMoney(hit.grossMicros)} ${hit.currency}")
+                add(hit.status)
+                if (hit.direction == "inbound" && !hit.matched) add("not matched")
+            }
                 .filter { it.isNotBlank() }
                 .joinToString(" · ")
             Text(

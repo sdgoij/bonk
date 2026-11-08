@@ -332,6 +332,9 @@ fun App() {
         }
     }
 
+    // The register keeps its side and filters while a document is open.
+    val register = remember { DocumentRegisterState() }
+
     MaterialTheme {
         Surface(modifier = Modifier.fillMaxSize()) {
             BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
@@ -527,6 +530,7 @@ fun App() {
                                     screen = if (id.isNullOrBlank()) Screen.Documents else Screen.DocumentView(id)
                                 }
                                 Screen.Documents -> DocumentListScreen(
+                                    state = register,
                                     onBack = { screen = Screen.Unlocked },
                                     onOpen = { screen = Screen.DocumentView(it) },
                                     onInteraction = ::touch,

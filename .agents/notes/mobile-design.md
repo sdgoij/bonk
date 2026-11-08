@@ -1443,13 +1443,17 @@ The hand-off is read when the intent arrives, because a share grant can be short
 
 A PDF without an embedded invoice is refused with a message instead of being read as text. The importer handles Factur-X and ZUGFeRD attachments from suppliers; our own rendered PDFs do not embed the UBL yet, so importing one of ours fails with that message.
 
-The imported document opens in the shared detail screen, which is still written for outbound documents: the counterparty sits in the buyer position and our own name is labelled Seller. The received list will make those labels follow the direction.
+The imported document opens in the shared detail screen, and that screen now follows the direction: on a received document the header is the supplier, the supplier row names the customer the document was matched to, and our own name is the buyer.
 
-Run on an emulator: a seeded UBL picked from Downloads reported its number and "Not matched to a customer" (the document's seller is this archive), a second import of the same bytes reported the duplicate, a view intent delivered before unlock landed on the Import screen after unlocking, and a send intent delivered to the running app replaced the result on screen without a restart.
+The register switches between Issued and Received with tabs, and the status filters follow the side: Paid and Archived for what we issued, Received, Approved and Paid for what we received. A received row carries `not matched` while the supplier is not a party on file. The side, the search and the filter live above the screen, so opening a document and coming back lands on the same list.
+
+Match supplier opens the customer list and records the decision. Approve and Mark paid move the document through the payable register, and both actions re-read the document, so the status, the match and the history shown are what the archive holds.
+
+Run on an emulator: a seeded UBL picked from Downloads reported its number and "Not matched to a customer" (the document's seller is this archive), a second import of the same bytes reported the duplicate, a view intent delivered before unlock landed on the Import screen after unlocking, and a send intent delivered to the running app replaced the result on screen without a restart. The Received side listed the demo archive's inbound documents with `not matched` on the parked ones; matching one to a customer, approving it and marking it paid walked its status through the register, and returning from the document kept the Received side.
 
 - [x] SAF import and `ACTION_VIEW` / `ACTION_SEND` import
-- [ ] Received list and supplier match
-- [ ] Approve and mark-paid actions
+- [x] Received list and supplier match
+- [x] Approve and mark-paid actions
 - [ ] Backup export (verify, then stream) and two-file restore
 - [ ] Recovery-kit export
 - [ ] Settings: seller, UI language, document language, audit chain head

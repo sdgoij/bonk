@@ -1304,15 +1304,28 @@ pub struct SearchHit {
     pub issue_date: LocalDate,
     /// Document currency.
     pub currency: Currency,
-    /// Amount including tax (BT-112).
+    /// Gross including tax (BT-112).
     pub gross: Money,
     /// Current status, derived from the latest event.
     pub status: DocumentStatus,
+    /// True when the party on the other side is on file.
+    ///
+    /// For an inbound document this is the supplier match an import made or a
+    /// person recorded; an unmatched received document is the case a register
+    /// has to show.
+    pub matched: bool,
 }
 
 /// Latest status expression shared by the register and search.
 const LATEST_STATUS: &str = "(SELECT e.kind FROM document_event e WHERE e.document_id = d.id \
      ORDER BY e.seq DESC LIMIT 1)";
+
+/// True when the other side of the document is a party on file.
+///
+/// A recorded supplier match wins, then the party the import linked. An import
+/// that matched nobody has neither, which is the row a received list marks.
+const PARTY_KNOWN: &str = "CASE WHEN d.counterparty_id IS NOT NULL OR EXISTS \
+     (SELECT 1 FROM supplier_match m WHERE m.document_id = d.id) THEN 1 ELSE 0 END";
 
 /// The party name a find-list row shows.
 ///
@@ -1433,7 +1446,8 @@ fn document_hits(
         let sql = format!(
             "SELECT d.id, d.direction, d.number, d.issue_date_local, d.currency, d.totals_json,
                     {PARTY_NAME} AS party_name,
-                    COALESCE({LATEST_STATUS}, d.state) AS status
+                    COALESCE({LATEST_STATUS}, d.state) AS status,
+                    {PARTY_KNOWN} AS matched
              FROM document d
              WHERE d.owner_id = ?1{clauses}
              ORDER BY d.issue_date_local DESC, d.number DESC LIMIT {fetch} OFFSET {offset}"
@@ -1488,7 +1502,8 @@ fn hits_by_id(conn: &Connection, ids: &[String]) -> Result<Vec<SearchHit>, Store
     let sql = format!(
         "SELECT d.id, d.direction, d.number, d.issue_date_local, d.currency, d.totals_json,
                 {PARTY_NAME} AS party_name,
-                COALESCE({LATEST_STATUS}, d.state) AS status
+                COALESCE({LATEST_STATUS}, d.state) AS status,
+                {PARTY_KNOWN} AS matched
          FROM document d
          WHERE d.id IN ({placeholders})"
     );
@@ -1554,6 +1569,7 @@ fn read_hit(row: &rusqlite::Row<'_>) -> Result<SearchHit, StoreError> {
         gross: Money::parse_fixed(gross, currency).map_err(|error| StoreError::Data(error.to_string()))?,
         status: DocumentStatus::parse(&status)
             .ok_or_else(|| StoreError::Data(format!("stored status {status:?} is unknown")))?,
+        matched: row.get(8)?,
     })
 }
 
@@ -1748,6 +1764,7 @@ fn draft_hits(
             currency,
             gross,
             status: DocumentStatus::Draft,
+            matched: true,
         });
     }
     Ok(hits)

@@ -524,6 +524,8 @@ pub struct DocumentHit {
     pub gross_micros: i64,
     /// Stable status code.
     pub status: String,
+    /// True when the party on the other side is on file.
+    pub matched: bool,
 }
 
 impl DocumentHit {
@@ -538,6 +540,7 @@ impl DocumentHit {
             currency: hit.currency.as_str().to_owned(),
             gross_micros: hit.gross.micros(),
             status: hit.status.code().to_owned(),
+            matched: hit.matched,
         }
     }
 }
@@ -571,6 +574,11 @@ pub struct DocumentDetail {
     pub seller: String,
     /// Buyer as it was on the day.
     pub buyer: String,
+    /// The customer a received document's supplier resolves to.
+    ///
+    /// `None` for outbound documents and for imports whose issuer is not on
+    /// file, which is what the match action explains.
+    pub supplier_id: Option<String>,
     /// Net in micro-units.
     pub net_micros: i64,
     /// Tax in micro-units.
@@ -606,6 +614,7 @@ impl DocumentDetail {
             note: view.note.clone(),
             seller: view.seller.legal_name.clone(),
             buyer: view.buyer.legal_name.clone(),
+            supplier_id: view.supplier_match.map(|id| id.to_string()),
             net_micros: view.totals.net.micros(),
             tax_micros: view.totals.tax.micros(),
             gross_micros: view.totals.gross.micros(),

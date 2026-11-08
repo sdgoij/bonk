@@ -129,6 +129,7 @@ data class DocumentHit(
     val currency: String,
     val grossMicros: Long,
     val status: String,
+    val matched: Boolean = false,
 )
 
 /** One line of a stored document, as recorded. */
@@ -177,6 +178,7 @@ data class DocumentDetail(
     val note: String = "",
     val seller: String,
     val buyer: String,
+    val supplierId: String = "",
     val netMicros: Long,
     val taxMicros: Long,
     val grossMicros: Long,
@@ -212,7 +214,13 @@ expect fun draftTotals(draft: Draft): DraftTotals
 expect fun issueDraft(draft: Draft): IssueResult
 
 /** Issued documents, best match first; an empty query lists newest first. */
-expect fun listDocuments(query: String, status: String?): List<DocumentHit>
+expect fun listDocuments(query: String, status: String?, direction: String): List<DocumentHit>
+
+/** Records the supplier of a received document against a customer on file. */
+expect fun matchSupplier(documentId: String, customerId: String)
+
+/** Moves a received document to a status it can hold, and returns that status. */
+expect fun advanceDocument(documentId: String, target: String): String
 
 /** One stored document for the detail screen. */
 expect fun loadDocument(id: String): DocumentDetail

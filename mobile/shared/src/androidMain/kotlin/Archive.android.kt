@@ -165,9 +165,19 @@ object MobileArchiveHost {
         return opened.issueDraft(draft.toFfi()).toCommon()
     }
 
-    fun listDocuments(query: String, status: String?): List<DocumentHit> {
+    fun listDocuments(query: String, status: String?, direction: String): List<DocumentHit> {
         val opened = archive ?: error("the archive is not open")
-        return opened.documents(query.ifBlank { null }, status).map { it.toCommon() }
+        return opened.documents(query.ifBlank { null }, status, direction).map { it.toCommon() }
+    }
+
+    fun matchSupplier(documentId: String, customerId: String) {
+        val opened = archive ?: error("the archive is not open")
+        opened.matchSupplier(documentId, customerId)
+    }
+
+    fun advanceDocument(documentId: String, target: String): String {
+        val opened = archive ?: error("the archive is not open")
+        return opened.advanceStatus(documentId, target)
     }
 
     fun loadDocument(id: String): DocumentDetail {
@@ -397,6 +407,7 @@ private fun uniffi.bonkc.DocumentHitRecord.toCommon() = DocumentHit(
     currency = currency,
     grossMicros = grossMicros,
     status = status,
+    matched = matched,
 )
 
 private fun uniffi.bonkc.DocumentLineRecord.toCommon() = DocumentLine(
@@ -448,6 +459,7 @@ private fun uniffi.bonkc.DocumentDetailRecord.toCommon() = DocumentDetail(
     note = note.orEmpty(),
     seller = seller,
     buyer = buyer,
+    supplierId = supplierId.orEmpty(),
     netMicros = netMicros,
     taxMicros = taxMicros,
     grossMicros = grossMicros,

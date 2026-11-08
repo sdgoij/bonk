@@ -91,6 +91,7 @@ mod tests {
             currency: Currency::EUR,
             gross: Money::from_micros(gross, Currency::EUR),
             status,
+            matched: true,
         }
     }
 

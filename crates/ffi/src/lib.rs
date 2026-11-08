@@ -481,6 +481,8 @@ pub struct DocumentHitRecord {
     pub gross_micros: i64,
     /// Stable status code.
     pub status: String,
+    /// True when the party on the other side is on file.
+    pub matched: bool,
 }
 
 impl From<DocumentHit> for DocumentHitRecord {
@@ -494,6 +496,7 @@ impl From<DocumentHit> for DocumentHitRecord {
             currency: dto.currency,
             gross_micros: dto.gross_micros,
             status: dto.status,
+            matched: dto.matched,
         }
     }
 }
@@ -623,6 +626,8 @@ pub struct DocumentDetailRecord {
     pub seller: String,
     /// Buyer as it was on the day.
     pub buyer: String,
+    /// The customer a received document's supplier resolves to.
+    pub supplier_id: Option<String>,
     /// Net in micro-units.
     pub net_micros: i64,
     /// Tax in micro-units.
@@ -657,6 +662,7 @@ impl From<DocumentDetail> for DocumentDetailRecord {
             note: dto.note,
             seller: dto.seller,
             buyer: dto.buyer,
+            supplier_id: dto.supplier_id,
             net_micros: dto.net_micros,
             tax_micros: dto.tax_micros,
             gross_micros: dto.gross_micros,
@@ -983,10 +989,18 @@ impl Archive {
         Ok(outcome.into())
     }
 
-    /// Issued documents, best match first; an empty query lists newest first.
+    /// Documents on one side of the books, best match first; an empty query
+    /// lists newest first.
     ///
-    /// A status code narrows the register to the documents that stand there.
-    pub fn documents(&self, query: Option<String>, status: Option<String>) -> Result<Vec<DocumentHitRecord>, AppError> {
+    /// `direction` is `outbound` for invoices we issued or `inbound` for the ones
+    /// we received. A status code narrows the list to the documents that stand
+    /// there.
+    pub fn documents(
+        &self,
+        query: Option<String>,
+        status: Option<String>,
+        direction: String,
+    ) -> Result<Vec<DocumentHitRecord>, AppError> {
         let guard = self.inner.lock().map_err(|_| AppError::Closed)?;
         let archive = guard.as_ref().ok_or(AppError::Closed)?;
         let status = status
@@ -998,11 +1012,29 @@ impl Archive {
                 })
             })
             .transpose()?;
+        let direction = store::Direction::parse(&direction).ok_or_else(|| AppError::Store {
+            detail: format!("unknown direction {direction}"),
+        })?;
         Ok(archive
-            .documents(query.as_deref(), status)?
+            .documents(query.as_deref(), status, direction)?
             .into_iter()
             .map(DocumentHitRecord::from)
             .collect())
+    }
+
+    /// Records the supplier of a received document against a customer on file.
+    pub fn match_supplier(&self, document_id: String, customer_id: String) -> Result<(), AppError> {
+        let guard = self.inner.lock().map_err(|_| AppError::Closed)?;
+        let archive = guard.as_ref().ok_or(AppError::Closed)?;
+        archive.match_supplier(&document_id, &customer_id, "mobile")?;
+        Ok(())
+    }
+
+    /// Moves a received document to a status it can hold, and returns that status.
+    pub fn advance_status(&self, document_id: String, target: String) -> Result<String, AppError> {
+        let guard = self.inner.lock().map_err(|_| AppError::Closed)?;
+        let archive = guard.as_ref().ok_or(AppError::Closed)?;
+        Ok(archive.advance_status(&document_id, &target, "mobile")?)
     }
 
     /// One stored document for the detail screen.
@@ -1838,7 +1870,12 @@ mod tests {
         assert!(blocked.issued.is_none());
         assert!(blocked.findings.iter().any(|finding| finding.severity == "blocking"));
         assert!(blocked.ubl_sha256.is_none());
-        assert!(archive.documents(None, None).expect("the register").is_empty());
+        assert!(
+            archive
+                .documents(None, None, "outbound".to_owned())
+                .expect("the register")
+                .is_empty()
+        );
 
         let issued = archive.issue_draft(draft("Consultancy")).expect("an issue");
         let summary = issued.issued.as_ref().expect("an issued document");
@@ -1848,16 +1885,22 @@ mod tests {
         assert_eq!(issued.ubl_sha256.as_deref().map(str::len), Some(64));
         assert!(issued.pdf_error.is_none());
 
-        let documents = archive.documents(None, None).expect("the register");
+        let documents = archive
+            .documents(None, None, "outbound".to_owned())
+            .expect("the register");
         assert_eq!(documents.len(), 1);
         assert_eq!(documents[0].number, "2026-0001");
         assert!(
             archive
-                .documents(None, Some("paid".to_owned()))
+                .documents(None, Some("paid".to_owned()), "outbound".to_owned())
                 .expect("a filtered register")
                 .is_empty()
         );
-        assert!(archive.documents(None, Some("not-a-status".to_owned())).is_err());
+        assert!(
+            archive
+                .documents(None, Some("not-a-status".to_owned()), "outbound".to_owned())
+                .is_err()
+        );
 
         let detail = archive.document(summary.id.clone()).expect("a detail");
         assert_eq!(detail.buyer, "Buyer BV");
@@ -1888,6 +1931,46 @@ mod tests {
             archive.import_document(Some("notes.txt".to_owned()), b"not an invoice".to_vec()),
             Err(AppError::Import { .. })
         ));
+
+        // The received side lists the import, unmatched, and a person can match it.
+        let customer_id = customer.id.to_string();
+        let received = archive
+            .documents(None, None, "inbound".to_owned())
+            .expect("the received list");
+        assert_eq!(received.len(), 1);
+        assert_eq!(received[0].number, "2026-0001");
+        assert!(!received[0].matched, "the sender is not on file");
+
+        archive
+            .match_supplier(imported.document_id.clone(), customer_id.clone())
+            .expect("a supplier match");
+        let matched = archive
+            .document(imported.document_id.clone())
+            .expect("the received document");
+        assert_eq!(matched.supplier_id.as_deref(), Some(customer_id.as_str()));
+        assert!(
+            archive
+                .documents(None, None, "inbound".to_owned())
+                .expect("the received list")
+                .first()
+                .expect("a row")
+                .matched
+        );
+
+        // Approval moves through the payable register and is visible there.
+        assert_eq!(
+            archive
+                .advance_status(imported.document_id.clone(), "approved".to_owned())
+                .expect("an approval"),
+            "approved"
+        );
+        assert_eq!(
+            archive
+                .documents(None, None, "inbound".to_owned())
+                .expect("the received list")[0]
+                .status,
+            "approved"
+        );
 
         assert!(matches!(
             archive.document("not-a-document".to_owned()),

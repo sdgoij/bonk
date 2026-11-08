@@ -211,22 +211,24 @@ impl Archive {
         crate::issue::issue(self, draft, language, template, actor)
     }
 
-    /// Issued documents, best match first; drafts are listed separately.
+    /// Documents on one side of the books, best match first.
     ///
     /// A query matches the number, the party, the references and the note. With
-    /// no query the list is newest first, which is what the register shows. A
-    /// status narrows it to the documents that stand there.
+    /// no query the list is newest first, which is what a register shows. A
+    /// status narrows it to the documents that stand there. Drafts are not
+    /// documents yet, so an outbound list never contains one.
     pub fn documents(
         &self,
         query: Option<&str>,
         status: Option<store::DocumentStatus>,
+        direction: store::Direction,
     ) -> Result<Vec<DocumentHit>, StoreError> {
         let Some(seller) = store::first_seller(self.database.connection())? else {
             return Ok(Vec::new());
         };
         let request = store::SearchRequest {
             query: query.filter(|query| !query.trim().is_empty()),
-            direction: Some(store::Direction::Outbound),
+            direction: Some(direction),
             from: None,
             to: None,
             status,
@@ -237,6 +239,38 @@ impl Archive {
             .filter(|hit| hit.status != store::DocumentStatus::Draft)
             .map(DocumentHit::from_hit)
             .collect())
+    }
+
+    /// Records the supplier of a received document against a customer on file.
+    pub fn match_supplier(&self, document_id: &str, customer_id: &str, actor: &str) -> Result<(), StoreError> {
+        let document_id =
+            crux::DocumentId::parse_str(document_id).map_err(|error| StoreError::Data(error.to_string()))?;
+        let customer_id =
+            crux::CustomerId::parse_str(customer_id).map_err(|error| StoreError::Data(error.to_string()))?;
+        store::set_supplier_match(
+            self.database.connection(),
+            document_id,
+            customer_id,
+            actor,
+            &store::now_rfc3339(),
+        )
+    }
+
+    /// Moves a received document to a status it can hold, and returns that status.
+    pub fn advance_status(&self, document_id: &str, target: &str, actor: &str) -> Result<String, StoreError> {
+        let document_id =
+            crux::DocumentId::parse_str(document_id).map_err(|error| StoreError::Data(error.to_string()))?;
+        let target =
+            store::DocumentStatus::parse(target).ok_or_else(|| StoreError::Data(format!("unknown status {target}")))?;
+        Ok(store::advance_status(
+            self.database.connection(),
+            document_id,
+            target,
+            actor,
+            &store::now_rfc3339(),
+        )?
+        .code()
+        .to_owned())
     }
 
     /// One stored document for the detail screen.
@@ -929,7 +963,7 @@ mod tests {
             .unwrap();
         let issued = outcome.issued.clone().expect("issued");
 
-        let listed = archive.documents(None, None).unwrap();
+        let listed = archive.documents(None, None, store::Direction::Outbound).unwrap();
         assert_eq!(listed.len(), 1, "{listed:?}");
         assert_eq!(listed[0].id, issued.id);
         assert_eq!(listed[0].number, "2026-0001");
@@ -940,23 +974,53 @@ mod tests {
         assert_eq!(listed[0].currency, "EUR");
 
         // A query matches the number and the party; a word nobody used finds nothing.
-        assert_eq!(archive.documents(Some("2026-0001"), None).unwrap().len(), 1);
-        assert_eq!(archive.documents(Some("Buyer"), None).unwrap().len(), 1);
-        assert!(archive.documents(Some("nothing-like-this"), None).unwrap().is_empty());
-        // An empty query means the register, not nothing.
-        assert_eq!(archive.documents(Some("  "), None).unwrap().len(), 1);
-
-        // A status narrows the register to the documents that stand there.
         assert_eq!(
             archive
-                .documents(None, Some(store::DocumentStatus::Issued))
+                .documents(Some("2026-0001"), None, store::Direction::Outbound)
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            archive
+                .documents(Some("Buyer"), None, store::Direction::Outbound)
                 .unwrap()
                 .len(),
             1
         );
         assert!(
             archive
-                .documents(None, Some(store::DocumentStatus::Paid))
+                .documents(Some("nothing-like-this"), None, store::Direction::Outbound)
+                .unwrap()
+                .is_empty()
+        );
+        // An empty query means the register, not nothing.
+        assert_eq!(
+            archive
+                .documents(Some("  "), None, store::Direction::Outbound)
+                .unwrap()
+                .len(),
+            1
+        );
+
+        // A status narrows the register to the documents that stand there.
+        assert_eq!(
+            archive
+                .documents(None, Some(store::DocumentStatus::Issued), store::Direction::Outbound)
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(
+            archive
+                .documents(None, Some(store::DocumentStatus::Paid), store::Direction::Outbound)
+                .unwrap()
+                .is_empty()
+        );
+        // The other side of the books is empty here: this invoice was issued.
+        assert!(
+            archive
+                .documents(None, None, store::Direction::Inbound)
                 .unwrap()
                 .is_empty()
         );
@@ -1029,6 +1093,22 @@ mod tests {
         let again = target.import_document(Some("copy of 2026-0001.xml"), &ubl).unwrap();
         assert!(again.duplicate);
         assert_eq!(again.document_id, imported.document_id);
+
+        // The received register shows it on the inbound side, matched.
+        let received = target.documents(None, None, store::Direction::Inbound).unwrap();
+        assert_eq!(received.len(), 1);
+        assert_eq!(received[0].number, "2026-0001");
+        assert!(received[0].matched);
+        assert!(
+            target
+                .documents(None, None, store::Direction::Outbound)
+                .unwrap()
+                .is_empty(),
+            "an import is not an invoice we issued"
+        );
+
+        let detail = target.document(&imported.document_id).unwrap();
+        assert_eq!(detail.supplier_id.as_deref(), Some(supplier.id.to_string().as_str()));
 
         // A file that is not a UBL invoice is refused rather than stored.
         assert!(target.import_document(Some("notes.txt"), b"not an invoice").is_err());
