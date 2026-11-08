@@ -57,6 +57,10 @@ expect fun runArgon2Benchmark(): String
 /** Hashes the fixed sample invoice's UBL and PDF output. */
 expect fun runArtefactHashes(): String
 
+/** Locks the archive when the app leaves the foreground. */
+@Composable
+expect fun LockOnBackground(onLock: () -> Unit)
+
 private sealed interface Screen {
     data object Checking : Screen
     data object Create : Screen
@@ -78,7 +82,12 @@ fun App() {
     var deviceAvailable by remember { mutableStateOf(false) }
     var rememberOnCreate by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
+    var interactions by remember { mutableStateOf(0) }
     val scope = rememberCoroutineScope()
+
+    fun touch() {
+        interactions++
+    }
 
     LaunchedEffect(Unit) {
         val state = withContext(Dispatchers.IO) {
@@ -90,15 +99,27 @@ fun App() {
         screen = if (state.first) Screen.Unlock else Screen.Create
     }
 
-    // Lock after five minutes while the archive is open. A configuration change
-    // also closes the handle through the activity's onDestroy.
-    LaunchedEffect(screen) {
+    // Lock five minutes after the last interaction while the archive is open. A
+    // configuration change also closes the handle through the activity's
+    // onDestroy, and LockOnBackground covers leaving the app.
+    LaunchedEffect(screen, interactions) {
         if (screen is Screen.Unlocked || screen is Screen.AddRecovery) {
             delay(5 * 60 * 1000L)
             lockArchive()
             passphrase = ""
             confirmation = ""
             recoveryKey = ""
+            screen = Screen.Unlock
+        }
+    }
+
+    LockOnBackground {
+        if (screen is Screen.Unlocked || screen is Screen.AddRecovery || screen is Screen.RecoveryKey) {
+            lockArchive()
+            passphrase = ""
+            confirmation = ""
+            recoveryKey = ""
+            error = null
             screen = Screen.Unlock
         }
     }
@@ -222,11 +243,19 @@ fun App() {
         error = null
         scope.launch {
             val result = withContext(Dispatchers.IO) { runCatching { openArchiveWithDevice() } }
-            result.onSuccess {
+            if (result.isSuccess) {
                 passphrase = ""
                 confirmation = ""
-                screen = Screen.Unlocked(it)
-            }.onFailure(::fail)
+                screen = Screen.Unlocked(result.getOrThrow())
+            } else {
+                fail(result.exceptionOrNull() ?: IllegalStateException("unknown error"))
+                // A Keystore invalidation deletes the wrapped entry. If it is
+                // gone, stop offering the route and say so.
+                deviceAvailable = withContext(Dispatchers.IO) { runCatching { deviceReady() }.getOrDefault(false) }
+                if (!deviceAvailable) {
+                    error = "The device key is no longer valid. Unlock with the passphrase."
+                }
+            }
             busy = false
         }
     }
@@ -284,12 +313,17 @@ fun App() {
                                     onPassphrase = {
                                         passphrase = it
                                         error = null
+                                        touch()
                                     },
                                     onConfirmation = {
                                         confirmation = it
                                         error = null
+                                        touch()
                                     },
-                                    onRemember = { rememberOnCreate = it },
+                                    onRemember = {
+                                        rememberOnCreate = it
+                                        touch()
+                                    },
                                     onSubmit = ::create,
                                 )
                                 Screen.Unlock -> UnlockForm(
@@ -300,6 +334,7 @@ fun App() {
                                     onPassphrase = {
                                         passphrase = it
                                         error = null
+                                        touch()
                                     },
                                     onSubmit = ::unlock,
                                     onUnlockWithDevice = ::unlockWithDevice,
@@ -320,14 +355,17 @@ fun App() {
                                     onRecoveryKey = {
                                         recoveryKey = it
                                         error = null
+                                        touch()
                                     },
                                     onPassphrase = {
                                         passphrase = it
                                         error = null
+                                        touch()
                                     },
                                     onConfirmation = {
                                         confirmation = it
                                         error = null
+                                        touch()
                                     },
                                     onSubmit = ::reset,
                                     onBack = {
@@ -345,6 +383,7 @@ fun App() {
                                     onPassphrase = {
                                         passphrase = it
                                         error = null
+                                        touch()
                                     },
                                     onSubmit = ::addRecovery,
                                     onBack = {
@@ -383,7 +422,10 @@ fun App() {
 
                     if (screen is Screen.Unlocked) {
                         Spacer(Modifier.height(24.dp))
-                        Diagnostics(modifier = Modifier.widthIn(max = contentWidth).fillMaxWidth())
+                        Diagnostics(
+                            modifier = Modifier.widthIn(max = contentWidth).fillMaxWidth(),
+                            onInteraction = ::touch,
+                        )
                     }
                 }
             }
@@ -683,7 +725,7 @@ private fun ErrorText(error: String?) {
 }
 
 @Composable
-private fun Diagnostics(modifier: Modifier = Modifier) {
+private fun Diagnostics(modifier: Modifier = Modifier, onInteraction: () -> Unit = {}) {
     var expanded by remember { mutableStateOf(false) }
     var keystoreResult by remember { mutableStateOf("not run") }
     var keystoreBusy by remember { mutableStateOf(false) }
@@ -691,10 +733,15 @@ private fun Diagnostics(modifier: Modifier = Modifier) {
     var argonBusy by remember { mutableStateOf(false) }
     var artefactResult by remember { mutableStateOf("not run") }
     var artefactBusy by remember { mutableStateOf(false) }
+    var canaryResult by remember { mutableStateOf("not run") }
+    var canaryBusy by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
     Column(modifier = modifier, horizontalAlignment = Alignment.CenterHorizontally) {
-        TextButton(onClick = { expanded = !expanded }) {
+        TextButton(onClick = {
+            expanded = !expanded
+            onInteraction()
+        }) {
             Text(if (expanded) "Hide diagnostics" else "Diagnostics")
         }
         if (!expanded) return@Column
@@ -705,6 +752,7 @@ private fun Diagnostics(modifier: Modifier = Modifier) {
                     label = "Run S3 Keystore test",
                     busy = keystoreBusy,
                     result = keystoreResult,
+                    onInteraction = onInteraction,
                     onRun = {
                         keystoreBusy = true
                         keystoreResult = "waiting for authentication..."
@@ -721,6 +769,7 @@ private fun Diagnostics(modifier: Modifier = Modifier) {
                     label = "Bench Argon2 (64 MiB)",
                     busy = argonBusy,
                     result = argonResult,
+                    onInteraction = onInteraction,
                     onRun = {
                         argonBusy = true
                         argonResult = "running 64 MiB Argon2id..."
@@ -737,6 +786,7 @@ private fun Diagnostics(modifier: Modifier = Modifier) {
                     label = "Hash UBL + PDF",
                     busy = artefactBusy,
                     result = artefactResult,
+                    onInteraction = onInteraction,
                     onRun = {
                         artefactBusy = true
                         artefactResult = "hashing UBL and PDF..."
@@ -748,14 +798,44 @@ private fun Diagnostics(modifier: Modifier = Modifier) {
                         }
                     },
                 )
+                Spacer(Modifier.height(12.dp))
+                ProbeButton(
+                    label = "Canary scan",
+                    busy = canaryBusy,
+                    result = canaryResult,
+                    onInteraction = onInteraction,
+                    onRun = {
+                        canaryBusy = true
+                        canaryResult = "scanning database, WAL, and keystore..."
+                        scope.launch {
+                            canaryResult = withContext(Dispatchers.IO) {
+                                runCatching { runCanaryScan() }.getOrElse { it.message ?: it.toString() }
+                            }
+                            canaryBusy = false
+                        }
+                    },
+                )
             }
         }
     }
 }
 
 @Composable
-private fun ProbeButton(label: String, busy: Boolean, result: String, onRun: () -> Unit) {
-    Button(onClick = onRun, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
+private fun ProbeButton(
+    label: String,
+    busy: Boolean,
+    result: String,
+    onInteraction: () -> Unit,
+    onRun: () -> Unit,
+) {
+    Button(
+        onClick = {
+            onInteraction()
+            onRun()
+        },
+        enabled = !busy,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
         Text(label)
     }
     Spacer(Modifier.height(6.dp))

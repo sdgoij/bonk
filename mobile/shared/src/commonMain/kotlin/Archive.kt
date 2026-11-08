@@ -45,3 +45,6 @@ expect fun addRecoveryKey(passphrase: String): String
 
 /** Drops the open archive and zeroizes its key. */
 expect fun lockArchive()
+
+/** Scans the archive files for a plaintext SQLite header. */
+expect fun runCanaryScan(): String

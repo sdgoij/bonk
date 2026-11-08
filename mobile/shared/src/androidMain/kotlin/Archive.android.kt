@@ -88,6 +88,20 @@ object MobileArchiveHost {
         return RecoveryResult(opened.summary().toCommon(), replacement)
     }
 
+    fun canaryScan(): String {
+        val (database, keystore) = paths()
+        val magic = "SQLite format 3".toByteArray()
+        val files = listOf(database, "$database-wal", keystore)
+        val checked = files.mapNotNull { path ->
+            val file = File(path)
+            if (!file.exists()) return@mapNotNull null
+            val bytes = file.readBytes()
+            val header = if (bytes.containsSequence(magic)) "PLAINTEXT HEADER" else "clean"
+            "${file.name}: $header (${bytes.size} bytes)"
+        }
+        return if (checked.isEmpty()) "no archive files found" else checked.joinToString(", ")
+    }
+
     fun forgetDevice(): Boolean {
         val opened = archive ?: error("the archive is not open")
         return opened.forgetDevice(KeystoreHost.deviceStore())
@@ -138,6 +152,24 @@ actual fun addRecoveryKey(passphrase: String): String = withUserError {
 }
 
 actual fun lockArchive() = MobileArchiveHost.lock()
+
+actual fun runCanaryScan(): String = MobileArchiveHost.canaryScan()
+
+private fun ByteArray.containsSequence(needle: ByteArray): Boolean {
+    if (needle.isEmpty()) return true
+    if (needle.size > size) return false
+    for (start in 0..size - needle.size) {
+        var matches = true
+        for (index in needle.indices) {
+            if (this[start + index] != needle[index]) {
+                matches = false
+                break
+            }
+        }
+        if (matches) return true
+    }
+    return false
+}
 
 private inline fun <T> withUserError(block: () -> T): T = try {
     block()

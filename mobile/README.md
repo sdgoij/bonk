@@ -112,9 +112,25 @@ device-PIN path: create + remember succeeded, lock → device unlock succeeded,
 and forget removed the button. A physical fingerprint and a real
 enrolment-change invalidation remain in the device matrix.
 
-The archive also locks five minutes after unlock. The activity sets
-`FLAG_SECURE` and disables the recents screenshot, and a configuration change
-destroys the activity and closes the handle.
+## Locking and backup exclusion
+
+The archive locks five minutes after the last interaction while a screen shows
+unlocked content; typing, scrolling, and every probe reset the timer. Leaving the
+app (lifecycle `ON_STOP`, which also covers the recents screen and a locked
+device) locks immediately. The activity sets `FLAG_SECURE` and disables the
+recents screenshot, and a configuration change destroys the activity and closes
+the handle. There is no screen back stack: pressing Back finishes the activity
+and `onDestroy` closes the archive.
+
+The manifest sets `allowBackup=false` and points at `data_extraction_rules.xml`,
+which keeps the root, file, database, shared-preference, and external directories
+out of both cloud backup and device transfer. Restore is an explicit export, not
+a platform backup.
+
+The **Canary scan** diagnostic reads `bonk.db`, its `-wal`, and `keystore.bin` and
+looks for the `SQLite format 3` magic in each. On the API 37 x86_64 AVD it
+reported `bonk.db: clean (516096 bytes), bonk.db-wal: clean (0 bytes),
+keystore.bin: clean (185 bytes)`.
 
 ## Recovery key
 

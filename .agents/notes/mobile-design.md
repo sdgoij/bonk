@@ -1317,18 +1317,21 @@ single place to update progress; the tables stay as the plan.
 
 #### M11.2 — Unlock and security (2 weeks)
 
+**Status 2026-11-08:** Locking, backup exclusion, and the canary scan are done. Auto-lock runs five minutes after the last interaction and on `ON_STOP`; device extraction rules exclude the archive from cloud backup and device transfer; the canary scan reported clean DB, WAL, and keystore on the API 37 x86_64 emulator. Physical fingerprint invalidation and the explicit backup/restore review remain.
+
 - [x] Create and open with a passphrase; create twice-checks the phrase, and a wrong passphrase is reported by variant
 - [x] Passphrase reset with the recovery key; a used key is spent and the replacement is shown once
 - [x] Recovery-key flow: generated at create, rotatable from the unlocked screen, reset from the lock screen
 - [x] Remember-device through the Android Keystore; passphrase fallback, and forget records the audit event
 - [ ] Physical fingerprint and enrolment-change invalidation on a device
 - [x] Lock drops the archive and zeroizes the DEK; activity destruction closes the handle
-- [x] Five-minute auto-lock while the archive is unlocked
-- [ ] Back-stack clear and input-sensitive idle timer
+- [x] Five-minute auto-lock while the archive is unlocked, reset on interaction
+- [x] Background lock on `ON_STOP`; the single state machine has no screen back stack, so Back exits and `onDestroy` closes the handle
 - [x] Manifest `allowBackup=false`
 - [x] `FLAG_SECURE` and recents screenshot disabled
-- [ ] Data extraction rules review and explicit backup/restore
-- [ ] Canary scan of DB/WAL on a device
+- [x] Data extraction rules review; the archive is excluded from cloud backup and device transfer
+- [ ] Explicit encrypted backup export and restore review
+- [x] Canary scan of DB/WAL and keystore on a device
 - [x] Audit events for device trust and forget
 
 #### M11.3 — Customers and drafts (3 weeks)
