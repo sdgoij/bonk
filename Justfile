@@ -92,6 +92,11 @@ mobile-android:
 mobile-release:
     cd mobile && ./gradlew :androidApp:assembleRelease -Pnative
 
+# Play requires 16 KB page alignment for the native libraries of a 64-bit app.
+# Checks the cross-built libraries, beside the build that produces them.
+mobile-page-size:
+    sh tools/check-page-size.sh target/aarch64-linux-android/release/libbonkc.so target/x86_64-linux-android/release/libbonkc.so
+
 # Golden hash test: the sample invoice must render the same bytes on the host and
 # on a device. Runs the Rust assertion, then the same values as an instrumented
 # test on the device the serial names, or the only one attached.

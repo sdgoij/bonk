@@ -1492,6 +1492,8 @@ Run on a phone emulator at 200% font scale: the unlock form, dashboard, register
 
 Every clickable node on the two-pane customer screen measured at least 48 dp at 420 dpi, including the rail entries and the list rows.
 
+The width bands are pinned by a host test that fails if a threshold moves, and the size class itself is the only thing the layout reads, so a test can state the design's table without a device. `tools/check-page-size.sh` reads each shipped library's `LOAD` segments with the NDK's `llvm-readelf` and fails on anything but `0x4000`; both Android targets report `0x4000`, and the mobile cross-build job now runs that check instead of only looking for a `LOAD` segment.
+
 What TalkBack announces has not been verified: the rows keep Material's clickable semantics, which the screen reader merges and reads as one stop, but there is no way to hear the result here and the uiautomator dump shows the raw view tree rather than the spoken output. A walkthrough on a device is still due.
 
 - [x] Width classes and a navigation rail on medium and expanded windows
@@ -1503,7 +1505,7 @@ What TalkBack announces has not been verified: the rows keep Material's clickabl
 - [ ] TalkBack traversal of the two-pane layouts and the findings chips
 - [ ] Screenshot tests for phone and tablet sizes
 - [ ] Baseline profile and §6.8 budgets met
-- [ ] 16 KB native page alignment check
+- [x] 16 KB native page alignment check
 
 #### M11.7 — Beta (2 weeks)
 

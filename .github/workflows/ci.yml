@@ -132,8 +132,10 @@ jobs:
             lib="target/$target/release/libbonkc.so"
             test -f "$lib"
             "$tools/llvm-nm" -D "$lib" | grep -q uniffi_bonkc_fn_method_archive_summary
-            "$tools/llvm-readelf" -l "$lib" | grep -q LOAD
           done
+          sh tools/check-page-size.sh \
+            target/aarch64-linux-android/release/libbonkc.so \
+            target/x86_64-linux-android/release/libbonkc.so
 
   plain:
     name: unencrypted fallback builds
