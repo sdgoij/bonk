@@ -1392,7 +1392,7 @@ fn run(cli: Cli) -> Result<(), CliError> {
             let now = store::now_rfc3339();
             let mut failed = 0_usize;
             for file in &files {
-                match import::import_file(session.database(), owner, file, &now) {
+                match application::import::import_file(session.database(), owner, file, &now) {
                     Ok(outcome) if outcome.duplicate => {
                         println!("duplicate: {}", outcome.number);
                         println!("  document: {}", outcome.document_id);
@@ -2913,7 +2913,7 @@ fn import_watched(session: &Session, owner: SellerId, files: &[PathBuf]) -> Resu
     let mut failed = 0_usize;
     for file in files {
         let now = store::now_rfc3339();
-        match import::import_file(session.database(), owner, file, &now) {
+        match application::import::import_file(session.database(), owner, file, &now) {
             Ok(outcome) if outcome.duplicate => {
                 println!("duplicate: {} {}", outcome.number, outcome.path);
             }

@@ -16,12 +16,13 @@ pub mod customers;
 pub mod dto;
 pub mod export;
 pub mod health;
+pub mod import;
 pub mod issue;
 pub mod passphrase;
 pub mod session;
 pub mod templates;
 
-pub use dto::Summary;
+pub use dto::{DocumentSummary, DraftDto, DraftLineDto, FindingDto, IssueOutcome, PrecedingInvoiceDto, Summary};
 pub use issue::{DocumentLanguage, invoice_pdf, pdf_data, render_issue};
 pub use session::Archive;
 pub use templates::{ArchiveTemplate, DEFAULT_TEMPLATE, default_template, load_templates, renderer_for};

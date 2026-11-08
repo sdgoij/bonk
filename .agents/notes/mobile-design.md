@@ -1308,11 +1308,12 @@ single place to update progress; the tables stay as the plan.
 - [x] CI `mobile-rust` host-tests job added
 - [x] Two-module `shared` + `androidApp` split, using `com.android.kotlin.multiplatform.library`; the AGP 9 compatibility flags are gone
 - [x] Android archive probe on API 37 x86_64: `create=ok schema=17 locked open=ok drafts=0`; golden artefact hashes unchanged
-- [ ] Import service extraction (bytes to received document) remains
-- [ ] `BonkApp` still names `Keychain` at the two device-toggle call sites; inject a `Box<dyn DeviceStore>` with the mobile lock screen
-- [ ] Android cross-build job in CI
-- [x] DTO module with the summary shape and the money/date/id rules; the mobile lock screen consumes it
-- [ ] Draft, finding, and issue DTOs frozen for M11.2
+- [x] Import service (`application::import`) wraps bytes and files; `app` and `cli` call it for received documents
+- [x] `BonkApp` owns a `Box<dyn DeviceStore>`; `Workspace::with_device` and `ui_with_device` take the injected store
+- [x] Android cross-build job (`mobile-cross`) with NDK r30, cargo-ndk, and a symbol check
+- [x] DTOs frozen: `Summary`, `DraftDto`, `DraftLineDto`, `FindingDto`, `DocumentSummary`, `IssueOutcome`
+
+**Status 2026-11-07:** M11.1 is complete. `just gate` is green; debug and release APKs build with `-Pnative`; archive create/lock/open and remember-device ran on the API 37 x86_64 emulator. The two mobile CI jobs are added but have not run on GitHub yet.
 
 #### M11.2 — Unlock and security (2 weeks)
 

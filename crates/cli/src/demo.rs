@@ -318,7 +318,7 @@ fn seed_inbound(
 
         let imported_at = at(earliest(today, date.plus_days(1)?), 8, 30);
         let path = format!("demo/inbound/{number}.xml");
-        let outcome = import::import_bytes(session.database(), owner, Some(&path), &bytes, &imported_at)?;
+        let outcome = application::import::import_bytes(session.database(), owner, Some(&path), &bytes, &imported_at)?;
         if outcome.supplier.is_some() {
             matched += 1;
         } else {

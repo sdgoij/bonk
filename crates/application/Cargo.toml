@@ -9,13 +9,14 @@ publish = false
 [features]
 default = ["cipher"]
 # Production: SQLCipher page encryption.
-cipher = ["store/sqlcipher"]
+cipher = ["store/sqlcipher", "import/cipher"]
 # Test-only fallback for hosts without a working OpenSSL/Perl toolchain.
-plain = ["store/plain"]
+plain = ["store/plain", "import/plain"]
 
 [dependencies]
 conformance.workspace = true
 crux.workspace = true
+import = { path = "../import", default-features = false }
 render.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

@@ -82,11 +82,51 @@ jobs:
           toolchain: ${{ env.RUST_VERSION }}
       - uses: Swatinem/rust-cache@v2
 
-      # Host tests only. The Android cross-build is a separate job because it
-      # needs the NDK and a Perl/OpenSSL toolchain, and a failure there should
-      # name the native build rather than the application logic.
+      # Host tests only. The Android cross-build is `mobile-cross`, because a
+      # failure there should name the native build rather than the logic.
       - name: Application and FFI tests
         run: cargo test -p application -p ffi
+
+  mobile-cross:
+    name: mobile Android cross-build
+    needs: [checks, deny]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          targets: aarch64-linux-android,x86_64-linux-android
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: mobile-cross
+
+      - uses: android-actions/setup-android@v3
+
+      - name: NDK r30
+        run: sdkmanager --install "ndk;30.0.16248370"
+
+      - name: NDK environment
+        run: |
+          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/30.0.16248370" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_ROOT=$ANDROID_SDK_ROOT/ndk/30.0.16248370" >> "$GITHUB_ENV"
+
+      - name: cargo-ndk
+        run: cargo install cargo-ndk --locked --version 4.1.2
+
+      - name: Cross-build the FFI
+        run: cargo ndk --platform 26 -t arm64-v8a -t x86_64 build --release -p ffi
+
+      - name: Verify the libraries
+        run: |
+          set -eu
+          tools="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          for target in aarch64-linux-android x86_64-linux-android; do
+            lib="target/$target/release/libbonkc.so"
+            test -f "$lib"
+            "$tools/llvm-nm" -D "$lib" | grep -q uniffi_bonkc_fn_method_archive_summary
+            "$tools/llvm-readelf" -l "$lib" | grep -q LOAD
+          done
 
   plain:
     name: unencrypted fallback builds

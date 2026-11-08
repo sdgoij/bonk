@@ -351,6 +351,7 @@ version = "0.0.0"
 dependencies = [
  "conformance",
  "crux",
+ "import",
  "render",
  "serde_json",
  "sha2 0.10.9",

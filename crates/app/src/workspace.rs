@@ -1092,6 +1092,11 @@ impl Workspace {
 
     /// Loads the seller and customer list for a freshly unlocked session.
     pub fn new(session: &Session) -> Result<Self, StoreError> {
+        Self::with_device(session, &store::device::Keychain)
+    }
+
+    /// Builds the workspace with an injected credential store.
+    pub fn with_device(session: &Session, device: &dyn store::DeviceStore) -> Result<Self, StoreError> {
         let connection = session.database().connection();
         // A template that will not parse is reported, not swallowed: it is left
         // out of the list and the message says which file was ignored. The rest
@@ -1122,7 +1127,7 @@ impl Workspace {
             health_check: None,
             backup_job: None,
             templates,
-            device_remembered: Session::device_ready(session.keystore_path(), &store::device::Keychain),
+            device_remembered: Session::device_ready(session.keystore_path(), device),
             conformance_findings: Vec::new(),
             suppressions: Vec::new(),
             suppress_target: None,
@@ -1151,6 +1156,18 @@ impl Workspace {
         session: &mut Session,
         appearance: &mut egui::ThemePreference,
         language: &mut Language,
+    ) -> WorkspaceAction {
+        self.ui_with_device(ui, session, appearance, language, &store::device::Keychain)
+    }
+
+    /// Draws the workspace with an injected credential store.
+    pub fn ui_with_device(
+        &mut self,
+        ui: &mut egui::Ui,
+        session: &mut Session,
+        appearance: &mut egui::ThemePreference,
+        language: &mut Language,
+        device: &dyn store::DeviceStore,
     ) -> WorkspaceAction {
         // The app owns the choice, so it survives a lock; the workspace keeps a
         // copy for the frame it is drawing.
@@ -1221,7 +1238,7 @@ impl Workspace {
                     Tab::Customers => self.customers_ui(ui, session, focus.as_deref()),
                     Tab::Ledger => self.ledger_ui(ui, session),
                     Tab::Settings => {
-                        self.settings_ui(ui, session, appearance, language, &store::device::Keychain);
+                        self.settings_ui(ui, session, appearance, language, device);
                     }
                 }
             }
@@ -2475,7 +2492,7 @@ impl Workspace {
         let mut failed = 0_usize;
         let mut lines = Vec::with_capacity(files.len());
         for path in &files {
-            match import::import_file(session.database(), owner, path, &store::now_rfc3339()) {
+            match application::import::import_file(session.database(), owner, path, &store::now_rfc3339()) {
                 Ok(outcome) => {
                     let supplier = outcome
                         .supplier
@@ -4053,7 +4070,7 @@ impl Workspace {
         let Some(owner) = self.seller.as_ref().map(|seller| seller.id) else {
             return;
         };
-        let outcome = match import::import_file(session.database(), owner, path, &store::now_rfc3339()) {
+        let outcome = match application::import::import_file(session.database(), owner, path, &store::now_rfc3339()) {
             Ok(outcome) => outcome,
             Err(error) => {
                 self.message = Some(Message::error(text::find::import_failed(language, &error.to_string())));

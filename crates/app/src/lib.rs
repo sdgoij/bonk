@@ -126,6 +126,9 @@ pub struct BonkApp {
     language: text::Language,
     /// True when this device holds the key for the configured archive.
     device_ready: bool,
+    /// The platform credential store. Desktop uses the OS keychain; a mobile
+    /// host supplies its own implementation.
+    device: Box<dyn store::DeviceStore>,
     /// The chosen appearance, kept so `save` can write it down.
     appearance: egui::ThemePreference,
     /// Folder watcher settings, copied out of the workspace every frame so a
@@ -138,9 +141,10 @@ pub struct BonkApp {
 impl Default for BonkApp {
     fn default() -> Self {
         let (database, keystore) = default_paths();
-        Self {
+        let keystore_path = keystore.display().to_string();
+        let mut app = Self {
             database_path: database.display().to_string(),
-            keystore_path: keystore.display().to_string(),
+            keystore_path: keystore_path.clone(),
             state: UiState::Locked {
                 form: LockForm::Unlock {
                     passphrase: String::new(),
@@ -149,11 +153,14 @@ impl Default for BonkApp {
             },
             idle: idle::IdleLock::new(idle::configured_timeout(), std::time::Instant::now()),
             language: text::Language::default(),
-            device_ready: Self::device_ready_for(&keystore.display().to_string()),
+            device_ready: false,
+            device: Box::new(store::device::Keychain),
             appearance: egui::ThemePreference::System,
             watch_folder: None,
             watch_enabled: false,
-        }
+        };
+        app.device_ready = app.device_ready_for(&keystore_path);
+        app
     }
 }
 
@@ -193,8 +200,18 @@ impl BonkApp {
         let mut app = Self::default();
         app.database_path = database.display().to_string();
         app.keystore_path = keystore.display().to_string();
-        app.device_ready = Self::device_ready_for(&app.keystore_path);
+        app.device_ready = app.device_ready_for(&app.keystore_path);
         app
+    }
+
+    /// Replaces the platform credential store.
+    ///
+    /// Desktop leaves the OS keychain in place; tests and a mobile host inject
+    /// the store the archive is allowed to use.
+    pub fn with_device(mut self, device: Box<dyn store::DeviceStore>) -> Self {
+        self.device = device;
+        self.device_ready = self.device_ready_for(&self.keystore_path);
+        self
     }
 
     /// Creates the app, installs the theme, and restores the appearance choice.
@@ -233,8 +250,8 @@ impl BonkApp {
     }
 
     /// True when this device holds a key for the archive at `keystore_path`.
-    fn device_ready_for(keystore_path: &str) -> bool {
-        Session::device_ready(keystore_path.trim(), &store::device::Keychain)
+    fn device_ready_for(&self, keystore_path: &str) -> bool {
+        Session::device_ready(keystore_path.trim(), &*self.device)
     }
 
     /// Opens the archive with the key this device kept, without asking for
@@ -242,7 +259,7 @@ impl BonkApp {
     fn unlock_with_device(&mut self) {
         let database_path = PathBuf::from(self.database_path.trim());
         let keystore_path = PathBuf::from(self.keystore_path.trim());
-        let opened = Session::unlock_with_device(&database_path, &keystore_path, &store::device::Keychain);
+        let opened = Session::unlock_with_device(&database_path, &keystore_path, &*self.device);
         self.finish(opened);
     }
 
@@ -356,7 +373,7 @@ impl BonkApp {
                 // them. A wrong passphrase is left in place instead, so a typo
                 // can be corrected without retyping.
                 self.wipe_passphrase_buffer();
-                match Workspace::new(&session) {
+                match Workspace::with_device(&session, &*self.device) {
                     Ok(mut workspace) => {
                         // The watcher is a per-device preference, so unlocking
                         // puts it back the way the last window left it. Arming
@@ -508,13 +525,13 @@ impl BonkApp {
                     self.database_path = path.display().to_string();
                     // The archive changed, so the remembered-device route may
                     // or may not apply to this keystore.
-                    self.device_ready = Self::device_ready_for(&self.keystore_path);
+                    self.device_ready = self.device_ready_for(&self.keystore_path);
                 }
             }
             Action::ChooseKeystore => {
                 if let Some(path) = dialog::open_any(text::shell::keystore_label(self.language)) {
                     self.keystore_path = path.display().to_string();
-                    self.device_ready = Self::device_ready_for(&self.keystore_path);
+                    self.device_ready = self.device_ready_for(&self.keystore_path);
                 }
             }
             Action::Lock => {
@@ -526,7 +543,7 @@ impl BonkApp {
                 };
                 // The device entry can have been added or removed while the
                 // workspace was open.
-                self.device_ready = Self::device_ready_for(&self.keystore_path);
+                self.device_ready = self.device_ready_for(&self.keystore_path);
             }
         }
     }
@@ -751,7 +768,9 @@ impl eframe::App for BonkApp {
                     }
                 }
                 UiState::Unlocked { session, workspace } => {
-                    if workspace.ui(ui, session, &mut self.appearance, &mut self.language) == WorkspaceAction::Lock {
+                    if workspace.ui_with_device(ui, session, &mut self.appearance, &mut self.language, &*self.device)
+                        == WorkspaceAction::Lock
+                    {
                         action = Some(Action::Lock);
                     }
                     // Keep the window's copy current: the workspace is dropped on
@@ -1253,6 +1272,25 @@ mod tests {
 
         // The passphrase still opens it, which is the point of turning this off.
         assert!(Session::unlock(&database, &keystore, passphrase).is_ok());
+    }
+
+    #[test]
+    fn the_app_uses_the_injected_device_store() {
+        let directory = TempDir::new().unwrap();
+        let database = directory.path().join("bonk.db");
+        let keystore = directory.path().join("keystore.bin");
+        let passphrase = "correct horse battery staple";
+        let store = store::device::MemoryStore::default();
+        Session::create(&database, &keystore, passphrase)
+            .unwrap()
+            .remember_device(passphrase, &store)
+            .unwrap();
+
+        let mut app = BonkApp::with_paths(&database, &keystore).with_device(Box::new(store));
+        assert!(app.device_ready, "the injected store holds the key");
+
+        app.unlock_with_device();
+        assert!(matches!(app.state, UiState::Unlocked { .. }));
     }
 
     #[test]
