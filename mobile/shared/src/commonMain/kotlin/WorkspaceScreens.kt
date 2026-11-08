@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -34,6 +35,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -345,143 +347,177 @@ fun DraftEditorScreen(
         }
     }
 
-    Column(Modifier.fillMaxWidth()) {
-        ScreenHeader(strings.draft, onBack) { }
-        Box {
-            Button(
-                onClick = { pickerOpen = true; onInteraction() },
-                modifier = Modifier.fillMaxWidth().revealOn(focus, DraftFocus.Customer, focus = false),
-            ) {
-                Text(customers.firstOrNull { it.id == current.customerId }?.name ?: strings.chooseCustomer)
-            }
-            DropdownMenu(expanded = pickerOpen, onDismissRequest = { pickerOpen = false }) {
-                customers.forEach { customer ->
-                    DropdownMenuItem(
-                        text = { Text(customer.name) },
-                        onClick = {
-                            current = current.copy(customerId = customer.id)
-                            pickerOpen = false
-                            onInteraction()
-                        },
-                    )
-                }
-            }
-        }
-        Spacer(Modifier.height(8.dp))
-        FormField(
-            strings.issueDate,
-            current.issueDate,
-            modifier = Modifier.revealOn(focus, DraftFocus.IssueDate),
-        ) { current = current.copy(issueDate = it); onInteraction() }
-        FormField(
-            strings.dueDate,
-            current.dueDate,
-            modifier = Modifier.revealOn(focus, DraftFocus.DueDate),
-        ) { current = current.copy(dueDate = it); onInteraction() }
-        FormField(
-            strings.note,
-            current.note,
-            modifier = Modifier.revealOn(focus, DraftFocus.Note),
-        ) { current = current.copy(note = it); onInteraction() }
-        FormField(
-            strings.buyerReference,
-            current.buyerReference,
-            modifier = Modifier.revealOn(focus, DraftFocus.BuyerReference),
-        ) { current = current.copy(buyerReference = it); onInteraction() }
-        FormField(
-            strings.orderReference,
-            current.orderReference,
-            modifier = Modifier.revealOn(focus, DraftFocus.OrderReference),
-        ) { current = current.copy(orderReference = it); onInteraction() }
+    // On an expanded window the totals, the findings and the issue action stay
+    // beside the form instead of below it, so a finding and the field it names
+    // are both on screen at once.
+    val expanded = LocalWindowWidth.current.isExpanded
 
-        Spacer(Modifier.height(12.dp))
-        Text(strings.lines, style = MaterialTheme.typography.titleMedium)
-        current.lines.forEach { line ->
-            DraftLineEditor(
-                line = line,
-                focus = focus,
-                onChange = { updated ->
-                    current = current.copy(lines = current.lines.map { if (it.id == line.id) updated else it })
-                    onInteraction()
-                },
-                onRemove = {
-                    current = current.copy(
-                        lines = current.lines.filter { it.id != line.id }
-                            .mapIndexed { index, remaining -> remaining.copy(position = index + 1) },
-                    )
-                    onInteraction()
-                },
-            )
-        }
-        TextButton(
-            modifier = Modifier.revealOn(focus, DraftFocus.Lines),
-            onClick = {
-                current = current.copy(
-                    lines = current.lines + DraftLine(
-                        id = newId(),
-                        position = current.lines.size + 1,
-                        name = "",
-                        quantityMicros = 1_000_000,
-                        unitPriceMicros = 0,
-                    ),
-                )
-                onInteraction()
-            },
-        ) { Text(strings.addLine) }
-
-        totals?.let {
-            Spacer(Modifier.height(12.dp))
-            Text(
-                strings.netTotal("${formatMoney(it.netMicros)} ${current.currency}"),
-                style = MaterialTheme.typography.bodyMedium,
-            )
-            Text(
-                strings.vatTotal("${formatMoney(it.taxMicros)} ${current.currency}"),
-                style = MaterialTheme.typography.bodyMedium,
-            )
-            Text(
-                strings.grossTotal("${formatMoney(it.grossMicros)} ${current.currency}"),
-                style = MaterialTheme.typography.titleMedium,
-            )
-        }
-
-        if (findings.isNotEmpty()) {
-            Spacer(Modifier.height(12.dp))
-            Text(strings.findings, style = MaterialTheme.typography.titleMedium)
-            findings.forEach { finding ->
-                FindingEntry(
-                    finding = finding,
-                    focusable = draftFocus(finding.field, current.lines) != null,
-                    onFocus = { moveTo(finding.field) },
+    val fields: @Composable () -> Unit = {
+        Column(Modifier.fillMaxWidth()) {
+            Box {
+                Button(
+                    onClick = { pickerOpen = true; onInteraction() },
+                    modifier = Modifier.fillMaxWidth().revealOn(focus, DraftFocus.Customer, focus = false),
                 ) {
-                    if (!finding.blocking) {
-                        TextButton(
+                    Text(customers.firstOrNull { it.id == current.customerId }?.name ?: strings.chooseCustomer)
+                }
+                DropdownMenu(expanded = pickerOpen, onDismissRequest = { pickerOpen = false }) {
+                    customers.forEach { customer ->
+                        DropdownMenuItem(
+                            text = { Text(customer.name) },
                             onClick = {
-                                suppressing = finding
-                                reason = ""
+                                current = current.copy(customerId = customer.id)
+                                pickerOpen = false
                                 onInteraction()
                             },
-                        ) { Text(strings.suppress) }
+                        )
                     }
                 }
             }
-        }
+            Spacer(Modifier.height(8.dp))
+            FormField(
+                strings.issueDate,
+                current.issueDate,
+                modifier = Modifier.revealOn(focus, DraftFocus.IssueDate),
+            ) { current = current.copy(issueDate = it); onInteraction() }
+            FormField(
+                strings.dueDate,
+                current.dueDate,
+                modifier = Modifier.revealOn(focus, DraftFocus.DueDate),
+            ) { current = current.copy(dueDate = it); onInteraction() }
+            FormField(
+                strings.note,
+                current.note,
+                modifier = Modifier.revealOn(focus, DraftFocus.Note),
+            ) { current = current.copy(note = it); onInteraction() }
+            FormField(
+                strings.buyerReference,
+                current.buyerReference,
+                modifier = Modifier.revealOn(focus, DraftFocus.BuyerReference),
+            ) { current = current.copy(buyerReference = it); onInteraction() }
+            FormField(
+                strings.orderReference,
+                current.orderReference,
+                modifier = Modifier.revealOn(focus, DraftFocus.OrderReference),
+            ) { current = current.copy(orderReference = it); onInteraction() }
 
-        Spacer(Modifier.height(16.dp))
-        Button(
-            onClick = ::issue,
-            enabled = !busy,
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Text(
-                when {
-                    busy -> strings.issuing
-                    current.docType == "381" -> strings.issueCreditNote
-                    else -> strings.issueInvoice
+            Spacer(Modifier.height(12.dp))
+            Text(strings.lines, style = MaterialTheme.typography.titleMedium)
+            current.lines.forEach { line ->
+                DraftLineEditor(
+                    line = line,
+                    focus = focus,
+                    onChange = { updated ->
+                        current = current.copy(lines = current.lines.map { if (it.id == line.id) updated else it })
+                        onInteraction()
+                    },
+                    onRemove = {
+                        current = current.copy(
+                            lines = current.lines.filter { it.id != line.id }
+                                .mapIndexed { index, remaining -> remaining.copy(position = index + 1) },
+                        )
+                        onInteraction()
+                    },
+                )
+            }
+            TextButton(
+                modifier = Modifier.revealOn(focus, DraftFocus.Lines),
+                onClick = {
+                    current = current.copy(
+                        lines = current.lines + DraftLine(
+                            id = newId(),
+                            position = current.lines.size + 1,
+                            name = "",
+                            quantityMicros = 1_000_000,
+                            unitPriceMicros = 0,
+                        ),
+                    )
+                    onInteraction()
                 },
-            )
+            ) { Text(strings.addLine) }
         }
-        error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+    }
+
+    val summary: @Composable () -> Unit = {
+        Column(Modifier.fillMaxWidth()) {
+            totals?.let {
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    strings.netTotal("${formatMoney(it.netMicros)} ${current.currency}"),
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Text(
+                    strings.vatTotal("${formatMoney(it.taxMicros)} ${current.currency}"),
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Text(
+                    strings.grossTotal("${formatMoney(it.grossMicros)} ${current.currency}"),
+                    style = MaterialTheme.typography.titleMedium,
+                )
+            }
+
+            if (findings.isNotEmpty()) {
+                Spacer(Modifier.height(12.dp))
+                Text(strings.findings, style = MaterialTheme.typography.titleMedium)
+                findings.forEach { finding ->
+                    FindingEntry(
+                        finding = finding,
+                        focusable = draftFocus(finding.field, current.lines) != null,
+                        onFocus = { moveTo(finding.field) },
+                    ) {
+                        if (!finding.blocking) {
+                            TextButton(
+                                onClick = {
+                                    suppressing = finding
+                                    reason = ""
+                                    onInteraction()
+                                },
+                            ) { Text(strings.suppress) }
+                        }
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(16.dp))
+            Button(
+                onClick = ::issue,
+                enabled = !busy,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(
+                    when {
+                        busy -> strings.issuing
+                        current.docType == "381" -> strings.issueCreditNote
+                        else -> strings.issueInvoice
+                    },
+                )
+            }
+            error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+        }
+    }
+
+    if (expanded) {
+        Column(Modifier.fillMaxSize()) {
+            ScreenHeader(strings.draft, onBack) { }
+            Row(
+                modifier = Modifier.weight(1f).fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(16.dp),
+            ) {
+                Column(Modifier.weight(3f).fillMaxHeight().verticalScroll(rememberScrollState())) {
+                    fields()
+                }
+                VerticalDivider()
+                Column(Modifier.weight(2f).fillMaxHeight().verticalScroll(rememberScrollState())) {
+                    summary()
+                }
+            }
+        }
+    } else {
+        Column(Modifier.fillMaxWidth()) {
+            ScreenHeader(strings.draft, onBack) { }
+            fields()
+            summary()
+        }
     }
 
     issueFindings?.let { blocked ->

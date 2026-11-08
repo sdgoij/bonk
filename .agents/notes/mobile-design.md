@@ -1484,7 +1484,7 @@ Run on an emulator: a seeded UBL picked from Downloads reported its number and "
 
 Run on a phone emulator at its own size: the compact layout is unchanged, with the rail absent and customers still opening a full-page editor. The same emulator with `wm size 1700x2400` at 420 dpi (647 dp wide) showed the rail and the two-pane customer list, and the layout followed the window when it changed size because the activity redraws and the class is recomputed.
 
-Run on a tablet emulator (1280x800 dp): the rail, the two-column dashboard, and the two-pane customer list; selecting a customer loaded the editor beside it, selecting another swapped the form, and Save cleared the right pane and refreshed the list. On Documents, the Register's Issued and Received tabs keep their list while a document opens beside them, scrolling the detail pane independently, and approving a received invoice moved its row to Approved without touching the list's state.
+Run on a tablet emulator (1280x800 dp): the rail, the two-column dashboard, and the two-pane customer list; selecting a customer loaded the editor beside it, selecting another swapped the form, and Save cleared the right pane and refreshed the list. On Documents, the Register's Issued and Received tabs keep their list while a document opens beside them, scrolling the detail pane independently, and approving a received invoice moved its row to Approved without touching the list's state. A draft on the same tablet puts the form and the lines in the left pane and the totals, the findings and the issue action in the right one, each side scrolling on its own, so a finding and the field it names are both on screen.
 
 The colours follow the system light or dark choice through `BonkTheme`, and the window behind Compose is themed the same way in `values` and `values-night`, so the first frame does not flash the wrong shade. A fact whose label and value shared a fixed 120 dp column now stacks them above 1.5 font scale instead of clipping. Layout direction comes from the locale, so a right-to-left configuration mirrors the rail, the two-pane order and the text fields without a second layout.
 
@@ -1498,7 +1498,8 @@ What TalkBack announces has not been verified: the rows keep Material's clickabl
 
 - [x] Width classes and a navigation rail on medium and expanded windows
 - [x] Two-pane list-detail for customers and documents, each pane scrolling on its own
-- [ ] Editor preview pane and inline findings on expanded windows
+- [x] Expanded editor: form beside a panel with the totals, findings and issue action
+- [ ] Expanded editor: rendered invoice preview pane
 - [ ] Foldable hinge avoidance and posture-aware split
 - [x] Font scale 200%, dark/light, RTL layout
 - [x] 48 dp touch targets on every clickable control

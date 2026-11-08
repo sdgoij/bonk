@@ -378,7 +378,8 @@ fun App() {
                     WindowWidth.Expanded -> 960.dp
                 }
                 val tall = maxHeight > 800.dp
-                val virtualised = screen is Screen.Documents || panes
+                val virtualised = screen is Screen.Documents || panes ||
+                    (width.isExpanded && screen is Screen.DraftEditor)
                 val scroll = rememberScrollState()
                 CompositionLocalProvider(LocalWindowWidth provides width) {
                     Row(Modifier.fillMaxSize()) {

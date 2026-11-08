@@ -16,6 +16,7 @@ enum class WindowWidth {
     ;
 
     val isAtLeastMedium: Boolean get() = this != Compact
+    val isExpanded: Boolean get() = this == Expanded
 
     companion object {
         fun of(width: Dp): WindowWidth = when {
