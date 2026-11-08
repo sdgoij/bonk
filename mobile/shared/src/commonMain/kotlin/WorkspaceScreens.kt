@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
@@ -271,6 +272,9 @@ fun DraftEditorScreen(
     var findings by remember { mutableStateOf<List<Finding>>(emptyList()) }
     var error by remember { mutableStateOf<String?>(null) }
     var pickerOpen by remember { mutableStateOf(false) }
+    var suppressing by remember { mutableStateOf<Finding?>(null) }
+    var reason by remember { mutableStateOf("") }
+    val scope = rememberCoroutineScope()
 
     // Save and refresh the preview 500 ms after the last edit.
     LaunchedEffect(current) {
@@ -360,18 +364,74 @@ fun DraftEditorScreen(
             Text("Findings", style = MaterialTheme.typography.titleMedium)
             findings.forEach { finding ->
                 val reference = listOf(finding.code, finding.bt).filter { it.isNotBlank() }.joinToString(" ")
-                Text(
-                    "${finding.severity}: $reference ${finding.field} ${finding.message}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = if (finding.blocking) {
-                        MaterialTheme.colorScheme.error
-                    } else {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    },
-                )
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "${finding.severity}: $reference ${finding.field} ${finding.message}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (finding.blocking) {
+                            MaterialTheme.colorScheme.error
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                        modifier = Modifier.weight(1f),
+                    )
+                    if (!finding.blocking) {
+                        TextButton(
+                            onClick = {
+                                suppressing = finding
+                                reason = ""
+                                onInteraction()
+                            },
+                        ) { Text("Suppress") }
+                    }
+                }
             }
         }
         error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+    }
+
+    suppressing?.let { finding ->
+        AlertDialog(
+            onDismissRequest = { suppressing = null },
+            title = { Text("Suppress ${finding.code}") },
+            text = {
+                Column {
+                    Text(finding.message)
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = reason,
+                        onValueChange = { reason = it },
+                        label = { Text("Reason") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val why = reason
+                        scope.launch {
+                            val result = withContext(Dispatchers.IO) {
+                                runCatching {
+                                    suppressFinding(current.id, finding.code, finding.field, why)
+                                    validateDraft(current)
+                                }
+                            }
+                            result.onSuccess {
+                                findings = it
+                                suppressing = null
+                                error = null
+                            }.onFailure { error = it.message ?: it.toString() }
+                        }
+                    },
+                    enabled = reason.isNotBlank(),
+                ) { Text("Suppress") }
+            },
+            dismissButton = {
+                TextButton(onClick = { suppressing = null }) { Text("Cancel") }
+            },
+        )
     }
 }
 

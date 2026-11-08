@@ -114,6 +114,9 @@ expect fun customersCsv(): String
 /** Imports customers from CSV, skipping parties already on file. */
 expect fun importCustomersCsv(text: String): CustomerImportReport
 
+/** Records a reason for accepting a non-blocking finding. */
+expect fun suppressFinding(draftId: String, code: String, field: String, reason: String)
+
 /** Reading and writing a text file through the platform picker. */
 interface CsvIo {
     /** Opens a save dialog for `suggestedName` and writes `text`. */

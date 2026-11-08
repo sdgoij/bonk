@@ -22,3 +22,6 @@ actual fun customersCsv(): String = withUserError { MobileArchiveHost.customersC
 
 actual fun importCustomersCsv(text: String): CustomerImportReport =
     withUserError { MobileArchiveHost.importCustomersCsv(text) }
+
+actual fun suppressFinding(draftId: String, code: String, field: String, reason: String) =
+    withUserError { MobileArchiveHost.suppressFinding(draftId, code, field, reason) }

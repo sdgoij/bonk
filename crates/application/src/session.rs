@@ -162,7 +162,7 @@ impl Archive {
         DraftDto::from_draft(&domain).map_err(|error| StoreError::Data(error.to_string()))
     }
 
-    /// Validates a draft against its seller and customer.
+    /// Validates a draft against its seller and customer, hiding suppressions.
     pub fn validate_draft(&self, draft: &DraftDto) -> Result<Vec<FindingDto>, StoreError> {
         let domain = draft
             .clone()
@@ -170,8 +170,44 @@ impl Archive {
             .map_err(|error| StoreError::Data(error.to_string()))?;
         let seller = store::load_seller(self.database.connection(), domain.seller_id)?;
         let customer = store::load_customer(self.database.connection(), domain.customer_id)?;
-        let findings = crux::validate_draft(&domain, &seller.party, &customer.party);
+        let mut findings = crux::validate_draft(&domain, &seller.party, &customer.party);
+        let suppressions = store::list_suppressions(self.database.connection(), domain.id)?;
+        findings.retain(|finding| {
+            !suppressions
+                .iter()
+                .any(|suppression| suppression.code == finding.code && suppression.field == finding.field)
+        });
         Ok(findings.iter().map(FindingDto::from).collect())
+    }
+
+    /// Records a reason for accepting a non-blocking finding.
+    pub fn suppress_finding(&self, draft_id: &str, code: &str, field: &str, reason: &str) -> Result<(), StoreError> {
+        let id = crux::DocumentId::parse_str(draft_id).map_err(|error| StoreError::Data(error.to_string()))?;
+        let draft = store::load_draft(self.database.connection(), id)?
+            .ok_or_else(|| StoreError::NotFound(format!("draft {id}")))?;
+        let seller = store::load_seller(self.database.connection(), draft.seller_id)?;
+        let customer = store::load_customer(self.database.connection(), draft.customer_id)?;
+        let findings = crux::validate_draft(&draft, &seller.party, &customer.party);
+        let Some(finding) = findings
+            .iter()
+            .find(|finding| finding.code == code && finding.field == field)
+        else {
+            return Err(StoreError::Rejected("that finding is no longer present".to_owned()));
+        };
+        if finding.severity == crux::Severity::Blocking {
+            return Err(StoreError::Rejected(
+                "a blocking finding cannot be suppressed".to_owned(),
+            ));
+        }
+        store::save_suppression(
+            self.database.connection(),
+            id,
+            code,
+            field,
+            reason,
+            "mobile",
+            &store::now_rfc3339(),
+        )
     }
 
     /// Totals for the editor preview, computed by the domain.
@@ -601,5 +637,38 @@ mod tests {
         let report = archive.import_customers_csv(&csv).unwrap();
         assert_eq!(report.imported, 1, "{report:?}");
         assert_eq!(archive.list_customers().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn a_blocking_finding_cannot_be_suppressed() {
+        let (_directory, archive) = archive();
+        let customer = archive
+            .save_customer(&CustomerDto {
+                id: String::new(),
+                name: "Buyer BV".to_owned(),
+                street: None,
+                postal: None,
+                city: "Utrecht".to_owned(),
+                country: "NL".to_owned(),
+                vat: None,
+                kvk: None,
+                peppol: None,
+                contact: None,
+                email: None,
+                phone: None,
+            })
+            .unwrap();
+        let draft = archive.new_draft(&customer.id).unwrap();
+        let findings = archive.validate_draft(&draft).unwrap();
+        let blocking = findings
+            .iter()
+            .find(|finding| finding.severity == "blocking")
+            .expect("an empty draft blocks");
+        assert!(
+            archive
+                .suppress_finding(&draft.id, &blocking.code, &blocking.field, "because")
+                .is_err(),
+            "only non-blocking findings can be suppressed"
+        );
     }
 }

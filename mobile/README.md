@@ -172,7 +172,10 @@ unit price, and VAT rate. Totals come from `application::Archive::draft_totals`,
 which runs the domain's `calculate_totals`, so the preview and the issued invoice
 use the same rounding. Findings come from the same `crux::validate_draft` the
 desktop editor uses and show the severity, code, BT reference, field path, and
-message inline.
+message inline. A non-blocking finding has a **Suppress** action that asks for a
+reason; the reason is stored against the draft, rule, and field, and the finding
+is hidden from then on. Blocking findings have no Suppress action, and the
+application refuses a suppression for one.
 
 Edits save 500 ms after the last change and the draft survives a process death;
 reopening the archive reloads it from the database. On the API 37 x86_64

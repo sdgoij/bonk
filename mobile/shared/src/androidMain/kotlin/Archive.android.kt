@@ -170,6 +170,11 @@ object MobileArchiveHost {
         return opened.importCustomersCsv(text).toCommon()
     }
 
+    fun suppressFinding(draftId: String, code: String, field: String, reason: String) {
+        val opened = archive ?: error("the archive is not open")
+        opened.suppressFinding(draftId, code, field, reason)
+    }
+
     fun forgetDevice(): Boolean {
         val opened = archive ?: error("the archive is not open")
         return opened.forgetDevice(KeystoreHost.deviceStore())

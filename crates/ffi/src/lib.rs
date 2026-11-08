@@ -564,6 +564,20 @@ impl Archive {
             .collect())
     }
 
+    /// Records a reason for accepting a non-blocking finding.
+    pub fn suppress_finding(
+        &self,
+        draft_id: String,
+        code: String,
+        field: String,
+        reason: String,
+    ) -> Result<(), AppError> {
+        let guard = self.inner.lock().map_err(|_| AppError::Closed)?;
+        let archive = guard.as_ref().ok_or(AppError::Closed)?;
+        archive.suppress_finding(&draft_id, &code, &field, &reason)?;
+        Ok(())
+    }
+
     /// Totals for the editor preview.
     pub fn draft_totals(&self, draft: DraftRecord) -> Result<DraftTotalsRecord, AppError> {
         let guard = self.inner.lock().map_err(|_| AppError::Closed)?;
