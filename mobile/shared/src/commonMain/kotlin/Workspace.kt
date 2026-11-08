@@ -209,7 +209,7 @@ expect fun draftTotals(draft: Draft): DraftTotals
 expect fun issueDraft(draft: Draft): IssueResult
 
 /** Issued documents, best match first; an empty query lists newest first. */
-expect fun listDocuments(query: String): List<DocumentHit>
+expect fun listDocuments(query: String, status: String?): List<DocumentHit>
 
 /** One stored document for the detail screen. */
 expect fun loadDocument(id: String): DocumentDetail

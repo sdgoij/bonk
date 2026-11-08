@@ -214,8 +214,13 @@ impl Archive {
     /// Issued documents, best match first; drafts are listed separately.
     ///
     /// A query matches the number, the party, the references and the note. With
-    /// no query the list is newest first, which is what the register shows.
-    pub fn documents(&self, query: Option<&str>) -> Result<Vec<DocumentHit>, StoreError> {
+    /// no query the list is newest first, which is what the register shows. A
+    /// status narrows it to the documents that stand there.
+    pub fn documents(
+        &self,
+        query: Option<&str>,
+        status: Option<store::DocumentStatus>,
+    ) -> Result<Vec<DocumentHit>, StoreError> {
         let Some(seller) = store::first_seller(self.database.connection())? else {
             return Ok(Vec::new());
         };
@@ -224,7 +229,7 @@ impl Archive {
             direction: Some(store::Direction::Outbound),
             from: None,
             to: None,
-            status: None,
+            status,
         };
         let hits = store::search(self.database.connection(), seller.id, &request)?;
         Ok(hits
@@ -900,7 +905,7 @@ mod tests {
             .unwrap();
         let issued = outcome.issued.clone().expect("issued");
 
-        let listed = archive.documents(None).unwrap();
+        let listed = archive.documents(None, None).unwrap();
         assert_eq!(listed.len(), 1, "{listed:?}");
         assert_eq!(listed[0].id, issued.id);
         assert_eq!(listed[0].number, "2026-0001");
@@ -911,11 +916,26 @@ mod tests {
         assert_eq!(listed[0].currency, "EUR");
 
         // A query matches the number and the party; a word nobody used finds nothing.
-        assert_eq!(archive.documents(Some("2026-0001")).unwrap().len(), 1);
-        assert_eq!(archive.documents(Some("Buyer")).unwrap().len(), 1);
-        assert!(archive.documents(Some("nothing-like-this")).unwrap().is_empty());
+        assert_eq!(archive.documents(Some("2026-0001"), None).unwrap().len(), 1);
+        assert_eq!(archive.documents(Some("Buyer"), None).unwrap().len(), 1);
+        assert!(archive.documents(Some("nothing-like-this"), None).unwrap().is_empty());
         // An empty query means the register, not nothing.
-        assert_eq!(archive.documents(Some("  ")).unwrap().len(), 1);
+        assert_eq!(archive.documents(Some("  "), None).unwrap().len(), 1);
+
+        // A status narrows the register to the documents that stand there.
+        assert_eq!(
+            archive
+                .documents(None, Some(store::DocumentStatus::Issued))
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(
+            archive
+                .documents(None, Some(store::DocumentStatus::Paid))
+                .unwrap()
+                .is_empty()
+        );
 
         let detail = archive.document(&issued.id).unwrap();
         assert_eq!(detail.number, "2026-0001");

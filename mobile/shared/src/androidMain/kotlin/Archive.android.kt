@@ -165,9 +165,9 @@ object MobileArchiveHost {
         return opened.issueDraft(draft.toFfi()).toCommon()
     }
 
-    fun listDocuments(query: String): List<DocumentHit> {
+    fun listDocuments(query: String, status: String?): List<DocumentHit> {
         val opened = archive ?: error("the archive is not open")
-        return opened.documents(query.ifBlank { null }).map { it.toCommon() }
+        return opened.documents(query.ifBlank { null }, status).map { it.toCommon() }
     }
 
     fun loadDocument(id: String): DocumentDetail {

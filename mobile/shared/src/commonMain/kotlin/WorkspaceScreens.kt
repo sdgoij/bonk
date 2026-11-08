@@ -1,14 +1,19 @@
 package com.github.sdgoij.bonk
 
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -18,6 +23,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -786,10 +792,15 @@ fun SellerEditScreen(onBack: () -> Unit, onInteraction: () -> Unit) {
     }
 }
 
-/** How many rows the register draws before asking for a narrower search. */
-private const val DOCUMENT_PAGE = 50
+/** The statuses an issued document can stand in, as the filter offers them. */
+private val DOCUMENT_FILTERS = listOf(
+    null to "All",
+    "issued" to "Issued",
+    "paid" to "Paid",
+    "archived" to "Archived",
+)
 
-/** Issued documents, newest first, with a search over what people remember. */
+/** Issued documents, newest first, with a search and a status filter. */
 @Composable
 fun DocumentListScreen(
     onBack: () -> Unit,
@@ -798,49 +809,83 @@ fun DocumentListScreen(
 ) {
     var documents by remember { mutableStateOf<List<DocumentHit>>(emptyList()) }
     var query by remember { mutableStateOf("") }
+    var status by remember { mutableStateOf<String?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     var loading by remember { mutableStateOf(true) }
+    val listState = rememberLazyListState()
+    val filters = rememberScrollState()
 
-    LaunchedEffect(query) {
+    LaunchedEffect(query, status) {
         if (query.isNotBlank()) delay(300)
         loading = true
-        val result = withContext(Dispatchers.IO) { runCatching { listDocuments(query) } }
+        val result = withContext(Dispatchers.IO) { runCatching { listDocuments(query, status) } }
         result.onSuccess { documents = it; error = null }
             .onFailure { error = it.message ?: it.toString() }
         loading = false
     }
 
-    Column(Modifier.fillMaxWidth()) {
+    // A new result set starts at its best match, not where the last one was left.
+    LaunchedEffect(documents) {
+        if (documents.isNotEmpty()) listState.scrollToItem(0)
+    }
+
+    Column(Modifier.fillMaxSize()) {
         ScreenHeader("Documents", onBack) { }
         OutlinedTextField(
             value = query,
             onValueChange = { query = it; onInteraction() },
             label = { Text("Search numbers, parties, references") },
             singleLine = true,
+            supportingText = if (documents.isNotEmpty() && (query.isNotBlank() || status != null)) {
+                {
+                    Text(
+                        if (documents.size == 1) "1 match" else "${documents.size} matches",
+                        style = MaterialTheme.typography.labelMedium,
+                    )
+                }
+            } else {
+                null
+            },
             modifier = Modifier.fillMaxWidth(),
         )
+        Row(
+            modifier = Modifier.fillMaxWidth().horizontalScroll(filters),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            DOCUMENT_FILTERS.forEach { (code, label) ->
+                FilterChip(
+                    selected = status == code,
+                    onClick = {
+                        status = code
+                        onInteraction()
+                    },
+                    label = { Text(label) },
+                )
+            }
+        }
         Spacer(Modifier.height(8.dp))
         when {
             error != null -> Text(error!!, color = MaterialTheme.colorScheme.error)
             loading && documents.isEmpty() -> CircularProgressIndicator()
             documents.isEmpty() -> Text(
-                if (query.isBlank()) {
-                    "No documents yet. Issue a draft and it is filed here."
-                } else {
-                    "Nothing matches that search."
+                when {
+                    query.isNotBlank() -> "Nothing matches that search."
+                    status != null -> "No ${status} documents yet."
+                    else -> "No documents yet. Issue a draft and it is filed here."
                 },
                 style = MaterialTheme.typography.bodyMedium,
             )
             else -> {
-                documents.take(DOCUMENT_PAGE).forEach { hit ->
-                    DocumentRow(hit) { onOpen(hit.id) }
-                }
-                if (documents.size > DOCUMENT_PAGE) {
-                    Text(
-                        "Showing $DOCUMENT_PAGE of ${documents.size}. Narrow the search to see the rest.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                // A search answers with everything that matches; the list draws
+                // only the rows on screen, so a wide match stays cheap.
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier.weight(1f).fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    items(documents, key = { it.id }) { hit ->
+                        DocumentRow(hit) { onOpen(hit.id) }
+                    }
                 }
             }
         }

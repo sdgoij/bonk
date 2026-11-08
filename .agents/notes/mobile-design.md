@@ -1411,7 +1411,7 @@ single place to update progress; the tables stay as the plan.
 
 **Status 2026-11-08:** A draft issues from the editor, and the archive decides: a refusal lists every finding it reported, conformance rules included, with the ones the editor can answer as chips and a count of those it cannot; a success shows the number, totals and both artefact hashes. The dashboard now carries Seller and Documents. The seller screen edits the party invoices are issued by (the placeholder is created on first open), and the draft editor carries buyer and order references, which is what lets a fresh archive reach a successful issue. The register lists issued documents newest first and searches numbers, parties, references and notes; the detail screen shows the facts, the lines, the totals, both artefacts with hashes, and the status history.
 
-The register renders at most 50 rows and says so. A virtualised list needs the scrolling root restructured, which belongs with the adaptive layouts.
+The register is the one screen that does not sit in the scrolling root: its card takes the remaining height and draws its rows lazily, so a wide result set costs only the rows on screen. The search field carries the match count as supporting text, the chips filter by All, Issued, Paid and Archived, and a new result set starts at its best match instead of where the previous one was left. Date ranges are not in the mobile register yet; the store already filters on them.
 
 The flow was run on an emulator: filling the seller, editing a customer's Peppol endpoint, adding a buyer reference and issuing gave a numbered document, and the register, search and detail screens read it back with both artefacts.
 
@@ -1421,7 +1421,7 @@ Share, Save and Open fetch the artefact on the IO dispatcher and hand it to the 
 - [x] Number assigned inside the transaction; no promised number in the UI
 - [x] Share/save PDF and UBL
 - [x] Document detail: facts, lines, totals, history, artefacts
-- [ ] Search/filter with virtualised results
+- [x] Search/filter with virtualised results
 - [ ] Golden hash test host vs emulator
 - [x] PDF opens in the platform viewer
 

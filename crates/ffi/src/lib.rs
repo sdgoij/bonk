@@ -949,11 +949,22 @@ impl Archive {
     }
 
     /// Issued documents, best match first; an empty query lists newest first.
-    pub fn documents(&self, query: Option<String>) -> Result<Vec<DocumentHitRecord>, AppError> {
+    ///
+    /// A status code narrows the register to the documents that stand there.
+    pub fn documents(&self, query: Option<String>, status: Option<String>) -> Result<Vec<DocumentHitRecord>, AppError> {
         let guard = self.inner.lock().map_err(|_| AppError::Closed)?;
         let archive = guard.as_ref().ok_or(AppError::Closed)?;
+        let status = status
+            .as_deref()
+            .filter(|code| !code.trim().is_empty())
+            .map(|code| {
+                store::DocumentStatus::parse(code).ok_or_else(|| AppError::Store {
+                    detail: format!("unknown status {code}"),
+                })
+            })
+            .transpose()?;
         Ok(archive
-            .documents(query.as_deref())?
+            .documents(query.as_deref(), status)?
             .into_iter()
             .map(DocumentHitRecord::from)
             .collect())
@@ -1780,7 +1791,7 @@ mod tests {
         assert!(blocked.issued.is_none());
         assert!(blocked.findings.iter().any(|finding| finding.severity == "blocking"));
         assert!(blocked.ubl_sha256.is_none());
-        assert!(archive.documents(None).expect("the register").is_empty());
+        assert!(archive.documents(None, None).expect("the register").is_empty());
 
         let issued = archive.issue_draft(draft("Consultancy")).expect("an issue");
         let summary = issued.issued.as_ref().expect("an issued document");
@@ -1790,9 +1801,16 @@ mod tests {
         assert_eq!(issued.ubl_sha256.as_deref().map(str::len), Some(64));
         assert!(issued.pdf_error.is_none());
 
-        let documents = archive.documents(None).expect("the register");
+        let documents = archive.documents(None, None).expect("the register");
         assert_eq!(documents.len(), 1);
         assert_eq!(documents[0].number, "2026-0001");
+        assert!(
+            archive
+                .documents(None, Some("paid".to_owned()))
+                .expect("a filtered register")
+                .is_empty()
+        );
+        assert!(archive.documents(None, Some("not-a-status".to_owned())).is_err());
 
         let detail = archive.document(summary.id.clone()).expect("a detail");
         assert_eq!(detail.buyer, "Buyer BV");

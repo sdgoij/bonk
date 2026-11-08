@@ -18,7 +18,8 @@ actual fun newDraft(customerId: String): Draft = withUserError { MobileArchiveHo
 
 actual fun issueDraft(draft: Draft): IssueResult = withUserError { MobileArchiveHost.issueDraft(draft) }
 
-actual fun listDocuments(query: String): List<DocumentHit> = withUserError { MobileArchiveHost.listDocuments(query) }
+actual fun listDocuments(query: String, status: String?): List<DocumentHit> =
+    withUserError { MobileArchiveHost.listDocuments(query, status) }
 
 actual fun loadDocument(id: String): DocumentDetail = withUserError { MobileArchiveHost.loadDocument(id) }
 

@@ -322,11 +322,15 @@ fun App() {
             BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
                 val contentWidth = if (maxWidth > 720.dp) 560.dp else maxWidth
                 val tall = maxHeight > 800.dp
+                // The register draws its rows lazily, so it needs a bounded height
+                // rather than the scrolling root the other screens share.
+                val virtualised = screen is Screen.Documents
+                val scroll = rememberScrollState()
                 Column(
                     modifier = Modifier
                         .fillMaxSize()
                         .imePadding()
-                        .verticalScroll(rememberScrollState())
+                        .then(if (virtualised) Modifier else Modifier.verticalScroll(scroll))
                         .padding(24.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
@@ -340,8 +344,15 @@ fun App() {
                     )
                     Spacer(Modifier.height(24.dp))
 
-                    Card(modifier = Modifier.widthIn(max = contentWidth).fillMaxWidth()) {
-                        Column(modifier = Modifier.padding(24.dp)) {
+                    val card = Modifier.widthIn(max = contentWidth).fillMaxWidth()
+                    Card(modifier = if (virtualised) card.weight(1f) else card) {
+                        Column(
+                            modifier = if (virtualised) {
+                                Modifier.fillMaxSize().padding(24.dp)
+                            } else {
+                                Modifier.padding(24.dp)
+                            },
+                        ) {
                             when (val current = screen) {
                                 Screen.Checking -> {
                                     Row(
