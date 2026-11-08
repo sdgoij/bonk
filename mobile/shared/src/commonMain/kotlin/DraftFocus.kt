@@ -26,6 +26,10 @@ internal sealed interface DraftFocus {
 
     data object Note : DraftFocus
 
+    data object BuyerReference : DraftFocus
+
+    data object OrderReference : DraftFocus
+
     data object Lines : DraftFocus
 
     data class Line(val lineId: String, val field: LineField) : DraftFocus
@@ -65,6 +69,8 @@ internal fun draftFocus(field: String, lines: List<DraftLine>): DraftFocus? {
         field == "issue_date" -> DraftFocus.IssueDate
         field == "due_date" -> DraftFocus.DueDate
         field == "note" -> DraftFocus.Note
+        field == "buyer_reference" -> DraftFocus.BuyerReference
+        field == "order_reference" -> DraftFocus.OrderReference
         field.startsWith("customer.") -> DraftFocus.Customer
         else -> null
     }

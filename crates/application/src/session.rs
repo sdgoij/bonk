@@ -11,7 +11,8 @@ use store::{Database, KdfParams, KeyStore, StoreError};
 use zeroize::Zeroizing;
 
 use crate::dto::{
-    CustomerDto, CustomerImportDto, DocumentDetail, DocumentHit, DraftDto, DraftTotalsDto, FindingDto, Summary,
+    CustomerDto, CustomerImportDto, DocumentDetail, DocumentHit, DraftDto, DraftTotalsDto, FindingDto, SellerDto,
+    Summary,
 };
 
 /// An unlocked application session: one database, one keystore.
@@ -124,6 +125,26 @@ impl Archive {
     pub fn customers_csv(&self) -> Result<String, StoreError> {
         let customers = store::list_customers(self.database.connection())?;
         Ok(crate::customers::export(&customers))
+    }
+
+    /// The seller this archive issues as, creating the placeholder when none exists.
+    pub fn seller(&self) -> Result<SellerDto, StoreError> {
+        let id = self.ensure_seller()?;
+        let id = crux::SellerId::parse_str(&id).map_err(|error| StoreError::Data(error.to_string()))?;
+        Ok(SellerDto::from_record(&store::load_seller(
+            self.database.connection(),
+            id,
+        )?))
+    }
+
+    /// Updates the seller's party data and returns the stored shape.
+    pub fn save_seller(&self, seller: &SellerDto) -> Result<SellerDto, StoreError> {
+        let record = seller
+            .clone()
+            .into_record()
+            .map_err(|error| StoreError::Data(error.to_string()))?;
+        store::update_seller(self.database.connection(), &record, &store::now_rfc3339())?;
+        Ok(SellerDto::from_record(&record))
     }
 
     /// Imports customers from CSV, skipping parties already on file.
@@ -795,6 +816,44 @@ mod tests {
 
         // The draft became the document.
         assert!(archive.list_drafts().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_filled_seller_lets_a_draft_issue() {
+        let (_directory, mut archive) = archive();
+
+        // A fresh archive holds the placeholder seller, which cannot issue.
+        let placeholder = archive.seller().unwrap();
+        assert_eq!(placeholder.name, "My company");
+
+        let filled = archive
+            .save_seller(&crate::SellerDto {
+                street: Some("Main 1".to_owned()),
+                postal: Some("2611 AA".to_owned()),
+                city: "Delft".to_owned(),
+                vat: Some("NL123456782B01".to_owned()),
+                peppol: Some("0088:1234567890123".to_owned()),
+                ..placeholder
+            })
+            .unwrap();
+        assert_eq!(filled.name, "My company");
+        assert_eq!(filled.vat.as_deref(), Some("NL123456782B01"));
+
+        let customer = store::CustomerRecord {
+            id: crux::CustomerId::new(),
+            party: party("Buyer BV", "Utrecht", None),
+        };
+        store::insert_customer(archive.database().connection(), &customer, NOW).unwrap();
+
+        let outcome = archive
+            .issue(
+                &draft(&filled.id, &customer.id.to_string(), "Consultancy"),
+                crate::DocumentLanguage::English,
+                None,
+                "test",
+            )
+            .unwrap();
+        assert!(outcome.issued.is_some(), "{outcome:#?}");
     }
 
     #[test]

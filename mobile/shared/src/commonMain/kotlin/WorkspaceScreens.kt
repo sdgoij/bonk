@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -368,6 +369,16 @@ fun DraftEditorScreen(
             current.note,
             modifier = Modifier.revealOn(focus, DraftFocus.Note),
         ) { current = current.copy(note = it); onInteraction() }
+        FormField(
+            "Buyer reference",
+            current.buyerReference,
+            modifier = Modifier.revealOn(focus, DraftFocus.BuyerReference),
+        ) { current = current.copy(buyerReference = it); onInteraction() }
+        FormField(
+            "Order reference",
+            current.orderReference,
+            modifier = Modifier.revealOn(focus, DraftFocus.OrderReference),
+        ) { current = current.copy(orderReference = it); onInteraction() }
 
         Spacer(Modifier.height(12.dp))
         Text("Lines", style = MaterialTheme.typography.titleMedium)
@@ -617,6 +628,263 @@ fun IssueResultScreen(result: IssueResult, onDone: () -> Unit) {
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
+        }
+    }
+}
+
+/** The party invoices are issued by. */
+@Composable
+fun SellerEditScreen(onBack: () -> Unit, onInteraction: () -> Unit) {
+    var form by remember { mutableStateOf<Seller?>(null) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var saved by remember { mutableStateOf(false) }
+    var busy by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+
+    LaunchedEffect(Unit) {
+        val loaded = withContext(Dispatchers.IO) { runCatching { loadSeller() } }
+        loaded.onSuccess { form = it }.onFailure { error = it.message ?: it.toString() }
+    }
+
+    // Each edit clears the confirmation, so it never stands for text that is not stored.
+    fun edit(update: Seller.() -> Seller) {
+        form = form?.update()
+        saved = false
+        onInteraction()
+    }
+
+    fun save() {
+        val current = form ?: return
+        busy = true
+        error = null
+        scope.launch {
+            val result = withContext(Dispatchers.IO) { runCatching { saveSeller(current) } }
+            busy = false
+            result.onSuccess { form = it; saved = true }
+                .onFailure { error = it.message ?: it.toString() }
+        }
+    }
+
+    Column(Modifier.fillMaxWidth()) {
+        ScreenHeader("Seller", onBack) { }
+        val seller = form
+        if (seller == null) {
+            if (error == null) CircularProgressIndicator()
+            error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+            return@Column
+        }
+        Text(
+            "Invoices are issued by this party. Conformance checks its address, VAT identifier and Peppol endpoint.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        FormField("Name", seller.name) { edit { copy(name = it) } }
+        FormField("Street", seller.street) { edit { copy(street = it) } }
+        FormField("Postal code", seller.postal) { edit { copy(postal = it) } }
+        FormField("City", seller.city) { edit { copy(city = it) } }
+        FormField("Country", seller.country) { edit { copy(country = it.uppercase()) } }
+        FormField("VAT identifier", seller.vat) { edit { copy(vat = it) } }
+        FormField("Chamber of commerce", seller.kvk) { edit { copy(kvk = it) } }
+        FormField("Peppol endpoint", seller.peppol) { edit { copy(peppol = it) } }
+        FormField("Contact", seller.contact) { edit { copy(contact = it) } }
+        FormField("Email", seller.email) { edit { copy(email = it) } }
+        FormField("Phone", seller.phone) { edit { copy(phone = it) } }
+        error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+        if (saved) {
+            Spacer(Modifier.height(4.dp))
+            Text("Saved.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+        }
+        Spacer(Modifier.height(12.dp))
+        Button(onClick = ::save, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
+            Text(if (busy) "Saving..." else "Save seller")
+        }
+    }
+}
+
+/** How many rows the register draws before asking for a narrower search. */
+private const val DOCUMENT_PAGE = 50
+
+/** Issued documents, newest first, with a search over what people remember. */
+@Composable
+fun DocumentListScreen(
+    onBack: () -> Unit,
+    onOpen: (String) -> Unit,
+    onInteraction: () -> Unit,
+) {
+    var documents by remember { mutableStateOf<List<DocumentHit>>(emptyList()) }
+    var query by remember { mutableStateOf("") }
+    var error by remember { mutableStateOf<String?>(null) }
+    var loading by remember { mutableStateOf(true) }
+
+    LaunchedEffect(query) {
+        if (query.isNotBlank()) delay(300)
+        loading = true
+        val result = withContext(Dispatchers.IO) { runCatching { listDocuments(query) } }
+        result.onSuccess { documents = it; error = null }
+            .onFailure { error = it.message ?: it.toString() }
+        loading = false
+    }
+
+    Column(Modifier.fillMaxWidth()) {
+        ScreenHeader("Documents", onBack) { }
+        OutlinedTextField(
+            value = query,
+            onValueChange = { query = it; onInteraction() },
+            label = { Text("Search numbers, parties, references") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Spacer(Modifier.height(8.dp))
+        when {
+            error != null -> Text(error!!, color = MaterialTheme.colorScheme.error)
+            loading && documents.isEmpty() -> CircularProgressIndicator()
+            documents.isEmpty() -> Text(
+                if (query.isBlank()) {
+                    "No documents yet. Issue a draft and it is filed here."
+                } else {
+                    "Nothing matches that search."
+                },
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            else -> {
+                documents.take(DOCUMENT_PAGE).forEach { hit ->
+                    DocumentRow(hit) { onOpen(hit.id) }
+                }
+                if (documents.size > DOCUMENT_PAGE) {
+                    Text(
+                        "Showing $DOCUMENT_PAGE of ${documents.size}. Narrow the search to see the rest.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** One stored document: the facts, the lines, the artefacts and the history. */
+@Composable
+fun DocumentDetailScreen(id: String, onBack: () -> Unit) {
+    var document by remember { mutableStateOf<DocumentDetail?>(null) }
+    var error by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(id) {
+        val result = withContext(Dispatchers.IO) { runCatching { loadDocument(id) } }
+        result.onSuccess { document = it }.onFailure { error = it.message ?: it.toString() }
+    }
+
+    Column(Modifier.fillMaxWidth()) {
+        ScreenHeader(document?.number ?: "Document", onBack) { }
+        val doc = document
+        if (doc == null) {
+            error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+            return@Column
+        }
+
+        Text(
+            doc.status.uppercase(),
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(4.dp))
+        Text(doc.buyer, style = MaterialTheme.typography.titleMedium)
+        Fact("Issued", doc.issueDate)
+        Fact("Due", doc.dueDate)
+        Fact("Seller", doc.seller)
+        Fact("Buyer reference", doc.buyerReference)
+        Fact("Order reference", doc.orderReference)
+        Fact("Note", doc.note)
+
+        Spacer(Modifier.height(12.dp))
+        Text("Lines", style = MaterialTheme.typography.titleMedium)
+        doc.lines.forEach { line ->
+            Column(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                Text(line.name.ifBlank { "Line ${line.position}" }, style = MaterialTheme.typography.bodyMedium)
+                Text(
+                    "${line.quantity} ${line.unit} x ${formatMoney(line.unitPriceMicros)} ${doc.currency}" +
+                        " · VAT ${formatRate(line.vatRateBp)}%",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    "${formatMoney(line.lineNetMicros)} ${doc.currency}",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+        }
+
+        Spacer(Modifier.height(12.dp))
+        Text("Net ${formatMoney(doc.netMicros)} ${doc.currency}", style = MaterialTheme.typography.bodyMedium)
+        Text("VAT ${formatMoney(doc.taxMicros)} ${doc.currency}", style = MaterialTheme.typography.bodyMedium)
+        Text("Gross ${formatMoney(doc.grossMicros)} ${doc.currency}", style = MaterialTheme.typography.titleMedium)
+
+        Spacer(Modifier.height(12.dp))
+        Text("Filed artefacts", style = MaterialTheme.typography.titleMedium)
+        if (doc.artefacts.isEmpty()) {
+            Text(
+                "None yet.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        doc.artefacts.forEach { artefact ->
+            Text(
+                "${artefact.kind.uppercase()} · ${artefact.sizeBytes} bytes",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Text(
+                artefact.bytesHash,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+
+        if (doc.events.isNotEmpty()) {
+            Spacer(Modifier.height(12.dp))
+            Text("History", style = MaterialTheme.typography.titleMedium)
+            doc.events.forEach { event ->
+                Text(
+                    "${event.kind} · ${event.at} · ${event.actor}" +
+                        if (event.detail.isBlank()) "" else " · ${event.detail}",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun Fact(label: String, value: String) {
+    if (value.isBlank()) return
+    Row(Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
+        Text(
+            label,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.width(120.dp),
+        )
+        Text(value, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
+    }
+}
+
+@Composable
+private fun DocumentRow(hit: DocumentHit, onClick: () -> Unit) {
+    TextButton(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.fillMaxWidth()) {
+            Text(hit.number.ifBlank { "No number" }, style = MaterialTheme.typography.titleMedium)
+            val detail = listOf(
+                hit.party,
+                hit.issueDate,
+                "${formatMoney(hit.grossMicros)} ${hit.currency}",
+                hit.status,
+            )
+                .filter { it.isNotBlank() }
+                .joinToString(" · ")
+            Text(
+                detail,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }

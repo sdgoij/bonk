@@ -75,6 +75,9 @@ private sealed interface Screen {
     data object Drafts : Screen
     data class DraftEditor(val draft: Draft, val customers: List<Customer>) : Screen
     data class Issued(val result: IssueResult) : Screen
+    data object Documents : Screen
+    data class DocumentView(val id: String) : Screen
+    data object Seller : Screen
 }
 
 private fun Screen.isArchiveContent(): Boolean = when (this) {
@@ -85,6 +88,9 @@ private fun Screen.isArchiveContent(): Boolean = when (this) {
     is Screen.CustomerEdit,
     is Screen.DraftEditor,
     is Screen.Issued,
+    Screen.Documents,
+    is Screen.DocumentView,
+    Screen.Seller,
     -> true
 
     else -> false
@@ -459,6 +465,8 @@ fun App() {
                                     },
                                     onCustomers = { screen = Screen.Customers },
                                     onDrafts = { screen = Screen.Drafts },
+                                    onDocuments = { screen = Screen.Documents },
+                                    onSeller = { screen = Screen.Seller },
                                 )
                                 Screen.Customers -> CustomerListScreen(
                                     onBack = { screen = Screen.Unlocked },
@@ -488,8 +496,22 @@ fun App() {
                                     onIssued = { screen = Screen.Issued(it) },
                                 )
                                 is Screen.Issued -> IssueResultScreen(current.result) {
-                                    screen = Screen.Drafts
+                                    val id = current.result.issued?.id
+                                    screen = if (id.isNullOrBlank()) Screen.Documents else Screen.DocumentView(id)
                                 }
+                                Screen.Documents -> DocumentListScreen(
+                                    onBack = { screen = Screen.Unlocked },
+                                    onOpen = { screen = Screen.DocumentView(it) },
+                                    onInteraction = ::touch,
+                                )
+                                is Screen.DocumentView -> DocumentDetailScreen(
+                                    id = current.id,
+                                    onBack = { screen = Screen.Documents },
+                                )
+                                Screen.Seller -> SellerEditScreen(
+                                    onBack = { screen = Screen.Unlocked },
+                                    onInteraction = ::touch,
+                                )
                             }
                         }
                     }
@@ -733,6 +755,8 @@ private fun Unlocked(
     onAddRecovery: () -> Unit,
     onCustomers: () -> Unit,
     onDrafts: () -> Unit,
+    onDocuments: () -> Unit,
+    onSeller: () -> Unit,
 ) {
     Text("Unlocked", style = MaterialTheme.typography.titleLarge)
     Spacer(Modifier.height(16.dp))
@@ -759,6 +783,14 @@ private fun Unlocked(
     ) {
         Button(onClick = onCustomers, modifier = Modifier.weight(1f)) { Text("Customers") }
         Button(onClick = onDrafts, modifier = Modifier.weight(1f)) { Text("Drafts") }
+    }
+    Spacer(Modifier.height(8.dp))
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Button(onClick = onDocuments, modifier = Modifier.weight(1f)) { Text("Documents") }
+        Button(onClick = onSeller, modifier = Modifier.weight(1f)) { Text("Seller") }
     }
     Spacer(Modifier.height(8.dp))
     Button(

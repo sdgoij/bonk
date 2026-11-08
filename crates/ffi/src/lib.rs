@@ -12,7 +12,7 @@ use std::time::Instant;
 use application::{
     Archive as AppArchive, CustomerDto, CustomerImportDto, DocumentArtefact, DocumentDetail, DocumentEvent,
     DocumentHit, DocumentLine, DocumentSummary, DraftDto, DraftLineDto, DraftTotalsDto, FindingDto, IssueOutcome,
-    PrecedingInvoiceDto,
+    PrecedingInvoiceDto, SellerDto,
 };
 use argon2::{Algorithm, Argon2, Params, Version};
 use crux::{
@@ -285,6 +285,81 @@ impl From<CustomerImportDto> for CustomerImportRecord {
             imported: dto.imported,
             skipped: dto.skipped,
             errors: dto.errors,
+        }
+    }
+}
+
+/// A seller as the settings screen edits it.
+#[derive(uniffi::Record)]
+pub struct SellerRecord {
+    /// Seller identity.
+    pub id: String,
+    /// Registered name.
+    pub name: String,
+    /// Street and number.
+    pub street: Option<String>,
+    /// Postal code.
+    pub postal: Option<String>,
+    /// City.
+    pub city: String,
+    /// ISO 3166-1 alpha-2 country.
+    pub country: String,
+    /// VAT identifier.
+    pub vat: Option<String>,
+    /// Chamber of commerce number.
+    pub kvk: Option<String>,
+    /// Peppol endpoint, `EAS:value`.
+    pub peppol: Option<String>,
+    /// Contact person.
+    pub contact: Option<String>,
+    /// Contact email.
+    pub email: Option<String>,
+    /// Contact phone.
+    pub phone: Option<String>,
+    /// ISO currency this seller issues in.
+    pub default_currency: String,
+    /// Locale this seller prefers.
+    pub default_locale: String,
+}
+
+impl From<SellerDto> for SellerRecord {
+    fn from(dto: SellerDto) -> Self {
+        Self {
+            id: dto.id,
+            name: dto.name,
+            street: dto.street,
+            postal: dto.postal,
+            city: dto.city,
+            country: dto.country,
+            vat: dto.vat,
+            kvk: dto.kvk,
+            peppol: dto.peppol,
+            contact: dto.contact,
+            email: dto.email,
+            phone: dto.phone,
+            default_currency: dto.default_currency,
+            default_locale: dto.default_locale,
+        }
+    }
+}
+
+impl From<SellerRecord> for SellerDto {
+    fn from(record: SellerRecord) -> Self {
+        Self {
+            id: record.id,
+            name: record.name,
+            street: record.street,
+            postal: record.postal,
+            city: record.city,
+            country: record.country,
+            vat: record.vat,
+            kvk: record.kvk,
+            peppol: record.peppol,
+            contact: record.contact,
+            email: record.email,
+            phone: record.phone,
+            default_currency: record.default_currency,
+            default_locale: record.default_locale,
         }
     }
 }
@@ -921,6 +996,20 @@ impl Archive {
         let guard = self.inner.lock().map_err(|_| AppError::Closed)?;
         let archive = guard.as_ref().ok_or(AppError::Closed)?;
         Ok(archive.save_customer(&CustomerDto::from(customer))?.into())
+    }
+
+    /// The seller this archive issues as.
+    pub fn seller(&self) -> Result<SellerRecord, AppError> {
+        let guard = self.inner.lock().map_err(|_| AppError::Closed)?;
+        let archive = guard.as_ref().ok_or(AppError::Closed)?;
+        Ok(archive.seller()?.into())
+    }
+
+    /// Updates the seller's party data.
+    pub fn save_seller(&self, seller: SellerRecord) -> Result<SellerRecord, AppError> {
+        let guard = self.inner.lock().map_err(|_| AppError::Closed)?;
+        let archive = guard.as_ref().ok_or(AppError::Closed)?;
+        Ok(archive.save_seller(&SellerDto::from(seller))?.into())
     }
 
     /// Exports the customer table as CSV.
@@ -1591,6 +1680,35 @@ mod tests {
             .expect("an updated customer");
         assert_eq!(saved.city, "Delft");
         assert_eq!(archive.list_customers().expect("customers").len(), 1);
+    }
+
+    #[test]
+    fn the_seller_round_trips_through_the_ffi() {
+        let directory = tempfile::TempDir::new().expect("a temporary directory");
+        let database = directory.path().join("bonk.db").display().to_string();
+        let keystore = directory.path().join("keystore.bin").display().to_string();
+        let archive = Archive::create(database, keystore, "passphrase".to_owned()).expect("a new archive");
+
+        // A fresh archive answers with the placeholder, so the screen opens on
+        // something rather than on an empty form.
+        let seller = archive.seller().expect("the placeholder seller");
+        assert_eq!(seller.name, "My company");
+        assert!(!seller.id.is_empty());
+
+        let saved = archive
+            .save_seller(SellerRecord {
+                street: Some("Main 1".to_owned()),
+                postal: Some("2611 AA".to_owned()),
+                city: "Delft".to_owned(),
+                vat: Some("nl123456782b01".to_owned()),
+                peppol: Some("0088:1234567890123".to_owned()),
+                ..seller
+            })
+            .expect("a saved seller");
+        assert_eq!(saved.name, "My company");
+        assert_eq!(saved.city, "Delft");
+        assert_eq!(saved.vat.as_deref(), Some("NL123456782B01"));
+        assert_eq!(archive.seller().expect("the seller").city, "Delft");
     }
 
     #[test]

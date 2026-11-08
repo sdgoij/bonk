@@ -165,6 +165,26 @@ object MobileArchiveHost {
         return opened.issueDraft(draft.toFfi()).toCommon()
     }
 
+    fun listDocuments(query: String): List<DocumentHit> {
+        val opened = archive ?: error("the archive is not open")
+        return opened.documents(query.ifBlank { null }).map { it.toCommon() }
+    }
+
+    fun loadDocument(id: String): DocumentDetail {
+        val opened = archive ?: error("the archive is not open")
+        return opened.document(id).toCommon()
+    }
+
+    fun loadSeller(): Seller {
+        val opened = archive ?: error("the archive is not open")
+        return opened.seller().toCommon()
+    }
+
+    fun saveSeller(seller: Seller): Seller {
+        val opened = archive ?: error("the archive is not open")
+        return opened.saveSeller(seller.toFfi()).toCommon()
+    }
+
     fun customersCsv(): String {
         val opened = archive ?: error("the archive is not open")
         return opened.customersCsv()
@@ -322,6 +342,103 @@ private fun uniffi.bonkc.IssueRecord.toCommon() = IssueResult(
     ublSha256 = ublSha256.orEmpty(),
     pdfSha256 = pdfSha256.orEmpty(),
     pdfError = pdfError.orEmpty(),
+)
+
+private fun uniffi.bonkc.SellerRecord.toCommon() = Seller(
+    id = id,
+    name = name,
+    street = street.orEmpty(),
+    postal = postal.orEmpty(),
+    city = city,
+    country = country,
+    vat = vat.orEmpty(),
+    kvk = kvk.orEmpty(),
+    peppol = peppol.orEmpty(),
+    contact = contact.orEmpty(),
+    email = email.orEmpty(),
+    phone = phone.orEmpty(),
+    defaultCurrency = defaultCurrency,
+    defaultLocale = defaultLocale,
+)
+
+private fun Seller.toFfi() = uniffi.bonkc.SellerRecord(
+    id = id,
+    name = name,
+    street = street.ifBlank { null },
+    postal = postal.ifBlank { null },
+    city = city,
+    country = country,
+    vat = vat.ifBlank { null },
+    kvk = kvk.ifBlank { null },
+    peppol = peppol.ifBlank { null },
+    contact = contact.ifBlank { null },
+    email = email.ifBlank { null },
+    phone = phone.ifBlank { null },
+    defaultCurrency = defaultCurrency,
+    defaultLocale = defaultLocale,
+)
+
+private fun uniffi.bonkc.DocumentHitRecord.toCommon() = DocumentHit(
+    id = id,
+    number = number,
+    direction = direction,
+    party = party,
+    issueDate = issueDate,
+    currency = currency,
+    grossMicros = grossMicros,
+    status = status,
+)
+
+private fun uniffi.bonkc.DocumentLineRecord.toCommon() = DocumentLine(
+    position = position,
+    name = name,
+    description = description.orEmpty(),
+    quantity = quantity,
+    unit = unit,
+    unitPriceMicros = unitPriceMicros,
+    vatCategory = vatCategory,
+    vatRateBp = vatRateBp.toInt(),
+    lineNetMicros = lineNetMicros,
+    taxMicros = taxMicros,
+)
+
+private fun uniffi.bonkc.DocumentArtefactRecord.toCommon() = DocumentArtefact(
+    kind = kind,
+    bytesHash = bytesHash,
+    sizeBytes = sizeBytes,
+    renderedAt = renderedAt,
+    rendererVersion = rendererVersion,
+)
+
+private fun uniffi.bonkc.DocumentEventRecord.toCommon() = DocumentEvent(
+    kind = kind,
+    at = at,
+    actor = actor,
+    detail = detail.orEmpty(),
+)
+
+private fun uniffi.bonkc.DocumentDetailRecord.toCommon() = DocumentDetail(
+    id = id,
+    number = number,
+    direction = direction,
+    docType = docType,
+    currency = currency,
+    issueDate = issueDate,
+    dueDate = dueDate.orEmpty(),
+    deliveryDate = deliveryDate.orEmpty(),
+    buyerReference = buyerReference.orEmpty(),
+    orderReference = orderReference.orEmpty(),
+    note = note.orEmpty(),
+    seller = seller,
+    buyer = buyer,
+    netMicros = netMicros,
+    taxMicros = taxMicros,
+    grossMicros = grossMicros,
+    status = status,
+    recordedAt = recordedAt,
+    lines = lines.map { it.toCommon() },
+    artefacts = artefacts.map { it.toCommon() },
+    events = events.map { it.toCommon() },
 )
 
 private fun uniffi.bonkc.CustomerImportRecord.toCommon() = CustomerImportReport(

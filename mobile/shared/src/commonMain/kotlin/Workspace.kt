@@ -18,6 +18,24 @@ data class Customer(
     val phone: String = "",
 )
 
+/** The seller this archive issues as. */
+data class Seller(
+    val id: String = "",
+    val name: String = "",
+    val street: String = "",
+    val postal: String = "",
+    val city: String = "",
+    val country: String = "NL",
+    val vat: String = "",
+    val kvk: String = "",
+    val peppol: String = "",
+    val contact: String = "",
+    val email: String = "",
+    val phone: String = "",
+    val defaultCurrency: String = "EUR",
+    val defaultLocale: String = "en",
+)
+
 /** The invoice a credit note corrects. */
 data class PrecedingInvoice(
     val number: String,
@@ -98,6 +116,74 @@ data class IssueResult(
     val pdfError: String = "",
 )
 
+/** One row in the document register. */
+data class DocumentHit(
+    val id: String,
+    val number: String,
+    val direction: String,
+    val party: String,
+    val issueDate: String,
+    val currency: String,
+    val grossMicros: Long,
+    val status: String,
+)
+
+/** One line of a stored document, as recorded. */
+data class DocumentLine(
+    val position: Long,
+    val name: String,
+    val description: String = "",
+    val quantity: String,
+    val unit: String,
+    val unitPriceMicros: Long,
+    val vatCategory: String,
+    val vatRateBp: Int,
+    val lineNetMicros: Long,
+    val taxMicros: Long,
+)
+
+/** One artefact filed under a document. */
+data class DocumentArtefact(
+    val kind: String,
+    val bytesHash: String,
+    val sizeBytes: Long,
+    val renderedAt: String,
+    val rendererVersion: String,
+)
+
+/** One status change on a document. */
+data class DocumentEvent(
+    val kind: String,
+    val at: String,
+    val actor: String,
+    val detail: String = "",
+)
+
+/** A stored document, as the detail screen shows it. */
+data class DocumentDetail(
+    val id: String,
+    val number: String,
+    val direction: String,
+    val docType: String,
+    val currency: String,
+    val issueDate: String,
+    val dueDate: String = "",
+    val deliveryDate: String = "",
+    val buyerReference: String = "",
+    val orderReference: String = "",
+    val note: String = "",
+    val seller: String,
+    val buyer: String,
+    val netMicros: Long,
+    val taxMicros: Long,
+    val grossMicros: Long,
+    val status: String,
+    val recordedAt: String,
+    val lines: List<DocumentLine> = emptyList(),
+    val artefacts: List<DocumentArtefact> = emptyList(),
+    val events: List<DocumentEvent> = emptyList(),
+)
+
 /** Customers, ordered by display name. */
 expect fun listCustomers(): List<Customer>
 
@@ -121,6 +207,18 @@ expect fun draftTotals(draft: Draft): DraftTotals
 
 /** Issues a draft, or returns the findings that stopped it. */
 expect fun issueDraft(draft: Draft): IssueResult
+
+/** Issued documents, best match first; an empty query lists newest first. */
+expect fun listDocuments(query: String): List<DocumentHit>
+
+/** One stored document for the detail screen. */
+expect fun loadDocument(id: String): DocumentDetail
+
+/** The seller this archive issues as. */
+expect fun loadSeller(): Seller
+
+/** Updates the seller's party data. */
+expect fun saveSeller(seller: Seller): Seller
 
 /** A new invoice draft for a customer, dated today and saved. */
 expect fun newDraft(customerId: String): Draft

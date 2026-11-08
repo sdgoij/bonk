@@ -18,6 +18,14 @@ actual fun newDraft(customerId: String): Draft = withUserError { MobileArchiveHo
 
 actual fun issueDraft(draft: Draft): IssueResult = withUserError { MobileArchiveHost.issueDraft(draft) }
 
+actual fun listDocuments(query: String): List<DocumentHit> = withUserError { MobileArchiveHost.listDocuments(query) }
+
+actual fun loadDocument(id: String): DocumentDetail = withUserError { MobileArchiveHost.loadDocument(id) }
+
+actual fun loadSeller(): Seller = withUserError { MobileArchiveHost.loadSeller() }
+
+actual fun saveSeller(seller: Seller): Seller = withUserError { MobileArchiveHost.saveSeller(seller) }
+
 actual fun newId(): String = java.util.UUID.randomUUID().toString()
 
 actual fun customersCsv(): String = withUserError { MobileArchiveHost.customersCsv() }

@@ -18,7 +18,7 @@ use crux::{
     InvoiceTotals, LineId, LocalDate, Money, Party, PhoneNumber, PrecedingInvoice, Quantity, SellerId, Severity,
     TaxTreatment, UnitCode, VatCategory, VatRate,
 };
-use store::{CustomerRecord, DocumentRecord, DocumentStatus, SearchHit, archive::DocumentView};
+use store::{CustomerRecord, DocumentRecord, DocumentStatus, SearchHit, SellerRecord, archive::DocumentView};
 
 /// What the dashboard shows for an open archive.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -126,6 +126,91 @@ pub struct PrecedingInvoiceDto {
     pub number: String,
     /// Preceding invoice issue date, ISO `YYYY-MM-DD`.
     pub issue_date: String,
+}
+
+/// A seller as the settings screen edits it.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct SellerDto {
+    /// Seller identity.
+    pub id: String,
+    /// Registered name.
+    pub name: String,
+    /// Street and number.
+    pub street: Option<String>,
+    /// Postal code.
+    pub postal: Option<String>,
+    /// City.
+    pub city: String,
+    /// ISO 3166-1 alpha-2 country.
+    pub country: String,
+    /// VAT identifier.
+    pub vat: Option<String>,
+    /// Chamber of commerce number.
+    pub kvk: Option<String>,
+    /// Peppol endpoint, `EAS:value`.
+    pub peppol: Option<String>,
+    /// Contact person.
+    pub contact: Option<String>,
+    /// Contact email.
+    pub email: Option<String>,
+    /// Contact phone.
+    pub phone: Option<String>,
+    /// ISO currency this seller issues in.
+    pub default_currency: String,
+    /// Locale this seller prefers.
+    pub default_locale: String,
+}
+
+impl SellerDto {
+    /// Converts a stored seller.
+    pub fn from_record(record: &SellerRecord) -> Self {
+        let party = &record.party;
+        Self {
+            id: record.id.to_string(),
+            name: party.legal_name.clone(),
+            street: party.address.street.clone(),
+            postal: party.address.postal_code.clone(),
+            city: party.address.city.clone(),
+            country: party.address.country.to_string(),
+            vat: party.vat_id.clone(),
+            kvk: party.kvk_number.clone(),
+            peppol: party.peppol_id.clone(),
+            contact: party.contact_name.clone(),
+            email: party.email.clone(),
+            phone: party.phone.clone(),
+            default_currency: record.default_currency.as_str().to_owned(),
+            default_locale: record.default_locale.clone(),
+        }
+    }
+
+    /// Rebuilds the stored seller, normalising the phone like a customer's.
+    pub fn into_record(self) -> Result<SellerRecord, DomainError> {
+        let country = CountryCode::parse(&self.country)?;
+        let mut party = Party::new(
+            self.name,
+            crux::Address {
+                street: self.street,
+                city: self.city,
+                postal_code: self.postal,
+                country,
+            },
+        );
+        party.vat_id = self.vat.map(|value| value.to_ascii_uppercase());
+        party.kvk_number = self.kvk;
+        party.peppol_id = self.peppol;
+        party.contact_name = self.contact;
+        party.email = self.email;
+        party.phone = match self.phone.as_deref().map(str::trim) {
+            Some(raw) if !raw.is_empty() => Some(PhoneNumber::parse(raw, country)?.as_str().to_owned()),
+            _ => None,
+        };
+        Ok(SellerRecord {
+            id: SellerId::parse_str(&self.id)?,
+            party,
+            default_currency: Currency::parse(&self.default_currency)?,
+            default_locale: self.default_locale,
+        })
+    }
 }
 
 /// One line of a draft as a front end edits it.

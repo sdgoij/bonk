@@ -39,6 +39,8 @@ class DraftFocusTest {
         assertEquals(DraftFocus.IssueDate, draftFocus("issue_date", lines))
         assertEquals(DraftFocus.DueDate, draftFocus("due_date", lines))
         assertEquals(DraftFocus.Note, draftFocus("note", lines))
+        assertEquals(DraftFocus.BuyerReference, draftFocus("buyer_reference", lines))
+        assertEquals(DraftFocus.OrderReference, draftFocus("order_reference", lines))
         assertEquals(DraftFocus.Customer, draftFocus("customer.legal_name", lines))
         assertEquals(DraftFocus.Customer, draftFocus("customer.city", lines))
     }

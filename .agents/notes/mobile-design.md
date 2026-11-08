@@ -1399,16 +1399,16 @@ single place to update progress; the tables stay as the plan.
 
 #### M11.4 — Issue and archive (2 weeks)
 
-**Status 2026-11-08:** The draft editor has an Issue button. It hands the draft to `application`, which saves it, validates it, and either issues a numbered document with UBL and PDF artefacts or returns the findings that stopped it. A refusal opens a dialog listing every finding the archive reported, conformance rules included; a finding shows its field path as a chip when the editor has that control, and the dialog says how many fields are outside this screen. A success replaces the editor with the issued document: number, issue date, totals, both artefact hashes, and the PDF error separately when the layout failed.
+**Status 2026-11-08:** A draft issues from the editor, and the archive decides: a refusal lists every finding it reported, conformance rules included, with the ones the editor can answer as chips and a count of those it cannot; a success shows the number, totals and both artefact hashes. The dashboard now carries Seller and Documents. The seller screen edits the party invoices are issued by (the placeholder is created on first open), and the draft editor carries buyer and order references, which is what lets a fresh archive reach a successful issue. The register lists issued documents newest first and searches numbers, parties, references and notes; the detail screen shows the facts, the lines, the totals, both artefacts with hashes, and the status history.
 
-Issuing a mobile draft stops at conformance because the placeholder seller has no address, VAT identifier or Peppol endpoint, and the compact editor has no buyer reference or order reference field. The flow was run on an emulator both ways: the blocked path against the test archive, and the success path against a seeded archive with a complete seller, which issued a numbered document, filed both artefacts, and returned to a draft list with that draft gone.
+The register renders at most 50 rows and says so. A virtualised list needs the scrolling root restructured, which belongs with the adaptive layouts.
 
-The register and detail screens follow, then sharing.
+The flow was run on an emulator: filling the seller, editing a customer's Peppol endpoint, adding a buyer reference and issuing gave a numbered document, and the register, search and detail screens read it back with both artefacts.
 
 - [x] Issue through `application`: validate → UBL → PDF → artefacts → audit
 - [x] Number assigned inside the transaction; no promised number in the UI
 - [ ] Share/save PDF and UBL
-- [ ] Document detail: facts, lines, totals, history, artefacts
+- [x] Document detail: facts, lines, totals, history, artefacts
 - [ ] Search/filter with virtualised results
 - [ ] Golden hash test host vs emulator
 - [ ] PDF opens in the platform viewer

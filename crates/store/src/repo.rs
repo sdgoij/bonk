@@ -122,6 +122,40 @@ pub fn insert_seller(conn: &Connection, seller: &SellerRecord, now: &str) -> Res
     Ok(())
 }
 
+/// Updates a seller's party data.
+///
+/// Documents keep the snapshot taken when they were issued, so an edit here
+/// changes how the next document is drawn, not what an issued one says.
+pub fn update_seller(conn: &Connection, seller: &SellerRecord, now: &str) -> Result<(), StoreError> {
+    let address = dto::address_to_json(&seller.party.address)?;
+    let contact = dto::contact_to_json(&seller.party)?;
+    let updated = conn.execute(
+        "UPDATE seller
+             SET legal_name = ?2, trading_name = ?3, vat_id = ?4, kvk_number = ?5,
+                 peppol_id = ?6, address_json = ?7, contact_json = ?8,
+                 default_currency = ?9, default_locale = ?10,
+                 updated_at = ?11, revision = revision + 1
+         WHERE id = ?1",
+        params![
+            seller.id.to_string(),
+            seller.party.legal_name,
+            seller.party.trading_name,
+            seller.party.vat_id,
+            seller.party.kvk_number,
+            seller.party.peppol_id,
+            address,
+            contact,
+            seller.default_currency.as_str(),
+            seller.default_locale,
+            now,
+        ],
+    )?;
+    if updated == 0 {
+        return Err(StoreError::NotFound(format!("seller {}", seller.id)));
+    }
+    Ok(())
+}
+
 /// Loads a seller.
 pub fn load_seller(conn: &Connection, id: SellerId) -> Result<SellerRecord, StoreError> {
     let key = id.to_string();
