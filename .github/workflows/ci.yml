@@ -101,7 +101,14 @@ jobs:
         with:
           key: mobile-cross
 
-      - uses: android-actions/setup-android@v3
+      # v4 installs `platform-tools` and nothing else by default. v3 ran
+      # `sdkmanager tools`, and Google has removed the legacy `tools` package
+      # from the repository, so that step failed before the NDK was installed.
+      # Naming the cmdline-tools build the runner image already ships (20.0)
+      # keeps the action from downloading its own copy.
+      - uses: android-actions/setup-android@v4
+        with:
+          cmdline-tools-version: "14742923"
 
       - name: NDK r30
         run: sdkmanager --install "ndk;30.0.16248370"
