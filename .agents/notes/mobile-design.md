@@ -1484,8 +1484,9 @@ Each needs a decision before the milestone named, not before the whole project.
    SwiftUI exit ramp. Decide before M11.1.
 2. **32-bit ARM.** Recommendation: no for v1. Revisit only if distribution
    demands it. Decide before M11.7.
-3. **Biometric default.** Recommendation: offer it during onboarding, off until
-   the user enables it; passphrase always works. Decide before M11.2.
+3. **Biometric default.** Decided in ADR-025: offer it during onboarding, off
+   until the user enables it. The key is biometric-only and the passphrase is
+   always the fallback.
 4. **Cloud backup.** Recommendation: exclude the archive from Google/iCloud
    backup; provide explicit encrypted export. Decide before M11.2.
 5. **Mobile issuing.** Recommendation: allow it for a single device. Multi-device
@@ -1611,7 +1612,7 @@ arm64 device remain. Details in `spikes/mobile-determinism.md`.
 | ADR-022 | Mobile client is a Kotlin/Compose Multiplatform shell over the Rust core |
 | ADR-023 | A UI-agnostic `application` crate owns sessions and use cases |
 | ADR-024 | UniFFI 0.32.2 generates Kotlin/JVM (JNA) and Swift bindings; the stale KMP generator is not used; `unsafe` is confined to generated scaffolding in `ffi` |
-| ADR-025 | Mobile device secrets use Android Keystore / iOS Keychain through the `DeviceStore` port; decide biometric-only vs device-credential fallback; `keyring` is desktop-only; UniFFI error fields use `detail`, not `message` |
+| ADR-025 | Mobile device secrets use Android Keystore / iOS Keychain through the `DeviceStore` port; the key is biometric-only with a passphrase fallback; `keyring` is desktop-only; UniFFI error fields use `detail`, not `message`. Accepted 2026-11-08 |
 | ADR-026 | Mobile ships arm64 (and x86_64 for emulators); SQLCipher is cross-built from source or vendored per ABI with checksums |
 
 Also update:
