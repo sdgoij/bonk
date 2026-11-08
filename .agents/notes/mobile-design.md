@@ -1504,6 +1504,10 @@ The width bands are pinned by a host test that fails if a threshold moves, and t
 
 The release APK carries `assets/dexopt/baseline.prof` (7.3 KB) merged from the libraries, and declares `ProfileInstaller`'s initializer and receiver, so an install that did not come through Play still gets the profile on first run; the app now names `androidx.profileinstaller` as its dependency rather than inheriting it. The app's own startup methods are not in that profile, because generating one needs a macrobenchmark run on a rootable or Play-managed device.
 
+`rememberFoldGap` watches the window through `androidx.window` and turns a separating `FoldingFeature` into a `FoldGap`, which screens read through `LocalFoldGap`. A vertical fold moves the list-detail split onto the hinge, with a gap the width of the strip instead of the divider; a horizontal fold in tabletop posture puts the draft preview on the upper half and the form with its totals and findings below. With no fold the layout is exactly what it was. The pure part, `paneSplit`, is covered by host tests: the usual two-fifths split without a fold, the hinge-aligned split, a horizontal fold leaving the side-by-side split alone, a fold at the edge or one that leaves a pane under 160 dp falling back, and a gap that never runs backwards.
+
+Run on the API 33 tablet emulator: the app started, unlocked, and laid the register out in two panes exactly as before, and the screenshot images still match, because a flat device reports no fold. The fold path itself cannot be exercised here: these emulator images do not produce a fold posture, so it awaits a foldable device or a test that injects a `FoldingFeature`.
+
 Run on an API 33 AVD with a 1280x800 dp window: the images matched on a second run. The same test cannot run on the API 37 images: the Compose test rule starts Espresso, whose input injection looks up `InputManager.getInstance`, a method API 37 removed, so the run fails before any test body executes.
 
 CI has an `android` job that builds both ABIs with the bindings, runs the shared Kotlin host tests, checks the exported symbol and the page alignment, assembles the debug pair and the release APK, and guards the universal APK's size at 32 MiB. An `android-instrumented` job installs those APKs on an API 33 tablet emulator and runs the golden artefact hashes and the screenshot images, so a tag cannot publish past a failing device test. The universal release APK is 30.5 MB; the §6.8 budget is a per-ABI Play download, which needs a bundle measurement that this APK cannot stand in for. A tag's release now carries `bonk-android.apk` beside the desktop archives and in `SHA256SUMS`, signed with the debug key until there is a release key.
@@ -1514,7 +1518,8 @@ What TalkBack announces has not been verified: the rows keep Material's clickabl
 - [x] Two-pane list-detail for customers and documents, each pane scrolling on its own
 - [x] Expanded editor: form beside a panel with the totals, findings and issue action
 - [x] Expanded editor: rendered invoice preview pane
-- [ ] Foldable hinge avoidance and posture-aware split
+- [x] Foldable hinge: panes split at a vertical hinge, tabletop puts the preview above the controls
+- [ ] Fold behaviour verified on a foldable device (none available in this environment)
 - [x] Font scale 200%, dark/light, RTL layout
 - [x] 48 dp touch targets on every clickable control
 - [ ] TalkBack traversal of the two-pane layouts and the findings chips

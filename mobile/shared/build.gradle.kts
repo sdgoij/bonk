@@ -36,6 +36,7 @@ kotlin {
             implementation(libs.androidx.biometric)
             implementation(libs.androidx.documentfile)
             implementation(libs.androidx.fragment.ktx)
+            implementation(libs.androidx.window)
             implementation(libs.kotlinx.coroutines.android)
             // The AAR carries libjnidispatch.so for the Android ABIs.
             implementation("net.java.dev.jna:jna:${libs.versions.jna.get()}@aar")

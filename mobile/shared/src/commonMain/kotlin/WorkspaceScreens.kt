@@ -306,6 +306,10 @@ fun DraftEditorScreen(
     // A wide window keeps the totals, the findings and the preview beside the
     // form instead of below it.
     val expanded = LocalWindowWidth.current.isExpanded
+    // A half-open foldable with a horizontal fold is a tabletop: the preview
+    // belongs on the upper half and the controls below, not across the hinge.
+    val tabletop = LocalFoldGap.current
+        ?.takeIf { expanded && it.orientation == FoldOrientation.Horizontal }
 
     // Tapping a finding reveals its control. A customer finding can only be
     // answered by choosing another customer, so it opens the picker instead of
@@ -451,9 +455,9 @@ fun DraftEditorScreen(
         }
     }
 
-    val summary: @Composable () -> Unit = {
+    val summary: @Composable (Boolean) -> Unit = { showPreview ->
         Column(Modifier.fillMaxWidth()) {
-            if (expanded) {
+            if (expanded && showPreview) {
                 DraftPreviewPane(preview, previewError)
             }
             totals?.let {
@@ -512,7 +516,27 @@ fun DraftEditorScreen(
         }
     }
 
-    if (expanded) {
+    if (tabletop != null) {
+        Column(Modifier.fillMaxSize()) {
+            ScreenHeader(strings.draft, onBack) { }
+            Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState())) {
+                DraftPreviewPane(preview, previewError)
+            }
+            Spacer(Modifier.height(tabletop.sizeDp.dp))
+            Row(
+                modifier = Modifier.weight(2f).fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(16.dp),
+            ) {
+                Column(Modifier.weight(3f).fillMaxHeight().verticalScroll(rememberScrollState())) {
+                    fields()
+                }
+                VerticalDivider()
+                Column(Modifier.weight(2f).fillMaxHeight().verticalScroll(rememberScrollState())) {
+                    summary(false)
+                }
+            }
+        }
+    } else if (expanded) {
         Column(Modifier.fillMaxSize()) {
             ScreenHeader(strings.draft, onBack) { }
             Row(
@@ -524,7 +548,7 @@ fun DraftEditorScreen(
                 }
                 VerticalDivider()
                 Column(Modifier.weight(2f).fillMaxHeight().verticalScroll(rememberScrollState())) {
-                    summary()
+                    summary(true)
                 }
             }
         }
@@ -532,7 +556,7 @@ fun DraftEditorScreen(
         Column(Modifier.fillMaxWidth()) {
             ScreenHeader(strings.draft, onBack) { }
             fields()
-            summary()
+            summary(false)
         }
     }
 

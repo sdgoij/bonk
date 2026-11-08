@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
@@ -126,6 +127,8 @@ fun App() {
     var busy by remember { mutableStateOf(false) }
     var interactions by remember { mutableStateOf(0) }
     val scope = rememberCoroutineScope()
+    // Null on anything that does not fold, which keeps every other layout as it was.
+    val fold = rememberFoldGap()
 
     fun touch() {
         interactions++
@@ -362,6 +365,7 @@ fun App() {
         Surface(modifier = Modifier.fillMaxSize()) {
             BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
                 val width = WindowWidth.of(maxWidth)
+                val windowWidthDp = maxWidth.value
                 val wide = width.isAtLeastMedium
                 // A list that keeps its detail beside it, and the register's lazy
                 // rows, need a bounded height; the other screens scroll as a column.
@@ -545,6 +549,8 @@ fun App() {
                                             CustomerPanes(
                                                 selected = selectedCustomer,
                                                 version = customersVersion,
+                                                windowWidthDp = windowWidthDp,
+                                                fold = fold,
                                                 onBack = { screen = Screen.Unlocked },
                                                 onSelect = { selectedCustomer = it },
                                                 onSaved = { customersVersion++ },
@@ -562,6 +568,8 @@ fun App() {
                                             CustomerPanes(
                                                 selected = selectedCustomer ?: current.customer,
                                                 version = customersVersion,
+                                                windowWidthDp = windowWidthDp,
+                                                fold = fold,
                                                 onBack = { screen = Screen.Unlocked },
                                                 onSelect = { selectedCustomer = it },
                                                 onSaved = { customersVersion++ },
@@ -599,6 +607,8 @@ fun App() {
                                                 state = register,
                                                 selectedId = selectedDocument,
                                                 version = documentsVersion,
+                                                windowWidthDp = windowWidthDp,
+                                                fold = fold,
                                                 onBack = { screen = Screen.Unlocked },
                                                 onSelect = { selectedDocument = it },
                                                 onChanged = { documentsVersion++ },
@@ -617,6 +627,8 @@ fun App() {
                                                 state = register,
                                                 selectedId = selectedDocument ?: current.id,
                                                 version = documentsVersion,
+                                                windowWidthDp = windowWidthDp,
+                                                fold = fold,
                                                 onBack = { screen = Screen.Unlocked },
                                                 onSelect = { selectedDocument = it },
                                                 onChanged = { documentsVersion++ },
@@ -1162,13 +1174,16 @@ private fun Screen.usesShell(): Boolean =
 private fun CustomerPanes(
     selected: Customer?,
     version: Int,
+    windowWidthDp: Float,
+    fold: FoldGap?,
     onBack: () -> Unit,
     onSelect: (Customer?) -> Unit,
     onSaved: () -> Unit,
     onInteraction: () -> Unit,
 ) {
+    val split = paneSplit(windowWidthDp, fold)
     Row(Modifier.fillMaxSize()) {
-        Box(Modifier.weight(2f).fillMaxHeight().verticalScroll(rememberScrollState())) {
+        Box(Modifier.weight(split.listWeight).fillMaxHeight().verticalScroll(rememberScrollState())) {
             CustomerListScreen(
                 onBack = onBack,
                 onEdit = onSelect,
@@ -1178,8 +1193,8 @@ private fun CustomerPanes(
                 version = version,
             )
         }
-        VerticalDivider()
-        Box(Modifier.weight(3f).fillMaxHeight().verticalScroll(rememberScrollState())) {
+        if (split.gapDp > 0f) Spacer(Modifier.width(split.gapDp.dp)) else VerticalDivider()
+        Box(Modifier.weight(split.detailWeight).fillMaxHeight().verticalScroll(rememberScrollState())) {
             val current = selected
             if (current == null) {
                 EmptyPane(strings.chooseCustomerToEdit)
@@ -1207,13 +1222,16 @@ private fun DocumentPanes(
     state: DocumentRegisterState,
     selectedId: String?,
     version: Int,
+    windowWidthDp: Float,
+    fold: FoldGap?,
     onBack: () -> Unit,
     onSelect: (String?) -> Unit,
     onChanged: () -> Unit,
     onInteraction: () -> Unit,
 ) {
+    val split = paneSplit(windowWidthDp, fold)
     Row(Modifier.fillMaxSize()) {
-        Box(Modifier.weight(2f).fillMaxHeight()) {
+        Box(Modifier.weight(split.listWeight).fillMaxHeight()) {
             DocumentListScreen(
                 state = state,
                 onBack = onBack,
@@ -1223,8 +1241,8 @@ private fun DocumentPanes(
                 version = version,
             )
         }
-        VerticalDivider()
-        Box(Modifier.weight(3f).fillMaxHeight().verticalScroll(rememberScrollState())) {
+        if (split.gapDp > 0f) Spacer(Modifier.width(split.gapDp.dp)) else VerticalDivider()
+        Box(Modifier.weight(split.detailWeight).fillMaxHeight().verticalScroll(rememberScrollState())) {
             if (selectedId == null) {
                 EmptyPane(strings.chooseDocumentToOpen)
             } else {
