@@ -8,8 +8,13 @@
 #   just gate       everything CI runs, before committing
 #   just build      the shippable release binary
 
+# The recipes are POSIX and the Cargo wrapper picks up Strawberry Perl, so every
+# platform runs `sh`. `set windows-shell` was deprecated in just 1.56 in favour
+# of the `[windows]` attribute on `set shell`, and `set shell` itself covers
+# Windows from that version on, so one setting is enough. The minimum version
+# makes an older just say so rather than mis-parse the file.
+set minimum-version := "1.56.0"
 set shell := ["sh", "-cu"]
-set windows-shell := ["sh", "-cu"]
 
 cargo := if os_family() == "windows" { "sh tools/cargo-strawberry.sh" } else { "cargo" }
 
@@ -93,6 +98,8 @@ mobile-release:
 # through run-as, which a debuggable build allows. The device keeps whatever
 # archive it had in files/archive.bak. Pass a serial when more than one device
 # is attached; a debug build must already be installed (`just mobile-android`).
+#
+# Usage: just demo-android [serial]
 demo-android serial="":
     rm -rf target/demo-android
     mkdir -p target/demo-android
