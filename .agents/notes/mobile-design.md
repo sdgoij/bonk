@@ -1457,6 +1457,12 @@ A restore takes both picked files into app-private storage, unlocks that pair wi
 
 Run on a device: a pair of the wrong files was refused with the keystore message and the archive still held an edit made after the backup was taken; picking the real pair restored the earlier state, left both `.previous` files beside it, and put the restore in the chain.
 
+Settings holds the seller, the document language, the recovery key and the audit chain head, and the dashboard lost the three buttons that moved there; Diagnostics now renders below the Settings card. The document language is the seller's `default_locale`, which is where the desktop keeps it too, so the FFI reads it when it issues instead of taking a language per document. The chain head shows the newest event's position, time and hash.
+
+The app's own language is still English. Localizing the strings is the remaining half of this item and is tracked on its own, because it touches every screen while the setting above changes only what a document prints.
+
+Run on an emulator: the Settings screen showed the seller and its VAT identifier, the two language chips, the recovery action, and 788 chain events with their timestamp and hash; switching the document language saved and stayed selected, and Edit seller returned to Settings.
+
 Run on an emulator: a seeded UBL picked from Downloads reported its number and "Not matched to a customer" (the document's seller is this archive), a second import of the same bytes reported the duplicate, a view intent delivered before unlock landed on the Import screen after unlocking, and a send intent delivered to the running app replaced the result on screen without a restart. The Received side listed the demo archive's inbound documents with `not matched` on the parked ones; matching one to a customer, approving it and marking it paid walked its status through the register, and returning from the document kept the Received side.
 
 - [x] SAF import and `ACTION_VIEW` / `ACTION_SEND` import
@@ -1464,7 +1470,8 @@ Run on an emulator: a seeded UBL picked from Downloads reported its number and "
 - [x] Approve and mark-paid actions
 - [x] Backup export (verify, then stream) and two-file restore
 - [x] Recovery-kit export
-- [ ] Settings: seller, UI language, document language, audit chain head
+- [x] Settings: seller, document language, audit chain head
+- [ ] Settings: UI language, English and Dutch, for the app's own strings
 - [x] Free-space preflight for backup
 
 #### M11.6 — Tablet, accessibility, performance (2 weeks)

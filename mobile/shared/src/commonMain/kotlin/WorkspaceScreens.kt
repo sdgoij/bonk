@@ -1013,6 +1013,125 @@ private fun megabytes(bytes: Long): String = "${(bytes + 1_048_575) / 1_048_576}
 
 private fun kilobytes(bytes: Long): Long = (bytes + 1023) / 1024
 
+/** The archive's own settings: who issues, what documents print in, and the chain. */
+@Composable
+fun SettingsScreen(
+    onBack: () -> Unit,
+    onSeller: () -> Unit,
+    onAddRecovery: () -> Unit,
+    onInteraction: () -> Unit,
+) {
+    var seller by remember { mutableStateOf<Seller?>(null) }
+    var chain by remember { mutableStateOf<ChainHead?>(null) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var saved by remember { mutableStateOf(false) }
+    var busy by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+
+    LaunchedEffect(Unit) {
+        val loaded = withContext(Dispatchers.IO) { runCatching { loadSeller() to chainHead() } }
+        loaded.onSuccess { pair ->
+            seller = pair.first
+            chain = pair.second
+        }.onFailure { error = it.message ?: it.toString() }
+    }
+
+    fun chooseLocale(locale: String) {
+        val current = seller ?: return
+        if (busy || current.defaultLocale == locale) return
+        busy = true
+        error = null
+        saved = false
+        onInteraction()
+        scope.launch {
+            val result = withContext(Dispatchers.IO) {
+                runCatching { saveSeller(current.copy(defaultLocale = locale)) }
+            }
+            busy = false
+            result.onSuccess { seller = it; saved = true }
+                .onFailure { error = it.message ?: it.toString() }
+        }
+    }
+
+    Column(Modifier.fillMaxWidth()) {
+        ScreenHeader("Settings", onBack) { }
+
+        Text("Seller", style = MaterialTheme.typography.titleMedium)
+        val current = seller
+        if (current == null) {
+            CircularProgressIndicator()
+        } else {
+            Text(current.name, style = MaterialTheme.typography.bodyMedium)
+            Text(
+                current.vat.ifBlank { "No VAT identifier yet" },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+        OutlinedButton(onClick = onSeller, modifier = Modifier.fillMaxWidth()) {
+            Text("Edit seller")
+        }
+
+        Spacer(Modifier.height(20.dp))
+        Text("Document language", style = MaterialTheme.typography.titleMedium)
+        Text(
+            "What an issued invoice prints in. This is the document's language, not the app's.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(4.dp))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FilterChip(
+                selected = current != null && !current.defaultLocale.startsWith("nl"),
+                onClick = { chooseLocale("en") },
+                label = { Text("English") },
+            )
+            FilterChip(
+                selected = current != null && current.defaultLocale.startsWith("nl"),
+                onClick = { chooseLocale("nl-NL") },
+                label = { Text("Nederlands") },
+            )
+        }
+        if (saved) {
+            Text("Saved.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+        }
+
+        Spacer(Modifier.height(20.dp))
+        Text("Recovery", style = MaterialTheme.typography.titleMedium)
+        Text(
+            "A recovery key opens the archive when the passphrase is lost. It is shown once.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(8.dp))
+        OutlinedButton(onClick = onAddRecovery, modifier = Modifier.fillMaxWidth()) {
+            Text("Add recovery key")
+        }
+
+        Spacer(Modifier.height(20.dp))
+        Text("Audit chain", style = MaterialTheme.typography.titleMedium)
+        val head = chain
+        if (head == null) {
+            Text(
+                "No events yet. Every issue, match and status change appends to it.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        } else {
+            Fact("Events", head.seq.toString())
+            Fact("Recorded", head.at)
+            Spacer(Modifier.height(4.dp))
+            Text(head.hash, style = MaterialTheme.typography.labelSmall)
+        }
+
+        error?.let {
+            Spacer(Modifier.height(12.dp))
+            Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+        }
+    }
+}
+
 /** The party invoices are issued by. */
 @Composable
 fun SellerEditScreen(onBack: () -> Unit, onInteraction: () -> Unit) {

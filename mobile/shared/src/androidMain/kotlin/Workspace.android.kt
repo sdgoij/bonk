@@ -52,6 +52,8 @@ actual fun importDocument(name: String, bytes: ByteArray): ImportReport = withUs
 
 actual fun writeBackup(): BackupExport = withUserError { MobileArchiveHost.writeBackup() }
 
+actual fun chainHead(): ChainHead? = withUserError { MobileArchiveHost.chainHead() }
+
 actual fun restoreArchive(passphrase: String): ArchiveSummary = withUserError {
     MobileArchiveHost.restore(passphrase)
 }

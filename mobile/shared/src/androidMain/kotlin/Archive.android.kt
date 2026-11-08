@@ -232,6 +232,11 @@ object MobileArchiveHost {
         return File(database).length()
     }
 
+    fun chainHead(): ChainHead? {
+        val opened = archive ?: error("the archive is not open")
+        return opened.chainHead()?.toCommon()
+    }
+
     fun stagingPaths(): Pair<String, String> {
         val base = staging ?: error("the archive host is not attached")
         base.mkdirs()
@@ -502,6 +507,8 @@ private fun uniffi.bonkc.ImportRecord.toCommon() = ImportReport(
 )
 
 private fun uniffi.bonkc.BackupRecord.toCommon() = BackupExport(path = path, bytes = bytes)
+
+private fun uniffi.bonkc.ChainHeadRecord.toCommon() = ChainHead(seq = seq, hash = hash, at = at)
 
 private fun uniffi.bonkc.DocumentEventRecord.toCommon() = DocumentEvent(
     kind = kind,

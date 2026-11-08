@@ -255,6 +255,16 @@ data class ImportReport(
 /** A verified copy written for export. */
 data class BackupExport(val path: String, val bytes: Long)
 
+/** The newest link in the archive's audit chain. */
+data class ChainHead(
+    val seq: Long,
+    val hash: String,
+    val at: String,
+)
+
+/** The newest link in the audit chain, or nothing on an archive with no events. */
+expect fun chainHead(): ChainHead?
+
 /** Writes a verified copy of the archive, for the user to keep. */
 expect fun writeBackup(): BackupExport
 

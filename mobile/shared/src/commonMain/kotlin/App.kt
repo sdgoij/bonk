@@ -79,6 +79,7 @@ private sealed interface Screen {
     data class DocumentView(val id: String) : Screen
     data object Import : Screen
     data object Backup : Screen
+    data object Settings : Screen
     data object Seller : Screen
 }
 
@@ -488,17 +489,12 @@ fun App() {
                                         screen = Screen.Unlock
                                     },
                                     onForgetDevice = ::forgetDeviceKey,
-                                    onAddRecovery = {
-                                        passphrase = ""
-                                        error = null
-                                        screen = Screen.AddRecovery
-                                    },
                                     onCustomers = { screen = Screen.Customers },
                                     onDrafts = { screen = Screen.Drafts },
                                     onDocuments = { screen = Screen.Documents },
-                                    onSeller = { screen = Screen.Seller },
                                     onImport = { screen = Screen.Import },
                                     onBackup = { screen = Screen.Backup },
+                                    onSettings = { screen = Screen.Settings },
                                 )
                                 Screen.Customers -> CustomerListScreen(
                                     onBack = { screen = Screen.Unlocked },
@@ -560,14 +556,20 @@ fun App() {
                                     onInteraction = ::touch,
                                 )
                                 Screen.Seller -> SellerEditScreen(
+                                    onBack = { screen = Screen.Settings },
+                                    onInteraction = ::touch,
+                                )
+                                Screen.Settings -> SettingsScreen(
                                     onBack = { screen = Screen.Unlocked },
+                                    onSeller = { screen = Screen.Seller },
+                                    onAddRecovery = { screen = Screen.AddRecovery },
                                     onInteraction = ::touch,
                                 )
                             }
                         }
                     }
 
-                    if (screen is Screen.Unlocked) {
+                    if (screen is Screen.Settings) {
                         Spacer(Modifier.height(24.dp))
                         Diagnostics(
                             modifier = Modifier.widthIn(max = contentWidth).fillMaxWidth(),
@@ -803,13 +805,12 @@ private fun Unlocked(
     notice: String?,
     onLock: () -> Unit,
     onForgetDevice: () -> Unit,
-    onAddRecovery: () -> Unit,
     onCustomers: () -> Unit,
     onDrafts: () -> Unit,
     onDocuments: () -> Unit,
-    onSeller: () -> Unit,
     onImport: () -> Unit,
     onBackup: () -> Unit,
+    onSettings: () -> Unit,
 ) {
     Text("Unlocked", style = MaterialTheme.typography.titleLarge)
     Spacer(Modifier.height(16.dp))
@@ -843,15 +844,15 @@ private fun Unlocked(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Button(onClick = onDocuments, modifier = Modifier.weight(1f)) { Text("Documents") }
-        Button(onClick = onSeller, modifier = Modifier.weight(1f)) { Text("Seller") }
+        Button(onClick = onImport, modifier = Modifier.weight(1f)) { Text("Import invoice") }
     }
     Spacer(Modifier.height(8.dp))
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Button(onClick = onImport, modifier = Modifier.weight(1f)) { Text("Import invoice") }
         Button(onClick = onBackup, modifier = Modifier.weight(1f)) { Text("Backup") }
+        Button(onClick = onSettings, modifier = Modifier.weight(1f)) { Text("Settings") }
     }
     Spacer(Modifier.height(8.dp))
     Button(
@@ -865,9 +866,6 @@ private fun Unlocked(
         TextButton(onClick = onForgetDevice, modifier = Modifier.fillMaxWidth()) {
             Text("Forget this device")
         }
-    }
-    TextButton(onClick = onAddRecovery, modifier = Modifier.fillMaxWidth()) {
-        Text("Add recovery key")
     }
 }
 

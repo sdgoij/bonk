@@ -333,6 +333,17 @@ pub struct BackupRecord {
     pub bytes: i64,
 }
 
+/// The newest link in the audit chain.
+#[derive(uniffi::Record)]
+pub struct ChainHeadRecord {
+    /// Position of the newest event.
+    pub seq: i64,
+    /// Its hash, which the next event builds on.
+    pub hash: String,
+    /// When it was recorded, RFC 3339.
+    pub at: String,
+}
+
 impl From<BackupExport> for BackupRecord {
     fn from(dto: BackupExport) -> Self {
         Self {
@@ -993,17 +1004,17 @@ impl Archive {
     /// Issues a draft, or returns the findings that stopped it.
     ///
     /// The draft is saved first, so an edit still in the editor is what gets
-    /// issued. The mobile shell is English and uses the built-in layout until
-    /// the settings screen exists.
+    /// issued. The document speaks the seller's locale, which is where the
+    /// settings screen keeps the choice; nothing is repeated per document.
     pub fn issue_draft(&self, draft: DraftRecord) -> Result<IssueRecord, AppError> {
         let mut guard = self.inner.lock().map_err(|_| AppError::Closed)?;
         let archive = guard.as_mut().ok_or(AppError::Closed)?;
-        let outcome = archive.issue(
-            &DraftDto::from(draft),
-            application::DocumentLanguage::English,
-            None,
-            "mobile",
-        )?;
+        let locale = archive
+            .seller()
+            .map(|seller| seller.default_locale)
+            .unwrap_or_else(|_| "en".to_owned());
+        let language = application::DocumentLanguage::from_locale(&locale);
+        let outcome = archive.issue(&DraftDto::from(draft), language, None, "mobile")?;
         Ok(outcome.into())
     }
 
@@ -1182,6 +1193,19 @@ impl Archive {
         let guard = self.inner.lock().map_err(|_| AppError::Closed)?;
         let archive = guard.as_ref().ok_or(AppError::Closed)?;
         Ok(archive.recovery_note())
+    }
+
+    /// The newest link in the audit chain; nothing on an archive with no events.
+    pub fn chain_head(&self) -> Result<Option<ChainHeadRecord>, AppError> {
+        let guard = self.inner.lock().map_err(|_| AppError::Closed)?;
+        let archive = guard.as_ref().ok_or(AppError::Closed)?;
+        Ok(
+            store::audit::head(archive.database().connection())?.map(|head| ChainHeadRecord {
+                seq: head.seq,
+                hash: head.hash,
+                at: head.at,
+            }),
+        )
     }
 }
 
@@ -1940,14 +1964,21 @@ mod tests {
         assert_eq!(archive.seller().expect("the seller").city, "Delft");
     }
 
-    #[test]
-    fn an_issued_document_crosses_the_ffi() {
+    /// A seller and a customer the Dutch and Peppol profiles accept, so issuing
+    /// gets past them; the seller speaks `locale`.
+    fn issue_ready(
+        locale: &str,
+    ) -> (
+        tempfile::TempDir,
+        Arc<Archive>,
+        store::SellerRecord,
+        store::CustomerRecord,
+    ) {
         let directory = tempfile::TempDir::new().expect("a temporary directory");
         let database = directory.path().join("bonk.db").display().to_string();
         let keystore = directory.path().join("keystore.bin").display().to_string();
         let archive = Archive::create(database, keystore, "passphrase".to_owned()).expect("a new archive");
 
-        // Parties the Dutch and Peppol profiles accept, so issuing gets past them.
         let now = "2026-11-08T12:00:00Z";
         let mut seller_party = Party::new("Seller BV", Address::new("Delft", CountryCode::NL));
         seller_party.address.street = Some("Main 1".to_owned());
@@ -1958,7 +1989,7 @@ mod tests {
             id: crux::SellerId::new(),
             party: seller_party,
             default_currency: Currency::EUR,
-            default_locale: "en".to_owned(),
+            default_locale: locale.to_owned(),
         };
         let mut buyer_party = Party::new("Buyer BV", Address::new("Utrecht", CountryCode::NL));
         buyer_party.peppol_id = Some("0088:9876543210987".to_owned());
@@ -1972,8 +2003,12 @@ mod tests {
             store::insert_seller(app.database().connection(), &seller, now).expect("a seller");
             store::insert_customer(app.database().connection(), &customer, now).expect("a customer");
         }
+        (directory, archive, seller, customer)
+    }
 
-        let draft = |item: &str| DraftRecord {
+    /// One line at 100.00, dated 2026-11-08.
+    fn consultancy(seller: &store::SellerRecord, customer: &store::CustomerRecord, item: &str) -> DraftRecord {
+        DraftRecord {
             id: crux::DocumentId::new().to_string(),
             seller_id: seller.id.to_string(),
             customer_id: customer.id.to_string(),
@@ -2002,7 +2037,47 @@ mod tests {
                 exemption_reason: None,
                 exemption_reason_code: None,
             }],
+        }
+    }
+
+    #[test]
+    fn the_seller_locale_decides_what_the_document_says() {
+        let hash_in = |locale: &str| -> String {
+            let (_directory, archive, seller, customer) = issue_ready(locale);
+            let issued = archive
+                .issue_draft(consultancy(&seller, &customer, "Consultancy"))
+                .expect("an issue");
+            issued.pdf_sha256.expect("a pdf hash")
         };
+
+        assert_ne!(
+            hash_in("en"),
+            hash_in("nl-NL"),
+            "the form prints the language the seller is set to"
+        );
+    }
+
+    #[test]
+    fn the_chain_head_follows_what_the_archive_does() {
+        let (_directory, archive, seller, customer) = issue_ready("en");
+        assert!(
+            archive.chain_head().expect("a head read").is_none(),
+            "nothing has happened yet"
+        );
+
+        archive
+            .issue_draft(consultancy(&seller, &customer, "Consultancy"))
+            .expect("an issue");
+        let after = archive.chain_head().expect("a head read").expect("a head");
+        assert!(after.seq > 0);
+        assert_eq!(after.hash.len(), 64);
+        assert!(after.at.starts_with("20"), "{}", after.at);
+    }
+
+    #[test]
+    fn an_issued_document_crosses_the_ffi() {
+        let (_directory, archive, seller, customer) = issue_ready("en");
+        let draft = |item: &str| consultancy(&seller, &customer, item);
 
         // A blocking finding comes back as data, and nothing is filed.
         let blocked = archive.issue_draft(draft("")).expect("an issue attempt");
