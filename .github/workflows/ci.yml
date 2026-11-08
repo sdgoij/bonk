@@ -223,12 +223,7 @@ jobs:
             # rather than taking a tablet's native resolution.
             adb shell wm size 1800x1200
             sleep 3
-            export BONK_APK=mobile/apks/androidApp-debug.apk
-            export BONK_TEST_APK=mobile/apks/androidApp-debug-androidTest.apk
-            sh tools/run-android-test.sh - com.github.sdgoij.bonk.ArtefactDeterminismTest
-            sh tools/run-android-test.sh - com.github.sdgoij.bonk.ShellScreenshotTest
-            sh tools/run-android-test.sh - com.github.sdgoij.bonk.BudgetTest
-            BONK_APK=mobile/apks/androidApp-release.apk sh tools/measure-cold-start.sh -
+            sh tools/run-emulator-suite.sh mobile/apks
 
   plain:
     name: unencrypted fallback builds

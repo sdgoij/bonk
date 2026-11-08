@@ -48,8 +48,10 @@ if ! adb_of get-state >/dev/null 2>&1; then
     exit 1
 fi
 
-adb_of install -r "$apk" >/dev/null
-adb_of install -r "$test_apk" >/dev/null
+if [ "${BONK_SKIP_INSTALL:-0}" != "1" ]; then
+    adb_of install -r "$apk" >/dev/null
+    adb_of install -r "$test_apk" >/dev/null
+fi
 
 # `am instrument` exits 0 even when a test fails, so the output carries the verdict.
 result=$(adb_of shell am instrument -w -e class "$test_class" \
