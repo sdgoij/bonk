@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The rendered documents a share or a viewer may read. They live in the cache,
+     so nothing here is backed up or kept after the app is uninstalled. -->
+<paths>
+    <cache-path name="artefacts" path="artefacts/" />
+</paths>

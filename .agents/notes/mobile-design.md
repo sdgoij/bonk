@@ -1415,13 +1415,15 @@ The register renders at most 50 rows and says so. A virtualised list needs the s
 
 The flow was run on an emulator: filling the seller, editing a customer's Peppol endpoint, adding a buyer reference and issuing gave a numbered document, and the register, search and detail screens read it back with both artefacts.
 
+Share, Save and Open fetch the artefact on the IO dispatcher and hand it to the platform through a cache copy behind the file provider. The picker guard holds the background lock until the activity restarts, so the chooser, the save dialog and an external viewer all return to the screen the user left. Android resolves a viewer for PDF but not for UBL, so Open reports that nothing can display the file instead of dropping the user on the launcher. Both saved files hashed to the bytes the archive recorded: a seeded UBL matched the hash on its detail screen, and a freshly issued PDF matched its hash after opening in Drive's viewer and after saving through the platform picker.
+
 - [x] Issue through `application`: validate → UBL → PDF → artefacts → audit
 - [x] Number assigned inside the transaction; no promised number in the UI
-- [ ] Share/save PDF and UBL
+- [x] Share/save PDF and UBL
 - [x] Document detail: facts, lines, totals, history, artefacts
 - [ ] Search/filter with virtualised results
 - [ ] Golden hash test host vs emulator
-- [ ] PDF opens in the platform viewer
+- [x] PDF opens in the platform viewer
 
 #### M11.5 — Import and settings (2 weeks)
 

@@ -26,6 +26,10 @@ actual fun loadSeller(): Seller = withUserError { MobileArchiveHost.loadSeller()
 
 actual fun saveSeller(seller: Seller): Seller = withUserError { MobileArchiveHost.saveSeller(seller) }
 
+actual fun documentArtefact(id: String, kind: String): ByteArray = withUserError {
+    MobileArchiveHost.documentArtefact(id, kind)
+}
+
 actual fun newId(): String = java.util.UUID.randomUUID().toString()
 
 actual fun customersCsv(): String = withUserError { MobileArchiveHost.customersCsv() }

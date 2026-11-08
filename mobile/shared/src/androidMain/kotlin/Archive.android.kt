@@ -175,6 +175,11 @@ object MobileArchiveHost {
         return opened.document(id).toCommon()
     }
 
+    fun documentArtefact(id: String, kind: String): ByteArray {
+        val opened = archive ?: error("the archive is not open")
+        return opened.documentArtefact(id, kind)
+    }
+
     fun loadSeller(): Seller {
         val opened = archive ?: error("the archive is not open")
         return opened.seller().toCommon()

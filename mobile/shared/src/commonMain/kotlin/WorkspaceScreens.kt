@@ -583,6 +583,7 @@ private fun FindingEntry(
 @Composable
 fun IssueResultScreen(result: IssueResult, onDone: () -> Unit) {
     val issued = result.issued ?: return
+    var message by remember { mutableStateOf<String?>(null) }
     Column(Modifier.fillMaxWidth()) {
         ScreenHeader("Issued", onDone) { }
         Text(issued.number, style = MaterialTheme.typography.headlineMedium)
@@ -602,12 +603,14 @@ fun IssueResultScreen(result: IssueResult, onDone: () -> Unit) {
         Spacer(Modifier.height(12.dp))
         Text("Filed artefacts", style = MaterialTheme.typography.titleMedium)
         if (result.ublSha256.isNotBlank()) {
-            Text("UBL", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Text(result.ublSha256, style = MaterialTheme.typography.labelSmall)
+            ArtefactBlock("UBL", issued.id, issued.number, "ubl", result.ublSha256) { message = it }
         }
         if (result.pdfSha256.isNotBlank()) {
-            Text("PDF", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Text(result.pdfSha256, style = MaterialTheme.typography.labelSmall)
+            ArtefactBlock("PDF", issued.id, issued.number, "pdf", result.pdfSha256) { message = it }
+        }
+        message?.let { text ->
+            Spacer(Modifier.height(4.dp))
+            Text(text, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
         }
         if (result.pdfError.isNotBlank()) {
             Spacer(Modifier.height(8.dp))
@@ -630,6 +633,88 @@ fun IssueResultScreen(result: IssueResult, onDone: () -> Unit) {
             }
         }
     }
+}
+
+/** One artefact's hash and the platform actions that hand it out. */
+@Composable
+private fun ArtefactBlock(
+    label: String,
+    documentId: String,
+    number: String,
+    kind: String,
+    hash: String,
+    onMessage: (String?) -> Unit,
+) {
+    Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    Text(hash, style = MaterialTheme.typography.labelSmall)
+    ArtefactActions(documentId, number, kind, onMessage)
+    Spacer(Modifier.height(8.dp))
+}
+
+/**
+ * Fetches the artefact when a button is pressed, so the screen never keeps the
+ * bytes in composition state.
+ */
+@Composable
+private fun ArtefactActions(
+    documentId: String,
+    number: String,
+    kind: String,
+    onMessage: (String?) -> Unit,
+) {
+    val io = rememberArtefactIo()
+    val scope = rememberCoroutineScope()
+    var busy by remember { mutableStateOf(false) }
+
+    fun run(action: (ByteArray, String, String, (String) -> Unit) -> Unit) {
+        if (busy) return
+        busy = true
+        onMessage(null)
+        scope.launch {
+            val bytes = withContext(Dispatchers.IO) { runCatching { documentArtefact(documentId, kind) } }
+            busy = false
+            bytes
+                .onSuccess { action(it, artefactFileName(number, kind), artefactMime(kind), onMessage) }
+                .onFailure { onMessage(it.message ?: it.toString()) }
+        }
+    }
+
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        OutlinedButton(onClick = { run(io::share) }, enabled = !busy, modifier = Modifier.weight(1f)) {
+            Text("Share")
+        }
+        OutlinedButton(onClick = { run(io::save) }, enabled = !busy, modifier = Modifier.weight(1f)) {
+            Text("Save")
+        }
+        OutlinedButton(onClick = { run(io::open) }, enabled = !busy, modifier = Modifier.weight(1f)) {
+            Text("Open")
+        }
+    }
+    if (busy) {
+        Text(
+            "Preparing the file...",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+/** The MIME type the receiving app keys on. */
+private fun artefactMime(kind: String): String = when (kind.lowercase()) {
+    "pdf" -> "application/pdf"
+    else -> "application/xml"
+}
+
+/** A name a person recognises and a file system accepts. */
+private fun artefactFileName(number: String, kind: String): String {
+    val extension = when (kind.lowercase()) {
+        "pdf" -> "pdf"
+        else -> "xml"
+    }
+    val stem = number.ifBlank { "document" }
+        .map { character -> if (character.isLetterOrDigit() || character in "-._") character else '-' }
+        .joinToString("")
+    return "$stem.$extension"
 }
 
 /** The party invoices are issued by. */
@@ -767,6 +852,7 @@ fun DocumentListScreen(
 fun DocumentDetailScreen(id: String, onBack: () -> Unit) {
     var document by remember { mutableStateOf<DocumentDetail?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
+    var message by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(id) {
         val result = withContext(Dispatchers.IO) { runCatching { loadDocument(id) } }
@@ -832,11 +918,13 @@ fun DocumentDetailScreen(id: String, onBack: () -> Unit) {
                 "${artefact.kind.uppercase()} · ${artefact.sizeBytes} bytes",
                 style = MaterialTheme.typography.bodySmall,
             )
-            Text(
-                artefact.bytesHash,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            ArtefactBlock(artefact.kind.uppercase(), doc.id, doc.number, artefact.kind, artefact.bytesHash) {
+                message = it
+            }
+        }
+        message?.let { text ->
+            Spacer(Modifier.height(4.dp))
+            Text(text, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
         }
 
         if (doc.events.isNotEmpty()) {

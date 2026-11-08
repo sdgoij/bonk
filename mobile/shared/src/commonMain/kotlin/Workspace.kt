@@ -239,6 +239,9 @@ expect fun importCustomersCsv(text: String): CustomerImportReport
 /** Records a reason for accepting a non-blocking finding. */
 expect fun suppressFinding(draftId: String, code: String, field: String, reason: String)
 
+/** The bytes of one artefact, verified against the hash recorded for it. */
+expect fun documentArtefact(id: String, kind: String): ByteArray
+
 /** Reading and writing a text file through the platform picker. */
 interface CsvIo {
     /** Opens a save dialog for `suggestedName` and writes `text`. */
@@ -251,6 +254,22 @@ interface CsvIo {
 /** The platform picker, created in a composable so Android can use its launchers. */
 @Composable
 expect fun rememberCsvIo(): CsvIo
+
+/** Sharing, saving and opening a rendered artefact. */
+interface ArtefactIo {
+    /** Offers the bytes to other apps through the share sheet. */
+    fun share(bytes: ByteArray, name: String, mime: String, onError: (String) -> Unit)
+
+    /** Opens a save dialog and writes the bytes where the user picks. */
+    fun save(bytes: ByteArray, name: String, mime: String, onError: (String) -> Unit)
+
+    /** Opens the bytes in whatever app the platform prefers, reporting when none can. */
+    fun open(bytes: ByteArray, name: String, mime: String, onError: (String) -> Unit)
+}
+
+/** The platform actions, created in a composable so Android can use its launchers. */
+@Composable
+expect fun rememberArtefactIo(): ArtefactIo
 
 /** Lets a platform file picker suspend the background lock while it is open. */
 object PickerGuard {
