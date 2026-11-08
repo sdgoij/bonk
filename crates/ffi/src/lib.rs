@@ -9,7 +9,7 @@
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use application::Archive as AppArchive;
+use application::{Archive as AppArchive, CustomerDto, DraftDto, DraftLineDto, FindingDto, PrecedingInvoiceDto};
 use argon2::{Algorithm, Argon2, Params, Version};
 use crux::{
     Address, CountryCode, Currency, DocType, DraftLine, LineId, LocalDate, Money, Party, Quantity, TaxTreatment,
@@ -106,6 +106,274 @@ pub struct ArchiveSummary {
     pub drafts: i64,
     /// Applied schema version.
     pub schema_version: i64,
+}
+
+/// The invoice a credit note corrects.
+#[derive(uniffi::Record)]
+pub struct PrecedingInvoiceRecord {
+    /// Preceding invoice number.
+    pub number: String,
+    /// Preceding invoice issue date, ISO `YYYY-MM-DD`.
+    pub issue_date: String,
+}
+
+/// One line of a draft.
+#[derive(uniffi::Record)]
+pub struct DraftLineRecord {
+    /// Stable line identity.
+    pub id: String,
+    /// 1-based position.
+    pub position: u32,
+    /// Item name.
+    pub name: String,
+    /// Optional longer description.
+    pub description: Option<String>,
+    /// Quantity in micro-units.
+    pub quantity_micros: i64,
+    /// Three-character unit code.
+    pub unit: String,
+    /// Unit price in micro-units.
+    pub unit_price_micros: i64,
+    /// Price base quantity in micro-units.
+    pub price_base_quantity_micros: i64,
+    /// EN 16931 VAT category code.
+    pub tax_category: String,
+    /// VAT rate in basis points.
+    pub tax_rate_bp: u16,
+    /// Line net in micro-units.
+    pub line_net_micros: i64,
+    /// Exemption reason, when the category needs one.
+    pub exemption_reason: Option<String>,
+    /// Exemption reason code, when the category needs one.
+    pub exemption_reason_code: Option<String>,
+}
+
+/// A draft as the editor holds it.
+#[derive(uniffi::Record)]
+pub struct DraftRecord {
+    /// Draft identity.
+    pub id: String,
+    /// Seller identity.
+    pub seller_id: String,
+    /// Customer identity.
+    pub customer_id: String,
+    /// `380` for an invoice, `381` for a credit note.
+    pub doc_type: String,
+    /// ISO currency code.
+    pub currency: String,
+    /// Issue date, ISO `YYYY-MM-DD`.
+    pub issue_date: String,
+    /// Due date, ISO `YYYY-MM-DD`.
+    pub due_date: Option<String>,
+    /// Delivery date, ISO `YYYY-MM-DD`.
+    pub delivery_date: Option<String>,
+    /// Buyer reference.
+    pub buyer_reference: Option<String>,
+    /// Order reference.
+    pub order_reference: Option<String>,
+    /// Free-text note.
+    pub note: Option<String>,
+    /// Template file name, or `None` for the archive default.
+    pub template: Option<String>,
+    /// The invoice a credit note corrects.
+    pub preceding_invoice: Option<PrecedingInvoiceRecord>,
+    /// Lines.
+    pub lines: Vec<DraftLineRecord>,
+}
+
+/// One validation finding, as data.
+#[derive(uniffi::Record)]
+pub struct FindingRecord {
+    /// Stable code, such as `BR-16`.
+    pub code: String,
+    /// `blocking`, `warning`, or `info`.
+    pub severity: String,
+    /// EN 16931 business term, when one exists.
+    pub bt: Option<String>,
+    /// Field path the UI focuses.
+    pub field: String,
+    /// Human-readable fallback text. Named `detail` because a record field
+    /// called `message` breaks the Kotlin generator.
+    pub detail: String,
+}
+
+/// A customer as the editor holds it.
+#[derive(uniffi::Record)]
+pub struct CustomerRecord {
+    /// Customer identity. Empty when the customer has not been saved yet.
+    pub id: String,
+    /// Legal name.
+    pub name: String,
+    /// Street and number.
+    pub street: Option<String>,
+    /// Postal code.
+    pub postal: Option<String>,
+    /// City.
+    pub city: String,
+    /// ISO 3166-1 alpha-2 country.
+    pub country: String,
+    /// VAT identifier.
+    pub vat: Option<String>,
+    /// Chamber of commerce number.
+    pub kvk: Option<String>,
+    /// Peppol endpoint, `EAS:value`.
+    pub peppol: Option<String>,
+    /// Contact person.
+    pub contact: Option<String>,
+    /// Contact email.
+    pub email: Option<String>,
+    /// Contact phone.
+    pub phone: Option<String>,
+}
+
+impl From<CustomerDto> for CustomerRecord {
+    fn from(dto: CustomerDto) -> Self {
+        Self {
+            id: dto.id,
+            name: dto.name,
+            street: dto.street,
+            postal: dto.postal,
+            city: dto.city,
+            country: dto.country,
+            vat: dto.vat,
+            kvk: dto.kvk,
+            peppol: dto.peppol,
+            contact: dto.contact,
+            email: dto.email,
+            phone: dto.phone,
+        }
+    }
+}
+
+impl From<CustomerRecord> for CustomerDto {
+    fn from(record: CustomerRecord) -> Self {
+        Self {
+            id: record.id,
+            name: record.name,
+            street: record.street,
+            postal: record.postal,
+            city: record.city,
+            country: record.country,
+            vat: record.vat,
+            kvk: record.kvk,
+            peppol: record.peppol,
+            contact: record.contact,
+            email: record.email,
+            phone: record.phone,
+        }
+    }
+}
+
+impl From<PrecedingInvoiceDto> for PrecedingInvoiceRecord {
+    fn from(dto: PrecedingInvoiceDto) -> Self {
+        Self {
+            number: dto.number,
+            issue_date: dto.issue_date,
+        }
+    }
+}
+
+impl From<PrecedingInvoiceRecord> for PrecedingInvoiceDto {
+    fn from(record: PrecedingInvoiceRecord) -> Self {
+        Self {
+            number: record.number,
+            issue_date: record.issue_date,
+        }
+    }
+}
+
+impl From<DraftLineDto> for DraftLineRecord {
+    fn from(dto: DraftLineDto) -> Self {
+        Self {
+            id: dto.id,
+            position: dto.position,
+            name: dto.name,
+            description: dto.description,
+            quantity_micros: dto.quantity_micros,
+            unit: dto.unit,
+            unit_price_micros: dto.unit_price_micros,
+            price_base_quantity_micros: dto.price_base_quantity_micros,
+            tax_category: dto.tax_category,
+            tax_rate_bp: dto.tax_rate_bp,
+            line_net_micros: dto.line_net_micros,
+            exemption_reason: dto.exemption_reason,
+            exemption_reason_code: dto.exemption_reason_code,
+        }
+    }
+}
+
+impl From<DraftLineRecord> for DraftLineDto {
+    fn from(record: DraftLineRecord) -> Self {
+        Self {
+            id: record.id,
+            position: record.position,
+            name: record.name,
+            description: record.description,
+            quantity_micros: record.quantity_micros,
+            unit: record.unit,
+            unit_price_micros: record.unit_price_micros,
+            price_base_quantity_micros: record.price_base_quantity_micros,
+            tax_category: record.tax_category,
+            tax_rate_bp: record.tax_rate_bp,
+            line_net_micros: record.line_net_micros,
+            exemption_reason: record.exemption_reason,
+            exemption_reason_code: record.exemption_reason_code,
+        }
+    }
+}
+
+impl From<DraftDto> for DraftRecord {
+    fn from(dto: DraftDto) -> Self {
+        Self {
+            id: dto.id,
+            seller_id: dto.seller_id,
+            customer_id: dto.customer_id,
+            doc_type: dto.doc_type,
+            currency: dto.currency,
+            issue_date: dto.issue_date,
+            due_date: dto.due_date,
+            delivery_date: dto.delivery_date,
+            buyer_reference: dto.buyer_reference,
+            order_reference: dto.order_reference,
+            note: dto.note,
+            template: dto.template,
+            preceding_invoice: dto.preceding_invoice.map(PrecedingInvoiceRecord::from),
+            lines: dto.lines.into_iter().map(DraftLineRecord::from).collect(),
+        }
+    }
+}
+
+impl From<DraftRecord> for DraftDto {
+    fn from(record: DraftRecord) -> Self {
+        Self {
+            id: record.id,
+            seller_id: record.seller_id,
+            customer_id: record.customer_id,
+            doc_type: record.doc_type,
+            currency: record.currency,
+            issue_date: record.issue_date,
+            due_date: record.due_date,
+            delivery_date: record.delivery_date,
+            buyer_reference: record.buyer_reference,
+            order_reference: record.order_reference,
+            note: record.note,
+            template: record.template,
+            preceding_invoice: record.preceding_invoice.map(PrecedingInvoiceDto::from),
+            lines: record.lines.into_iter().map(DraftLineDto::from).collect(),
+        }
+    }
+}
+
+impl From<FindingDto> for FindingRecord {
+    fn from(dto: FindingDto) -> Self {
+        Self {
+            code: dto.code,
+            severity: dto.severity,
+            bt: dto.bt,
+            field: dto.field,
+            detail: dto.message,
+        }
+    }
 }
 
 /// An unlocked archive, owned by the caller and closed explicitly.
@@ -217,6 +485,56 @@ impl Archive {
         let archive = guard.as_ref().ok_or(AppError::Closed)?;
         archive.record_device_revocation()?;
         Ok(())
+    }
+
+    /// Lists drafts, most recently updated first.
+    pub fn list_drafts(&self) -> Result<Vec<DraftRecord>, AppError> {
+        let guard = self.inner.lock().map_err(|_| AppError::Closed)?;
+        let archive = guard.as_ref().ok_or(AppError::Closed)?;
+        Ok(archive.list_drafts()?.into_iter().map(DraftRecord::from).collect())
+    }
+
+    /// Loads a draft by identity.
+    pub fn load_draft(&self, id: String) -> Result<DraftRecord, AppError> {
+        let guard = self.inner.lock().map_err(|_| AppError::Closed)?;
+        let archive = guard.as_ref().ok_or(AppError::Closed)?;
+        Ok(archive.load_draft(&id)?.into())
+    }
+
+    /// Creates or updates a draft and returns the stored shape.
+    pub fn save_draft(&self, draft: DraftRecord) -> Result<DraftRecord, AppError> {
+        let guard = self.inner.lock().map_err(|_| AppError::Closed)?;
+        let archive = guard.as_ref().ok_or(AppError::Closed)?;
+        Ok(archive.save_draft(&DraftDto::from(draft))?.into())
+    }
+
+    /// Validates a draft against its seller and customer.
+    pub fn validate_draft(&self, draft: DraftRecord) -> Result<Vec<FindingRecord>, AppError> {
+        let guard = self.inner.lock().map_err(|_| AppError::Closed)?;
+        let archive = guard.as_ref().ok_or(AppError::Closed)?;
+        Ok(archive
+            .validate_draft(&DraftDto::from(draft))?
+            .into_iter()
+            .map(FindingRecord::from)
+            .collect())
+    }
+
+    /// Lists customers, ordered by display name.
+    pub fn list_customers(&self) -> Result<Vec<CustomerRecord>, AppError> {
+        let guard = self.inner.lock().map_err(|_| AppError::Closed)?;
+        let archive = guard.as_ref().ok_or(AppError::Closed)?;
+        Ok(archive
+            .list_customers()?
+            .into_iter()
+            .map(CustomerRecord::from)
+            .collect())
+    }
+
+    /// Creates a customer when the id is empty, otherwise updates one.
+    pub fn save_customer(&self, customer: CustomerRecord) -> Result<CustomerRecord, AppError> {
+        let guard = self.inner.lock().map_err(|_| AppError::Closed)?;
+        let archive = guard.as_ref().ok_or(AppError::Closed)?;
+        Ok(archive.save_customer(&CustomerDto::from(customer))?.into())
     }
 
     /// Drops the archive and zeroizes the data key. Later calls return `Closed`.
@@ -772,6 +1090,107 @@ mod tests {
 
         let reopened = Archive::open(database, keystore, "passphrase".to_owned()).expect("an existing archive");
         assert_eq!(reopened.summary().expect("a summary").sellers, 0);
+    }
+
+    #[test]
+    fn a_draft_round_trips_through_the_ffi() {
+        let directory = tempfile::TempDir::new().expect("a temporary directory");
+        let database = directory.path().join("bonk.db").display().to_string();
+        let keystore = directory.path().join("keystore.bin").display().to_string();
+        let archive = Archive::create(database, keystore, "passphrase".to_owned()).expect("a new archive");
+
+        let now = "2026-11-08T12:00:00Z";
+        let seller = store::SellerRecord {
+            id: crux::SellerId::new(),
+            party: Party::new("Seller BV", Address::new("Delft", CountryCode::NL)),
+            default_currency: Currency::EUR,
+            default_locale: "en".to_owned(),
+        };
+        let customer = store::CustomerRecord {
+            id: crux::CustomerId::new(),
+            party: Party::new("Buyer BV", Address::new("Utrecht", CountryCode::NL)),
+        };
+        {
+            let mut guard = archive.inner.lock().expect("the archive lock");
+            let app = guard.as_mut().expect("an open archive");
+            store::insert_seller(app.database().connection(), &seller, now).expect("a seller");
+            store::insert_customer(app.database().connection(), &customer, now).expect("a customer");
+        }
+
+        let draft = DraftRecord {
+            id: crux::DocumentId::new().to_string(),
+            seller_id: seller.id.to_string(),
+            customer_id: customer.id.to_string(),
+            doc_type: "380".to_owned(),
+            currency: "EUR".to_owned(),
+            issue_date: "2026-11-08".to_owned(),
+            due_date: None,
+            delivery_date: None,
+            buyer_reference: None,
+            order_reference: None,
+            note: None,
+            template: None,
+            preceding_invoice: None,
+            lines: vec![DraftLineRecord {
+                id: crux::LineId::new().to_string(),
+                position: 1,
+                name: "Consultancy".to_owned(),
+                description: None,
+                quantity_micros: 1_000_000,
+                unit: "HUR".to_owned(),
+                unit_price_micros: 100_000_000,
+                price_base_quantity_micros: 1_000_000,
+                tax_category: "S".to_owned(),
+                tax_rate_bp: 2100,
+                line_net_micros: 100_000_000,
+                exemption_reason: None,
+                exemption_reason_code: None,
+            }],
+        };
+        let draft_id = draft.id.clone();
+
+        let saved = archive.save_draft(draft).expect("a saved draft");
+        assert_eq!(saved.id, draft_id);
+        assert_eq!(archive.list_drafts().expect("drafts").len(), 1);
+        let loaded = archive.load_draft(draft_id).expect("a loaded draft");
+        assert_eq!(loaded.id, saved.id);
+        assert!(archive.validate_draft(loaded).is_ok());
+    }
+
+    #[test]
+    fn a_customer_round_trips_through_the_ffi() {
+        let directory = tempfile::TempDir::new().expect("a temporary directory");
+        let database = directory.path().join("bonk.db").display().to_string();
+        let keystore = directory.path().join("keystore.bin").display().to_string();
+        let archive = Archive::create(database, keystore, "passphrase".to_owned()).expect("a new archive");
+
+        let customer = CustomerRecord {
+            id: String::new(),
+            name: "Buyer BV".to_owned(),
+            street: Some("Main 1".to_owned()),
+            postal: Some("1000 AA".to_owned()),
+            city: "Utrecht".to_owned(),
+            country: "NL".to_owned(),
+            vat: Some("nl123456788b01".to_owned()),
+            kvk: None,
+            peppol: None,
+            contact: None,
+            email: None,
+            phone: None,
+        };
+        let saved = archive.save_customer(customer).expect("a saved customer");
+        assert!(!saved.id.is_empty(), "a new customer gets an id");
+        assert_eq!(saved.vat.as_deref(), Some("NL123456788B01"));
+        assert_eq!(archive.list_customers().expect("customers").len(), 1);
+
+        let saved = archive
+            .save_customer(CustomerRecord {
+                city: "Delft".to_owned(),
+                ..saved
+            })
+            .expect("an updated customer");
+        assert_eq!(saved.city, "Delft");
+        assert_eq!(archive.list_customers().expect("customers").len(), 1);
     }
 
     #[test]

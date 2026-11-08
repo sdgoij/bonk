@@ -2415,6 +2415,11 @@ pub mod problem {
     /// A sentence for a domain error.
     pub fn domain(language: Language, error: &DomainError) -> String {
         match error {
+            DomainError::InvalidDocType(value) => sentence!(
+                language,
+                format!("{value} is not a document type."),
+                format!("{value} is geen documenttype.")
+            ),
             DomainError::InvalidCurrency(value) => sentence!(
                 language,
                 format!("{value} is not a currency code."),

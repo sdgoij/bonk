@@ -13,8 +13,12 @@
 //! The FFI crate mirrors these shapes in language-neutral records, which keeps
 //! `uniffi` out of this crate.
 
-use crux::{DomainError, DraftLine, Finding, InvoiceDraft, Severity};
-use store::{DocumentRecord, DocumentStatus};
+use crux::{
+    CountryCode, Currency, CustomerId, DocType, DocumentId, DomainError, DraftLine, Finding, InvoiceDraft, LineId,
+    LocalDate, Money, Party, PhoneNumber, PrecedingInvoice, Quantity, SellerId, Severity, TaxTreatment, UnitCode,
+    VatCategory, VatRate,
+};
+use store::{CustomerRecord, DocumentRecord, DocumentStatus};
 
 /// What the dashboard shows for an open archive.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -25,6 +29,83 @@ pub struct Summary {
     pub drafts: i64,
     /// Applied schema version.
     pub schema_version: i64,
+}
+
+/// A customer as a front end edits it.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct CustomerDto {
+    /// Customer identity. Empty when the customer has not been saved yet.
+    pub id: String,
+    /// Legal name.
+    pub name: String,
+    /// Street and number.
+    pub street: Option<String>,
+    /// Postal code.
+    pub postal: Option<String>,
+    /// City.
+    pub city: String,
+    /// ISO 3166-1 alpha-2 country.
+    pub country: String,
+    /// VAT identifier.
+    pub vat: Option<String>,
+    /// Chamber of commerce number.
+    pub kvk: Option<String>,
+    /// Peppol endpoint, `EAS:value`.
+    pub peppol: Option<String>,
+    /// Contact person.
+    pub contact: Option<String>,
+    /// Contact email.
+    pub email: Option<String>,
+    /// Contact phone.
+    pub phone: Option<String>,
+}
+
+impl CustomerDto {
+    /// Converts a stored customer.
+    pub fn from_record(record: &CustomerRecord) -> Self {
+        let party = &record.party;
+        Self {
+            id: record.id.to_string(),
+            name: party.legal_name.clone(),
+            street: party.address.street.clone(),
+            postal: party.address.postal_code.clone(),
+            city: party.address.city.clone(),
+            country: party.address.country.to_string(),
+            vat: party.vat_id.clone(),
+            kvk: party.kvk_number.clone(),
+            peppol: party.peppol_id.clone(),
+            contact: party.contact_name.clone(),
+            email: party.email.clone(),
+            phone: party.phone.clone(),
+        }
+    }
+
+    /// Rebuilds the stored customer, normalising the phone like the CSV import.
+    pub fn into_record(self) -> Result<CustomerRecord, DomainError> {
+        let country = CountryCode::parse(&self.country)?;
+        let mut party = Party::new(
+            self.name,
+            crux::Address {
+                street: self.street,
+                city: self.city,
+                postal_code: self.postal,
+                country,
+            },
+        );
+        party.vat_id = self.vat.map(|value| value.to_ascii_uppercase());
+        party.kvk_number = self.kvk;
+        party.peppol_id = self.peppol;
+        party.contact_name = self.contact;
+        party.email = self.email;
+        party.phone = match self.phone.as_deref().map(str::trim) {
+            Some(raw) if !raw.is_empty() => Some(PhoneNumber::parse(raw, country)?.as_str().to_owned()),
+            _ => None,
+        };
+        Ok(CustomerRecord {
+            id: CustomerId::parse_str(&self.id)?,
+            party,
+        })
+    }
 }
 
 /// The invoice a credit note corrects.
@@ -146,6 +227,61 @@ impl DraftDto {
                 .iter()
                 .map(DraftLineDto::from_line)
                 .collect::<Result<Vec<_>, _>>()?,
+        })
+    }
+
+    /// Rebuilds the domain draft, parsing every crossed field.
+    pub fn into_draft(self) -> Result<InvoiceDraft, DomainError> {
+        let currency = Currency::parse(&self.currency)?;
+        let doc_type = match self.doc_type.as_str() {
+            "380" => DocType::Invoice,
+            "381" => DocType::CreditNote,
+            other => return Err(DomainError::InvalidDocType(other.to_owned())),
+        };
+        let preceding_invoice = match self.preceding_invoice {
+            Some(preceding) => Some(PrecedingInvoice {
+                // The DTO does not carry the preceding document id; a credit
+                // note saved from the editor will need it before it can link.
+                id: DocumentId::new(),
+                number: preceding.number,
+                issue_date: LocalDate::parse_iso(&preceding.issue_date)?,
+            }),
+            None => None,
+        };
+        let mut lines = Vec::with_capacity(self.lines.len());
+        for line in self.lines {
+            lines.push(DraftLine {
+                id: LineId::parse_str(&line.id)?,
+                position: line.position,
+                name: line.name,
+                description: line.description,
+                quantity: Quantity::from_micros(line.quantity_micros),
+                unit: UnitCode::parse(&line.unit)?,
+                unit_price: Money::from_micros(line.unit_price_micros, currency),
+                price_base_quantity: Quantity::from_micros(line.price_base_quantity_micros),
+                treatment: TaxTreatment {
+                    category: VatCategory::parse(&line.tax_category)?,
+                    rate: VatRate::from_basis_points(line.tax_rate_bp)?,
+                    exemption_reason: line.exemption_reason,
+                    exemption_reason_code: line.exemption_reason_code,
+                },
+            });
+        }
+        Ok(InvoiceDraft {
+            id: DocumentId::parse_str(&self.id)?,
+            seller_id: SellerId::parse_str(&self.seller_id)?,
+            customer_id: CustomerId::parse_str(&self.customer_id)?,
+            doc_type,
+            currency,
+            issue_date: LocalDate::parse_iso(&self.issue_date)?,
+            due_date: self.due_date.as_deref().map(LocalDate::parse_iso).transpose()?,
+            delivery_date: self.delivery_date.as_deref().map(LocalDate::parse_iso).transpose()?,
+            buyer_reference: self.buyer_reference,
+            order_reference: self.order_reference,
+            note: self.note,
+            template: self.template,
+            preceding_invoice,
+            lines,
         })
     }
 }
@@ -290,6 +426,14 @@ mod tests {
         assert_eq!(line.tax_category, "S");
         assert_eq!(line.tax_rate_bp, 2100);
         assert_eq!(line.line_net_micros, 285_000_000);
+    }
+
+    #[test]
+    fn a_draft_round_trips_through_the_dto() {
+        let original = draft();
+        let dto = DraftDto::from_draft(&original).expect("a draft");
+        let rebuilt = dto.into_draft().expect("a draft");
+        assert_eq!(rebuilt, original);
     }
 
     #[test]

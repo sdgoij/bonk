@@ -8,6 +8,10 @@ use thiserror::Error;
 /// Everything that can go wrong inside the domain core.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum DomainError {
+    /// A document type code was not one the domain knows (`380` or `381`).
+    #[error("invalid document type: {0:?}")]
+    InvalidDocType(String),
+
     /// A currency code was not exactly three uppercase ASCII letters.
     #[error("invalid currency code: {0:?}")]
     InvalidCurrency(String),
@@ -134,6 +138,7 @@ impl DomainError {
     /// quote it.
     pub const fn code(&self) -> &'static str {
         match self {
+            Self::InvalidDocType(_) => "doc-type-invalid",
             Self::InvalidCurrency(_) => "currency-invalid",
             Self::CurrencyMismatch { .. } => "currency-mismatch",
             Self::AmountOverflow => "amount-overflow",
@@ -173,6 +178,7 @@ mod tests {
     /// sentence by code.
     fn every_error() -> Vec<DomainError> {
         vec![
+            DomainError::InvalidDocType("999".to_owned()),
             DomainError::InvalidCurrency("EU".to_owned()),
             DomainError::CurrencyMismatch {
                 left: "EUR".to_owned(),

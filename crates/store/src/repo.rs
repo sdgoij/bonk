@@ -585,6 +585,21 @@ pub fn load_draft(conn: &Connection, id: DocumentId) -> Result<Option<InvoiceDra
     Ok(Some(draft))
 }
 
+/// Lists drafts, most recently updated first.
+pub fn list_drafts(conn: &Connection) -> Result<Vec<InvoiceDraft>, StoreError> {
+    let mut statement = conn.prepare("SELECT id FROM invoice_draft ORDER BY updated_at DESC, id")?;
+    let mut rows = statement.query([])?;
+    let mut drafts = Vec::new();
+    while let Some(row) = rows.next()? {
+        let raw: String = row.get(0)?;
+        let id = DocumentId::parse_str(&raw).map_err(|error| StoreError::Data(error.to_string()))?;
+        if let Some(draft) = load_draft(conn, id)? {
+            drafts.push(draft);
+        }
+    }
+    Ok(drafts)
+}
+
 /// Minimal view of an issued document, used to build references.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct IssuedReference {

@@ -77,9 +77,10 @@ pub use repo::{
     ReceivedDocument, ReceivedLine, ReceivedSummary, SEARCH_LIMIT, SearchCounts, SearchHit, SearchPage, SearchRequest,
     SellerRecord, Suppression, advance_status, attach_artefact, credit_note_for, document_status,
     find_import_by_payload, find_inbound_number, find_issued_reference, first_seller, insert_customer, insert_draft,
-    insert_seller, issue_draft, list_customers, list_received, list_suppressions, load_customer, load_draft,
-    load_seller, now_rfc3339, record_received, resolve_customer, resolve_document, resolve_received, save_draft,
-    save_suppression, search, search_counts, search_page, set_supplier_match, update_customer, verify_artefacts,
+    insert_seller, issue_draft, list_customers, list_drafts, list_received, list_suppressions, load_customer,
+    load_draft, load_seller, now_rfc3339, record_received, resolve_customer, resolve_document, resolve_received,
+    save_draft, save_suppression, search, search_counts, search_page, set_supplier_match, update_customer,
+    verify_artefacts,
 };
 pub use report::{
     AccountBalance, BalanceSheet, ProfitAndLoss, TrialBalance, balance_sheet, profit_and_loss, reporting_currency,

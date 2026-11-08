@@ -10,7 +10,7 @@ use std::path::Path;
 use store::{Database, KdfParams, KeyStore, StoreError};
 use zeroize::Zeroizing;
 
-use crate::dto::Summary;
+use crate::dto::{CustomerDto, DraftDto, FindingDto, Summary};
 
 /// An unlocked application session: one database, one keystore.
 pub struct Archive {
@@ -87,6 +87,74 @@ impl Archive {
             drafts: self.database.draft_count()?,
             schema_version: self.database.schema_version()?,
         })
+    }
+
+    /// Lists customers, ordered by display name.
+    pub fn list_customers(&self) -> Result<Vec<CustomerDto>, StoreError> {
+        Ok(store::list_customers(self.database.connection())?
+            .iter()
+            .map(CustomerDto::from_record)
+            .collect())
+    }
+
+    /// Creates a customer when the id is empty, otherwise updates one.
+    pub fn save_customer(&self, customer: &CustomerDto) -> Result<CustomerDto, StoreError> {
+        let now = store::now_rfc3339();
+        if customer.id.is_empty() {
+            let mut assigned = customer.clone();
+            assigned.id = crux::CustomerId::new().to_string();
+            let record = assigned
+                .into_record()
+                .map_err(|error| StoreError::Data(error.to_string()))?;
+            store::insert_customer(self.database.connection(), &record, &now)?;
+            Ok(CustomerDto::from_record(&record))
+        } else {
+            let record = customer
+                .clone()
+                .into_record()
+                .map_err(|error| StoreError::Data(error.to_string()))?;
+            store::update_customer(self.database.connection(), &record, &now)?;
+            Ok(CustomerDto::from_record(&record))
+        }
+    }
+
+    /// Lists drafts, most recently updated first.
+    pub fn list_drafts(&self) -> Result<Vec<DraftDto>, StoreError> {
+        store::list_drafts(self.database.connection())?
+            .iter()
+            .map(DraftDto::from_draft)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| StoreError::Data(error.to_string()))
+    }
+
+    /// Loads a draft by identity.
+    pub fn load_draft(&self, id: &str) -> Result<DraftDto, StoreError> {
+        let id = crux::DocumentId::parse_str(id).map_err(|error| StoreError::Data(error.to_string()))?;
+        let draft = store::load_draft(self.database.connection(), id)?
+            .ok_or_else(|| StoreError::NotFound(format!("draft {id}")))?;
+        DraftDto::from_draft(&draft).map_err(|error| StoreError::Data(error.to_string()))
+    }
+
+    /// Creates or updates a draft and returns the stored shape.
+    pub fn save_draft(&self, draft: &DraftDto) -> Result<DraftDto, StoreError> {
+        let domain = draft
+            .clone()
+            .into_draft()
+            .map_err(|error| StoreError::Data(error.to_string()))?;
+        store::save_draft(self.database.connection(), &domain, &store::now_rfc3339())?;
+        DraftDto::from_draft(&domain).map_err(|error| StoreError::Data(error.to_string()))
+    }
+
+    /// Validates a draft against its seller and customer.
+    pub fn validate_draft(&self, draft: &DraftDto) -> Result<Vec<FindingDto>, StoreError> {
+        let domain = draft
+            .clone()
+            .into_draft()
+            .map_err(|error| StoreError::Data(error.to_string()))?;
+        let seller = store::load_seller(self.database.connection(), domain.seller_id)?;
+        let customer = store::load_customer(self.database.connection(), domain.customer_id)?;
+        let findings = crux::validate_draft(&domain, &seller.party, &customer.party);
+        Ok(findings.iter().map(FindingDto::from).collect())
     }
 
     /// Runs SQLite's integrity check on the open database.
@@ -317,6 +385,7 @@ impl Archive {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dto::DraftLineDto;
 
     fn paths(directory: &tempfile::TempDir) -> (std::path::PathBuf, std::path::PathBuf) {
         (directory.path().join("bonk.db"), directory.path().join("keystore.bin"))
@@ -373,5 +442,60 @@ mod tests {
             )
             .unwrap();
         assert_eq!(forgotten, 1);
+    }
+
+    #[test]
+    fn a_draft_round_trips_through_the_editor_api() {
+        let (_directory, archive) = archive();
+        let now = "2026-11-08T12:00:00Z";
+        let seller = store::SellerRecord {
+            id: crux::SellerId::new(),
+            party: crux::Party::new("Seller BV", crux::Address::new("Delft", crux::CountryCode::NL)),
+            default_currency: crux::Currency::EUR,
+            default_locale: "en".to_owned(),
+        };
+        store::insert_seller(archive.database().connection(), &seller, now).unwrap();
+        let customer = store::CustomerRecord {
+            id: crux::CustomerId::new(),
+            party: crux::Party::new("Buyer BV", crux::Address::new("Utrecht", crux::CountryCode::NL)),
+        };
+        store::insert_customer(archive.database().connection(), &customer, now).unwrap();
+
+        let draft = DraftDto {
+            id: crux::DocumentId::new().to_string(),
+            seller_id: seller.id.to_string(),
+            customer_id: customer.id.to_string(),
+            doc_type: "380".to_owned(),
+            currency: "EUR".to_owned(),
+            issue_date: "2026-11-08".to_owned(),
+            due_date: None,
+            delivery_date: None,
+            buyer_reference: None,
+            order_reference: None,
+            note: Some("Thanks".to_owned()),
+            template: None,
+            preceding_invoice: None,
+            lines: vec![DraftLineDto {
+                id: crux::LineId::new().to_string(),
+                position: 1,
+                name: "Consultancy".to_owned(),
+                description: None,
+                quantity_micros: 1_000_000,
+                unit: "HUR".to_owned(),
+                unit_price_micros: 100_000_000,
+                price_base_quantity_micros: 1_000_000,
+                tax_category: "S".to_owned(),
+                tax_rate_bp: 2100,
+                line_net_micros: 100_000_000,
+                exemption_reason: None,
+                exemption_reason_code: None,
+            }],
+        };
+
+        let saved = archive.save_draft(&draft).unwrap();
+        assert_eq!(saved, draft);
+        assert_eq!(archive.list_drafts().unwrap(), vec![draft.clone()]);
+        assert_eq!(archive.load_draft(&draft.id).unwrap(), draft);
+        assert!(archive.validate_draft(&draft).is_ok());
     }
 }
