@@ -15,12 +15,15 @@ import java.io.File
 object MobileArchiveHost {
     private var directory: File? = null
     private var cache: File? = null
+    private var staging: File? = null
     private var archive: Archive? = null
 
     fun attach(context: Context) {
         directory = File(context.filesDir, "archive")
         // Where a verified copy waits for the user to choose a destination.
         cache = File(context.cacheDir, "export")
+        // Where the two picked files wait for a restore.
+        staging = File(context.filesDir, "restore")
     }
 
     fun detach() {
@@ -28,6 +31,7 @@ object MobileArchiveHost {
         archive = null
         directory = null
         cache = null
+        staging = null
     }
 
     fun exists(): Boolean {
@@ -226,6 +230,32 @@ object MobileArchiveHost {
     fun databaseBytes(): Long {
         val (database, _) = paths()
         return File(database).length()
+    }
+
+    fun stagingPaths(): Pair<String, String> {
+        val base = staging ?: error("the archive host is not attached")
+        base.mkdirs()
+        return File(base, "bonk.db").absolutePath to File(base, "keystore.bin").absolutePath
+    }
+
+    /**
+     * Replaces the archive with the staged pair and opens it again.
+     *
+     * The open handle is closed first because the files move underneath it. A
+     * failure leaves no archive open: the swap only happens after the staged
+     * pair checks out, so what is on disk is still the archive that was here, but
+     * the app has to unlock it again.
+     */
+    fun restore(passphrase: String): ArchiveSummary {
+        require(passphrase.isNotEmpty()) { "enter the passphrase" }
+        val (database, keystore) = paths()
+        val (stagedDatabase, stagedKeystore) = stagingPaths()
+        archive?.close()
+        archive = null
+        uniffi.bonkc.restoreArchive(database, keystore, stagedDatabase, stagedKeystore, passphrase)
+        val opened = Archive.open(database, keystore, passphrase)
+        archive = opened
+        return opened.summary().toCommon()
     }
 
     fun loadSeller(): Seller {

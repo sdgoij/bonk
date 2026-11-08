@@ -1197,6 +1197,33 @@ pub fn archive_exists(database_path: String, keystore_path: String) -> bool {
     std::path::Path::new(&database_path).exists() && std::path::Path::new(&keystore_path).exists()
 }
 
+/// Replaces the archive with a staged pair, after checking it opens.
+///
+/// The caller stages the two picked files in app-private storage and closes any
+/// open handle first. The restored archive is not opened here; the host opens it
+/// with the passphrase that was just proved against the staged copy.
+#[uniffi::export]
+pub fn restore_archive(
+    database_path: String,
+    keystore_path: String,
+    staged_database: String,
+    staged_keystore: String,
+    passphrase: String,
+) -> Result<ArchiveSummary, AppError> {
+    let summary = application::restore(
+        database_path,
+        keystore_path,
+        staged_database,
+        staged_keystore,
+        &passphrase,
+    )?;
+    Ok(ArchiveSummary {
+        sellers: summary.sellers,
+        drafts: summary.drafts,
+        schema_version: summary.schema_version,
+    })
+}
+
 /// Adapts the host callback to the store's `DeviceStore` port.
 struct DeviceAdapter(Box<dyn DeviceSecretStore>);
 
@@ -1729,6 +1756,58 @@ mod tests {
         assert!(!key.is_empty());
         let note = archive.recovery_note().expect("the note");
         assert!(note.contains("another medium"), "{note}");
+    }
+
+    #[test]
+    fn a_staged_pair_replaces_the_archive() {
+        let source = tempfile::TempDir::new().expect("a temporary directory");
+        let source_database = source.path().join("bonk.db").display().to_string();
+        let source_keystore = source.path().join("keystore.bin").display().to_string();
+        let opened = Archive::create(
+            source_database.clone(),
+            source_keystore.clone(),
+            "passphrase".to_owned(),
+        )
+        .expect("a source archive");
+        opened.seller().expect("the placeholder seller");
+        opened.lock();
+
+        let target = tempfile::TempDir::new().expect("a temporary directory");
+        let database = target.path().join("bonk.db").display().to_string();
+        let keystore = target.path().join("keystore.bin").display().to_string();
+        let empty =
+            Archive::create(database.clone(), keystore.clone(), "passphrase".to_owned()).expect("a target archive");
+        empty.lock();
+
+        let staging = tempfile::TempDir::new().expect("a staging directory");
+        let staged_database = staging.path().join("bonk.db");
+        let staged_keystore = staging.path().join("keystore.bin");
+        std::fs::copy(&source_database, &staged_database).expect("a copy of the database");
+        std::fs::copy(&source_keystore, &staged_keystore).expect("a copy of the key");
+
+        assert!(
+            restore_archive(
+                database.clone(),
+                keystore.clone(),
+                staged_database.display().to_string(),
+                staged_keystore.display().to_string(),
+                "wrong".to_owned(),
+            )
+            .is_err()
+        );
+
+        let summary = restore_archive(
+            database.clone(),
+            keystore.clone(),
+            staged_database.display().to_string(),
+            staged_keystore.display().to_string(),
+            "passphrase".to_owned(),
+        )
+        .expect("a restore");
+        assert_eq!(summary.sellers, 1);
+
+        let reopened = Archive::open(database, keystore, "passphrase".to_owned()).expect("the restored archive");
+        assert_eq!(reopened.summary().expect("a summary").sellers, 1);
     }
 
     #[test]

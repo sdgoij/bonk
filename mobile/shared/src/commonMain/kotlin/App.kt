@@ -548,6 +548,15 @@ fun App() {
                                 )
                                 Screen.Backup -> BackupScreen(
                                     onBack = { screen = Screen.Unlocked },
+                                    onRestored = {
+                                        summary = it
+                                        notice = "Archive restored."
+                                        screen = Screen.Unlocked
+                                    },
+                                    onLocked = {
+                                        error = it
+                                        screen = Screen.Unlock
+                                    },
                                     onInteraction = ::touch,
                                 )
                                 Screen.Seller -> SellerEditScreen(

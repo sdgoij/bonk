@@ -43,6 +43,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -813,14 +814,36 @@ fun ImportScreen(
     }
 }
 
-/** Backup and the recovery kit: the two halves a restore needs. */
+/** Backup, the recovery kit, and a restore from the two files they produce. */
 @Composable
-fun BackupScreen(onBack: () -> Unit, onInteraction: () -> Unit) {
+fun BackupScreen(
+    onBack: () -> Unit,
+    onRestored: (ArchiveSummary) -> Unit,
+    onLocked: (String) -> Unit,
+    onInteraction: () -> Unit,
+) {
     val io = rememberBackupIo()
     val scope = rememberCoroutineScope()
     var busy by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf<String?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
+    var staged by remember { mutableStateOf(false) }
+    var passphrase by remember { mutableStateOf("") }
+    var confirming by remember { mutableStateOf(false) }
+
+    fun restore() {
+        if (busy) return
+        busy = true
+        error = null
+        message = null
+        confirming = false
+        scope.launch {
+            val result = withContext(Dispatchers.IO) { runCatching { restoreArchive(passphrase) } }
+            busy = false
+            result.onSuccess { onRestored(it) }
+                .onFailure { onLocked(it.message ?: it.toString()) }
+        }
+    }
 
     fun exportBackup() {
         if (busy) return
@@ -912,6 +935,49 @@ fun BackupScreen(onBack: () -> Unit, onInteraction: () -> Unit) {
             Text("Export recovery kit")
         }
 
+        Spacer(Modifier.height(20.dp))
+        Text("Restore", style = MaterialTheme.typography.titleMedium)
+        Text(
+            "Replaces this device's archive with a backup and the key that opens it. Both files are " +
+                "needed. The archive here now is kept beside the new one, so a wrong choice is recoverable.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(8.dp))
+        OutlinedButton(
+            onClick = {
+                onInteraction()
+                io.stagePair(
+                    onDone = { staged = true; message = "Both files are ready. Enter the passphrase of that backup." },
+                    onError = { error = it },
+                )
+            },
+            enabled = !busy,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text(if (staged) "Choose the two files again" else "Choose the two files")
+        }
+        if (staged) {
+            Spacer(Modifier.height(8.dp))
+            OutlinedTextField(
+                value = passphrase,
+                onValueChange = { passphrase = it; onInteraction() },
+                label = { Text("Passphrase of that backup") },
+                singleLine = true,
+                visualTransformation = PasswordVisualTransformation(),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Spacer(Modifier.height(8.dp))
+            Button(
+                onClick = { confirming = true },
+                enabled = !busy && passphrase.isNotBlank(),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(if (busy) "Restoring..." else "Replace this archive")
+            }
+        }
+
         message?.let {
             Spacer(Modifier.height(12.dp))
             Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
@@ -920,6 +986,25 @@ fun BackupScreen(onBack: () -> Unit, onInteraction: () -> Unit) {
             Spacer(Modifier.height(12.dp))
             Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
         }
+    }
+
+    if (confirming) {
+        AlertDialog(
+            onDismissRequest = { confirming = false },
+            title = { Text("Replace the archive?") },
+            text = {
+                Text(
+                    "The archive on this device is replaced by the pair you picked. The files that " +
+                        "are here now stay beside the new ones.",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = ::restore) { Text("Replace") }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirming = false }) { Text("Cancel") }
+            },
+        )
     }
 }
 

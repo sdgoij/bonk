@@ -15,6 +15,69 @@ use crate::dto::{
     SellerDto, Summary,
 };
 
+/// Replaces the archive at these paths with a staged pair, after checking it.
+///
+/// The caller stages the two picked files in app-private storage and closes any
+/// open session first. The pair is unlocked and its whole audit recomputed
+/// before anything is replaced, so a wrong file or a wrong passphrase leaves the
+/// archive alone. The previous pair is kept beside the new one until the next
+/// restore, which is what makes a mistaken choice recoverable.
+pub fn restore(
+    database: impl AsRef<Path>,
+    keystore: impl AsRef<Path>,
+    staged_database: impl AsRef<Path>,
+    staged_keystore: impl AsRef<Path>,
+    passphrase: &str,
+) -> Result<crate::Summary, StoreError> {
+    let database = database.as_ref();
+    let keystore = keystore.as_ref();
+    let staged_database = staged_database.as_ref();
+    let staged_keystore = staged_keystore.as_ref();
+
+    let staged = Archive::unlock(staged_database, staged_keystore, passphrase)?;
+    if let Some(error) = crate::health::audit_archive(staged.database()).error {
+        return Err(StoreError::Rejected(format!("the backup does not check out: {error}")));
+    }
+    drop(staged);
+
+    // A journal left by the archive being replaced would be replayed over the
+    // restored file, so it goes with it.
+    for suffix in ["-wal", "-shm"] {
+        let _ = std::fs::remove_file(with_suffix(database, suffix));
+    }
+
+    let previous_database = with_suffix(database, ".previous");
+    let previous_keystore = with_suffix(keystore, ".previous");
+    if database.exists() {
+        std::fs::rename(database, &previous_database)?;
+    }
+    if keystore.exists() {
+        std::fs::rename(keystore, &previous_keystore)?;
+    }
+    std::fs::rename(staged_database, database)?;
+    std::fs::rename(staged_keystore, keystore)?;
+
+    // The restored archive says in its own chain that it was put back.
+    let restored = Archive::unlock(database, keystore, passphrase)?;
+    store::audit::append(
+        restored.database().connection(),
+        &store::now_rfc3339(),
+        "mobile",
+        "archive_restored",
+        "archive",
+        "",
+        serde_json::json!({ "file": database.file_name().map(|name| name.to_string_lossy().into_owned()) }),
+    )?;
+    restored.summary()
+}
+
+/// A sibling path with a suffix on the file name, such as `bonk.db.previous`.
+fn with_suffix(path: &Path, suffix: &str) -> std::path::PathBuf {
+    let mut name = path.file_name().unwrap_or_default().to_os_string();
+    name.push(suffix);
+    path.with_file_name(name)
+}
+
 /// An unlocked application session: one database, one keystore.
 pub struct Archive {
     database: Database,
@@ -684,6 +747,72 @@ mod tests {
         let report = archive.backup(&backups, "20261107T120000Z", 3).unwrap();
         assert!(report.path.exists());
         assert!(report.bytes > 0);
+    }
+
+    #[test]
+    fn a_staged_pair_restores_the_archive_and_keeps_the_old_one() {
+        let (source_directory, source) = archive();
+        seed(&source);
+        let source_database = source.database_path().to_path_buf();
+        let source_keystore = source.keystore_path.clone();
+        drop(source);
+
+        let (_target_directory, target) = archive();
+        let target_database = target.database_path().to_path_buf();
+        let target_keystore = target.keystore_path.clone();
+        drop(target);
+
+        // What the picker hands over: the two files, copied into app storage.
+        let staging = tempfile::TempDir::new().unwrap();
+        let staged_database = staging.path().join("bonk.db");
+        let staged_keystore = staging.path().join("keystore.bin");
+        std::fs::copy(&source_database, &staged_database).unwrap();
+        std::fs::copy(&source_keystore, &staged_keystore).unwrap();
+        assert!(source_directory.path().exists());
+
+        // A passphrase that does not open the staged pair changes nothing.
+        assert!(
+            restore(
+                &target_database,
+                &target_keystore,
+                &staged_database,
+                &staged_keystore,
+                "wrong"
+            )
+            .is_err()
+        );
+        assert!(Archive::unlock(&target_database, &target_keystore, "passphrase").is_ok());
+
+        let summary = restore(
+            &target_database,
+            &target_keystore,
+            &staged_database,
+            &staged_keystore,
+            "passphrase",
+        )
+        .unwrap();
+        assert_eq!(summary.sellers, 1);
+
+        // The pair that was replaced is still beside the new one.
+        assert!(with_suffix(&target_database, ".previous").exists());
+        assert!(with_suffix(&target_keystore, ".previous").exists());
+
+        let restored = Archive::unlock(&target_database, &target_keystore, "passphrase").unwrap();
+        assert_eq!(
+            restored.customers_csv().unwrap().lines().count(),
+            2,
+            "the customer came across"
+        );
+        let events: i64 = restored
+            .database()
+            .connection()
+            .query_row(
+                "SELECT COUNT(*) FROM audit_event WHERE kind = 'archive_restored'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(events, 1, "the restore is in the chain");
     }
 
     #[test]

@@ -1453,12 +1453,16 @@ The Backup screen exports the two halves. A backup is copied into the app's cach
 
 Run on a device: the exported copy verified on the host with `bonk verify-backup` against the same keystore, reporting 787 audit events and a matching chain head, and the kit's `keystore.bin` hashed identically to the archive's own.
 
+A restore takes both picked files into app-private storage, unlocks that pair with the passphrase the user supplies and runs the whole audit before anything moves. Only then are the current files renamed aside as `bonk.db.previous` and `keystore.bin.previous` and the staged pair moved in, so a wrong file or a wrong passphrase leaves the archive exactly as it was; the journal SQLite would otherwise replay over the restored file is removed first. The restored archive records an `archive_restored` event and the app opens it again, so the dashboard carries on with the restored counts.
+
+Run on a device: a pair of the wrong files was refused with the keystore message and the archive still held an edit made after the backup was taken; picking the real pair restored the earlier state, left both `.previous` files beside it, and put the restore in the chain.
+
 Run on an emulator: a seeded UBL picked from Downloads reported its number and "Not matched to a customer" (the document's seller is this archive), a second import of the same bytes reported the duplicate, a view intent delivered before unlock landed on the Import screen after unlocking, and a send intent delivered to the running app replaced the result on screen without a restart. The Received side listed the demo archive's inbound documents with `not matched` on the parked ones; matching one to a customer, approving it and marking it paid walked its status through the register, and returning from the document kept the Received side.
 
 - [x] SAF import and `ACTION_VIEW` / `ACTION_SEND` import
 - [x] Received list and supplier match
 - [x] Approve and mark-paid actions
-- [ ] Backup export (verify, then stream) and two-file restore
+- [x] Backup export (verify, then stream) and two-file restore
 - [x] Recovery-kit export
 - [ ] Settings: seller, UI language, document language, audit chain head
 - [x] Free-space preflight for backup

@@ -258,6 +258,9 @@ data class BackupExport(val path: String, val bytes: Long)
 /** Writes a verified copy of the archive, for the user to keep. */
 expect fun writeBackup(): BackupExport
 
+/** Replaces this device's archive with a staged pair, after checking it opens. */
+expect fun restoreArchive(passphrase: String): ArchiveSummary
+
 /** The keystore bytes, for a recovery kit. */
 expect fun recoveryKey(): ByteArray
 
@@ -333,6 +336,9 @@ interface BackupIo {
 
     /** Writes the key and its note into a folder the user picks. */
     fun exportKit(key: ByteArray, note: String, onDone: (String) -> Unit, onError: (String) -> Unit)
+
+    /** Picks a database and its key, copying both into the app's staging area. */
+    fun stagePair(onDone: () -> Unit, onError: (String) -> Unit)
 }
 
 /** The platform writing, created in a composable so Android can use its launchers. */

@@ -28,5 +28,5 @@ pub use dto::{
     PrecedingInvoiceDto, SellerDto, Summary,
 };
 pub use issue::{DocumentLanguage, invoice_pdf, pdf_data, render_issue};
-pub use session::Archive;
+pub use session::{Archive, restore};
 pub use templates::{ArchiveTemplate, DEFAULT_TEMPLATE, default_template, load_templates, renderer_for};

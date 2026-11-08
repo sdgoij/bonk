@@ -49,6 +49,19 @@ private object PendingKit {
     }
 }
 
+/** The first half of a restore pair, waiting for the second pick. */
+private object PendingStage {
+    var database: Uri? = null
+    var onDone: () -> Unit = {}
+    var onError: (String) -> Unit = {}
+
+    fun clear() {
+        database = null
+        onDone = {}
+        onError = {}
+    }
+}
+
 @Composable
 actual fun rememberBackupIo(): BackupIo {
     val context = LocalContext.current
@@ -83,7 +96,37 @@ actual fun rememberBackupIo(): BackupIo {
         handleKit(context, uri)
     }
 
-    return remember(create, folder) {
+    // A restore needs two files, so the second picker opens from the first one's
+    // callback and both are copied once the pair is complete.
+    val keystorePick = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        val database = PendingStage.database
+        val onDone = PendingStage.onDone
+        val onError = PendingStage.onError
+        PendingStage.clear()
+        if (database == null || uri == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            val (stagedDatabase, stagedKeystore) = MobileArchiveHost.stagingPaths()
+            val staged = withContext(Dispatchers.IO) {
+                runCatching {
+                    copyFile(context, database, stagedDatabase)
+                    copyFile(context, uri, stagedKeystore)
+                }
+            }
+            staged.onSuccess { onDone() }
+                .onFailure { onError("Could not read the files: ${it.message ?: it}") }
+        }
+    }
+
+    val databasePick = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri == null) {
+            PendingStage.clear()
+            return@rememberLauncherForActivityResult
+        }
+        PendingStage.database = uri
+        keystorePick.launch(arrayOf("*/*"))
+    }
+
+    return remember(create, folder, databasePick, keystorePick) {
         object : BackupIo {
             override fun export(
                 path: String,
@@ -112,8 +155,24 @@ actual fun rememberBackupIo(): BackupIo {
                 guard()
                 folder.launch(null)
             }
+
+            override fun stagePair(onDone: () -> Unit, onError: (String) -> Unit) {
+                PendingStage.onDone = onDone
+                PendingStage.onError = onError
+                guard()
+                databasePick.launch(arrayOf("*/*"))
+            }
         }
     }
+}
+
+/** Copies one picked file in chunks to a path the app owns. */
+private fun copyFile(context: Context, uri: Uri, destination: String) {
+    val target = File(destination)
+    target.parentFile?.mkdirs()
+    context.contentResolver.openInputStream(uri)?.use { input ->
+        target.outputStream().use { output -> input.copyTo(output) }
+    } ?: error("the file could not be opened")
 }
 
 /**
