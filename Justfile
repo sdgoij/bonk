@@ -92,6 +92,16 @@ mobile-android:
 mobile-release:
     cd mobile && ./gradlew :androidApp:assembleRelease -Pnative
 
+# Golden hash test: the sample invoice must render the same bytes on the host and
+# on a device. Runs the Rust assertion, then the same values as an instrumented
+# test on the device the serial names, or the only one attached.
+#
+# Usage: just mobile-golden [serial]
+mobile-golden serial="":
+    {{cargo}} test -p ffi artefact_hashes_match_the_golden_values
+    cd mobile && ./gradlew :androidApp:assembleDebug :androidApp:assembleDebugAndroidTest
+    sh tools/run-android-test.sh "{{serial}}" com.github.sdgoij.bonk.ArtefactDeterminismTest
+
 # Seed a demo archive into a connected Android device.
 #
 # Runs the same generator as `just demo`, then hands the archive to the app

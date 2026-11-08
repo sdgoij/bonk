@@ -1236,6 +1236,14 @@ passphrase is `bonk-demo`; a locked device stops the script with a message,
 since its app storage is encrypted until it is unlocked. An unavailable serial
 prints the attached devices and, when exactly one is attached, the serial to use.
 
+The determinism check is `just mobile-golden [serial]`. It runs the host
+assertion on the sample invoice's UBL and PDF hashes, builds the instrumented
+test APK, installs both APKs on the named device and runs
+`ArtefactDeterminismTest`, which asserts the same hashes there. The values live
+twice, once in `crates/ffi/src/lib.rs` and once in the test, because a golden
+file shared between a Rust build and a Kotlin test would be more machinery than
+two hashes deserve; the recipe running both is what keeps them in step.
+
 ### 8.5 Distribution
 
 - **Android:** Play internal testing → closed → production. Generate an AAB,
@@ -1413,6 +1421,8 @@ single place to update progress; the tables stay as the plan.
 
 The register is the one screen that does not sit in the scrolling root: its card takes the remaining height and draws its rows lazily, so a wide result set costs only the rows on screen. The search field carries the match count as supporting text, the chips filter by All, Issued, Paid and Archived, and a new result set starts at its best match instead of where the previous one was left. Date ranges are not in the mobile register yet; the store already filters on them.
 
+The sample invoice's UBL and PDF hash to the same bytes on the emulator as on the host. `just mobile-golden [serial]` runs the Rust assertion, then installs the app and its instrumented test on the device and runs the same check there; because `am instrument` exits zero both on a failure and on a class that does not exist, the script reads the runner's own verdict and fails unless at least one test passed.
+
 The flow was run on an emulator: filling the seller, editing a customer's Peppol endpoint, adding a buyer reference and issuing gave a numbered document, and the register, search and detail screens read it back with both artefacts.
 
 Share, Save and Open fetch the artefact on the IO dispatcher and hand it to the platform through a cache copy behind the file provider. The picker guard holds the background lock until the activity restarts, so the chooser, the save dialog and an external viewer all return to the screen the user left. Android resolves a viewer for PDF but not for UBL, so Open reports that nothing can display the file instead of dropping the user on the launcher. Both saved files hashed to the bytes the archive recorded: a seeded UBL matched the hash on its detail screen, and a freshly issued PDF matched its hash after opening in Drive's viewer and after saving through the platform picker.
@@ -1422,7 +1432,7 @@ Share, Save and Open fetch the artefact on the IO dispatcher and hand it to the 
 - [x] Share/save PDF and UBL
 - [x] Document detail: facts, lines, totals, history, artefacts
 - [x] Search/filter with virtualised results
-- [ ] Golden hash test host vs emulator
+- [x] Golden hash test host vs emulator
 - [x] PDF opens in the platform viewer
 
 #### M11.5 — Import and settings (2 weeks)
