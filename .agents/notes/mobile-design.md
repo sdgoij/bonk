@@ -1382,7 +1382,7 @@ single place to update progress; the tables stay as the plan.
 
 #### M11.3 — Customers and drafts (3 weeks)
 
-**Status 2026-11-08:** Customers and drafts are usable: list, search, create, edit, a draft list, and a compact editor with domain-computed totals and inline findings. Customer CSV imports and exports through the system file picker, and non-blocking warnings can be suppressed with a reason. The tap-to-focus findings sheet and the desktop parity test remain.
+**Status 2026-11-08:** Customers and drafts are usable: list, search, create, edit, a draft list, and a compact editor with domain-computed totals and inline findings. Customer CSV imports and exports through the system file picker, non-blocking warnings can be suppressed with a reason, and a parity test pins the editor rules to the domain. The tap-to-focus findings sheet remains.
 
 - [x] Customer list, search, create, edit
 - [x] CSV import/export through SAF
@@ -1392,7 +1392,7 @@ single place to update progress; the tables stay as the plan.
 - [ ] Findings sheet that focuses the field on tap
 - [x] Suppression flow for non-blocking warnings
 - [x] 500 ms debounced save and draft reload after process death
-- [ ] Validation parity test against the desktop
+- [x] Validation parity test against the desktop
 
 #### M11.4 — Issue and archive (2 weeks)
 

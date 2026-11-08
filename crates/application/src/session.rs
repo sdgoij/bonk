@@ -671,4 +671,36 @@ mod tests {
             "only non-blocking findings can be suppressed"
         );
     }
+
+    #[test]
+    fn the_editor_validation_matches_the_domain_rules() {
+        let (_directory, archive) = archive();
+        let customer = archive
+            .save_customer(&CustomerDto {
+                id: String::new(),
+                name: "Buyer BV".to_owned(),
+                street: None,
+                postal: None,
+                city: "Utrecht".to_owned(),
+                country: "NL".to_owned(),
+                vat: None,
+                kvk: None,
+                peppol: None,
+                contact: None,
+                email: None,
+                phone: None,
+            })
+            .unwrap();
+        let draft = archive.new_draft(&customer.id).unwrap();
+        let via_editor = archive.validate_draft(&draft).unwrap();
+
+        let domain = draft.clone().into_draft().unwrap();
+        let seller = store::load_seller(archive.database().connection(), domain.seller_id).unwrap();
+        let buyer = store::load_customer(archive.database().connection(), domain.customer_id).unwrap();
+        let direct: Vec<FindingDto> = crux::validate_draft(&domain, &seller.party, &buyer.party)
+            .iter()
+            .map(FindingDto::from)
+            .collect();
+        assert_eq!(via_editor, direct, "the editor and the desktop must share the rules");
+    }
 }
