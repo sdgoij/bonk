@@ -74,6 +74,7 @@ private sealed interface Screen {
     data class CustomerEdit(val customer: Customer) : Screen
     data object Drafts : Screen
     data class DraftEditor(val draft: Draft, val customers: List<Customer>) : Screen
+    data class Issued(val result: IssueResult) : Screen
 }
 
 private fun Screen.isArchiveContent(): Boolean = when (this) {
@@ -83,6 +84,7 @@ private fun Screen.isArchiveContent(): Boolean = when (this) {
     Screen.Drafts,
     is Screen.CustomerEdit,
     is Screen.DraftEditor,
+    is Screen.Issued,
     -> true
 
     else -> false
@@ -483,7 +485,11 @@ fun App() {
                                     customers = current.customers,
                                     onBack = { screen = Screen.Drafts },
                                     onInteraction = ::touch,
+                                    onIssued = { screen = Screen.Issued(it) },
                                 )
+                                is Screen.Issued -> IssueResultScreen(current.result) {
+                                    screen = Screen.Drafts
+                                }
                             }
                         }
                     }

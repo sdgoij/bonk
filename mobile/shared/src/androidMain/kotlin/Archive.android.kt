@@ -160,6 +160,11 @@ object MobileArchiveHost {
         return opened.newDraft(customerId).toCommon()
     }
 
+    fun issueDraft(draft: Draft): IssueResult {
+        val opened = archive ?: error("the archive is not open")
+        return opened.issueDraft(draft.toFfi()).toCommon()
+    }
+
     fun customersCsv(): String {
         val opened = archive ?: error("the archive is not open")
         return opened.customersCsv()
@@ -298,6 +303,25 @@ private fun uniffi.bonkc.DraftTotalsRecord.toCommon() = DraftTotals(
     netMicros = netMicros,
     taxMicros = taxMicros,
     grossMicros = grossMicros,
+)
+
+private fun uniffi.bonkc.IssueRecord.toCommon() = IssueResult(
+    issued = issued?.let { summary ->
+        IssuedDocument(
+            id = summary.id,
+            number = summary.number,
+            issueDate = summary.issueDate,
+            currency = summary.currency,
+            netMicros = summary.netMicros,
+            taxMicros = summary.taxMicros,
+            grossMicros = summary.grossMicros,
+            status = summary.status,
+        )
+    },
+    findings = findings.map { it.toCommon() },
+    ublSha256 = ublSha256.orEmpty(),
+    pdfSha256 = pdfSha256.orEmpty(),
+    pdfError = pdfError.orEmpty(),
 )
 
 private fun uniffi.bonkc.CustomerImportRecord.toCommon() = CustomerImportReport(

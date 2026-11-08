@@ -77,6 +77,27 @@ data class Finding(
     val blocking: Boolean get() = severity == "blocking"
 }
 
+/** An issued document, as the result screen shows it. */
+data class IssuedDocument(
+    val id: String,
+    val number: String,
+    val issueDate: String,
+    val currency: String,
+    val netMicros: Long,
+    val taxMicros: Long,
+    val grossMicros: Long,
+    val status: String,
+)
+
+/** The result of an issue attempt: a document, or the findings that stopped it. */
+data class IssueResult(
+    val issued: IssuedDocument?,
+    val findings: List<Finding> = emptyList(),
+    val ublSha256: String = "",
+    val pdfSha256: String = "",
+    val pdfError: String = "",
+)
+
 /** Customers, ordered by display name. */
 expect fun listCustomers(): List<Customer>
 
@@ -97,6 +118,9 @@ expect fun validateDraft(draft: Draft): List<Finding>
 
 /** Totals for the editor preview, computed by the domain. */
 expect fun draftTotals(draft: Draft): DraftTotals
+
+/** Issues a draft, or returns the findings that stopped it. */
+expect fun issueDraft(draft: Draft): IssueResult
 
 /** A new invoice draft for a customer, dated today and saved. */
 expect fun newDraft(customerId: String): Draft

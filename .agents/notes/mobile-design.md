@@ -1399,14 +1399,14 @@ single place to update progress; the tables stay as the plan.
 
 #### M11.4 — Issue and archive (2 weeks)
 
-**Status 2026-11-08:** Issuing runs through `application`: the draft is saved, tier-1 and conformance findings are collected with suppressed warnings removed, and a blocking finding stops the attempt before a number is allocated. A document that passes gets its number, UBL, PDF artefact and audit events in the same transaction the desktop uses. A PDF that fails to render leaves the document issued and reports the error. Two archives issuing the same draft produce the same UBL and PDF hashes.
+**Status 2026-11-08:** The draft editor has an Issue button. It hands the draft to `application`, which saves it, validates it, and either issues a numbered document with UBL and PDF artefacts or returns the findings that stopped it. A refusal opens a dialog listing every finding the archive reported, conformance rules included; a finding shows its field path as a chip when the editor has that control, and the dialog says how many fields are outside this screen. A success replaces the editor with the issued document: number, issue date, totals, both artefact hashes, and the PDF error separately when the layout failed.
 
-The FFI now carries issuing, the document register (newest first, searchable over numbers, parties, references and notes), the detail view with lines, totals, artefacts and events, and artefact bytes verified against their recorded hash.
+Issuing a mobile draft stops at conformance because the placeholder seller has no address, VAT identifier or Peppol endpoint, and the compact editor has no buyer reference or order reference field. The flow was run on an emulator both ways: the blocked path against the test archive, and the success path against a seeded archive with a complete seller, which issued a numbered document, filed both artefacts, and returned to a draft list with that draft gone.
 
-Issuing a mobile draft currently stops at conformance for reasons the compact editor cannot answer: EN 16931 wants a buyer reference or order reference (there is no field), and the Peppol profile wants an endpoint identifier on both parties plus a street and post code for the seller (the placeholder seller has none of them). The seller screen belongs with the issue screen, not after it.
+The register and detail screens follow, then sharing.
 
 - [x] Issue through `application`: validate → UBL → PDF → artefacts → audit
-- [ ] Number assigned inside the transaction; no promised number in the UI
+- [x] Number assigned inside the transaction; no promised number in the UI
 - [ ] Share/save PDF and UBL
 - [ ] Document detail: facts, lines, totals, history, artefacts
 - [ ] Search/filter with virtualised results

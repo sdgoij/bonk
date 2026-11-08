@@ -8,7 +8,9 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
@@ -267,6 +269,7 @@ fun DraftEditorScreen(
     customers: List<Customer>,
     onBack: () -> Unit,
     onInteraction: () -> Unit,
+    onIssued: (IssueResult) -> Unit,
 ) {
     var current by remember { mutableStateOf(draft) }
     var totals by remember { mutableStateOf<DraftTotals?>(null) }
@@ -276,6 +279,8 @@ fun DraftEditorScreen(
     var suppressing by remember { mutableStateOf<Finding?>(null) }
     var reason by remember { mutableStateOf("") }
     var focus by remember { mutableStateOf<DraftFocusRequest?>(null) }
+    var busy by remember { mutableStateOf(false) }
+    var issueFindings by remember { mutableStateOf<List<Finding>?>(null) }
     val scope = rememberCoroutineScope()
 
     // Tapping a finding reveals its control. A customer finding can only be
@@ -301,6 +306,28 @@ fun DraftEditorScreen(
         }
         preview.onSuccess { (t, f) -> totals = t; findings = f }
             .onFailure { error = it.message ?: it.toString() }
+    }
+
+    // The issue attempt saves the draft itself, so an edit that is still inside
+    // the debounce is what gets issued. The archive decides, and every finding
+    // it returns is shown, including the ones this screen cannot answer.
+    fun issue() {
+        error = null
+        issueFindings = null
+        busy = true
+        val attempt = current
+        scope.launch {
+            val result = withContext(Dispatchers.IO) { runCatching { issueDraft(attempt) } }
+            busy = false
+            result.onSuccess { outcome ->
+                val issued = outcome.issued
+                when {
+                    issued != null -> onIssued(outcome)
+                    outcome.findings.isNotEmpty() -> issueFindings = outcome.findings
+                    else -> error = "The archive refused the document without a finding."
+                }
+            }.onFailure { error = it.message ?: it.toString() }
+        }
     }
 
     Column(Modifier.fillMaxWidth()) {
@@ -391,36 +418,11 @@ fun DraftEditorScreen(
             Spacer(Modifier.height(12.dp))
             Text("Findings", style = MaterialTheme.typography.titleMedium)
             findings.forEach { finding ->
-                val reference = listOf(finding.code, finding.bt).filter { it.isNotBlank() }.joinToString(" ")
-                val target = draftFocus(finding.field, current.lines)
-                val tone = if (finding.blocking) {
-                    MaterialTheme.colorScheme.error
-                } else {
-                    MaterialTheme.colorScheme.onSurfaceVariant
-                }
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f).padding(vertical = 4.dp)) {
-                        Text(
-                            "${finding.severity}: $reference",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = tone,
-                        )
-                        Text(finding.message, style = MaterialTheme.typography.bodySmall)
-                        if (finding.field.isNotBlank()) {
-                            if (target != null) {
-                                AssistChip(
-                                    onClick = { moveTo(finding.field) },
-                                    label = { Text(finding.field, style = MaterialTheme.typography.labelSmall) },
-                                )
-                            } else {
-                                Text(
-                                    finding.field,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = tone,
-                                )
-                            }
-                        }
-                    }
+                FindingEntry(
+                    finding = finding,
+                    focusable = draftFocus(finding.field, current.lines) != null,
+                    onFocus = { moveTo(finding.field) },
+                ) {
                     if (!finding.blocking) {
                         TextButton(
                             onClick = {
@@ -433,7 +435,56 @@ fun DraftEditorScreen(
                 }
             }
         }
+
+        Spacer(Modifier.height(16.dp))
+        Button(
+            onClick = ::issue,
+            enabled = !busy,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text(
+                when {
+                    busy -> "Issuing..."
+                    current.docType == "381" -> "Issue credit note"
+                    else -> "Issue invoice"
+                },
+            )
+        }
         error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+    }
+
+    issueFindings?.let { blocked ->
+        AlertDialog(
+            onDismissRequest = { issueFindings = null },
+            title = { Text("Not issued") },
+            text = {
+                Column(Modifier.verticalScroll(rememberScrollState())) {
+                    val unfixable = blocked.count { draftFocus(it.field, current.lines) == null }
+                    Text(
+                        if (unfixable > 0) {
+                            "The archive refused the document. $unfixable of these point at a field this screen does not edit."
+                        } else {
+                            "The archive refused the document."
+                        },
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    blocked.forEach { finding ->
+                        FindingEntry(
+                            finding = finding,
+                            focusable = draftFocus(finding.field, current.lines) != null,
+                            onFocus = {
+                                issueFindings = null
+                                moveTo(finding.field)
+                            },
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { issueFindings = null }) { Text("Close") }
+            },
+        )
     }
 
     suppressing?.let { finding ->
@@ -478,6 +529,95 @@ fun DraftEditorScreen(
                 TextButton(onClick = { suppressing = null }) { Text("Cancel") }
             },
         )
+    }
+}
+
+@Composable
+private fun FindingEntry(
+    finding: Finding,
+    focusable: Boolean,
+    onFocus: () -> Unit,
+    action: @Composable () -> Unit = {},
+) {
+    val reference = listOf(finding.code, finding.bt).filter { it.isNotBlank() }.joinToString(" ")
+    val tone = if (finding.blocking) {
+        MaterialTheme.colorScheme.error
+    } else {
+        MaterialTheme.colorScheme.onSurfaceVariant
+    }
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f).padding(vertical = 4.dp)) {
+            Text(
+                "${finding.severity}: $reference",
+                style = MaterialTheme.typography.labelMedium,
+                color = tone,
+            )
+            Text(finding.message, style = MaterialTheme.typography.bodySmall)
+            if (finding.field.isNotBlank()) {
+                if (focusable) {
+                    AssistChip(
+                        onClick = onFocus,
+                        label = { Text(finding.field, style = MaterialTheme.typography.labelSmall) },
+                    )
+                } else {
+                    Text(finding.field, style = MaterialTheme.typography.labelSmall, color = tone)
+                }
+            }
+        }
+        action()
+    }
+}
+
+/** What the archive holds after a successful issue. */
+@Composable
+fun IssueResultScreen(result: IssueResult, onDone: () -> Unit) {
+    val issued = result.issued ?: return
+    Column(Modifier.fillMaxWidth()) {
+        ScreenHeader("Issued", onDone) { }
+        Text(issued.number, style = MaterialTheme.typography.headlineMedium)
+        Text(
+            "Issued ${issued.issueDate}",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(12.dp))
+        Text("Net ${formatMoney(issued.netMicros)} ${issued.currency}", style = MaterialTheme.typography.bodyMedium)
+        Text("VAT ${formatMoney(issued.taxMicros)} ${issued.currency}", style = MaterialTheme.typography.bodyMedium)
+        Text(
+            "Gross ${formatMoney(issued.grossMicros)} ${issued.currency}",
+            style = MaterialTheme.typography.titleMedium,
+        )
+
+        Spacer(Modifier.height(12.dp))
+        Text("Filed artefacts", style = MaterialTheme.typography.titleMedium)
+        if (result.ublSha256.isNotBlank()) {
+            Text("UBL", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(result.ublSha256, style = MaterialTheme.typography.labelSmall)
+        }
+        if (result.pdfSha256.isNotBlank()) {
+            Text("PDF", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(result.pdfSha256, style = MaterialTheme.typography.labelSmall)
+        }
+        if (result.pdfError.isNotBlank()) {
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "The PDF could not be filed: ${result.pdfError}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+            )
+        }
+
+        if (result.findings.isNotEmpty()) {
+            Spacer(Modifier.height(12.dp))
+            Text("Warnings", style = MaterialTheme.typography.titleMedium)
+            result.findings.forEach { finding ->
+                Text(
+                    "${finding.code} ${finding.message}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
     }
 }
 
