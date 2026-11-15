@@ -1509,10 +1509,12 @@ person can do: book the correction in an open year, or reopen the year first.
 That sentence is why `reopen-year` exists rather than being left as a known limit.
 It reverses the closing entry into the same adjustment period and appends a
 `reopened` event; the months stay locked, because a month lock is its own fact and
-the month a correction belongs in is reopened on its own. Closing again writes a
-fresh resultaatbestemming, so the pair is the one the books already understand.
-`year_is_closed` therefore reads the *latest* event on the adjustment period rather
-than the presence of one.
+the month a correction belongs in is reopened on its own once the year is open.
+`reopen_period` therefore refuses a month inside a closed year and points at the
+year: reopening it would change a status and allow nothing, which is a button that
+looks like it works. Closing again writes a fresh resultaatbestemming, so the pair
+is the one the books already understand. `year_is_closed` therefore reads the
+*latest* event on the adjustment period rather than the presence of one.
 
 Blockers are the unposted documents dated in the year, the months' own `9999` rule
 named by month, and a trial balance that does not add up. Unprepared returns are

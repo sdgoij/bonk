@@ -301,9 +301,10 @@ dated in the year that nobody posted, or a month with an unplaced cost, refuses 
 close and names itself; an unprepared btw-aangifte is printed as a warning, because
 a return can be prepared after the books are locked. `reopen-year --reason` reverses
 the resultaatbestemming into the same period and records why; the months stay
-locked, so the month a correction belongs in is reopened on its own, and closing
-again writes a fresh entry. A closed year takes no postings at all, whatever state
-its months are in.
+locked, so once the year is open the month a correction belongs in is reopened on
+its own — while the year is closed a month refuses to reopen at all, because that
+would change a status and allow nothing. Closing again writes a fresh entry. A
+closed year takes no postings at all, whatever state its months are in.
 
 A bank statement is imported once, whatever range the bank sends it in: the file
 is stored by hash and each payment by a fingerprint of what identifies it, so an

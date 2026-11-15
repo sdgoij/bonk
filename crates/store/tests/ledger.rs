@@ -482,6 +482,14 @@ fn a_reopened_year_takes_a_correction_and_closes_again() {
     assert_eq!(second.result_micros, 900_000_000, "the cost is in the year now");
     assert_eq!(second.locked, vec![3], "March was the only open month");
     assert_eq!(balance(&database, store::RESULT_ACCOUNT), -900_000_000);
+
+    // A month inside the closed year is not reopened on its own: the year is what
+    // refuses the postings, so the year is what has to open first.
+    let said = store::reopen_period(connection, march.id, "weer", "ada", LATER)
+        .unwrap_err()
+        .to_string();
+    assert!(said.contains("reopen the year"), "{said}");
+    assert!(said.contains("reopen-year"), "the remedy is a command: {said}");
 }
 
 #[test]

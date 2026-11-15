@@ -169,11 +169,13 @@ change what the supplier is owed.
   receivable, not a mistake — and an unprepared return is reported rather than
   enforced, because a return can be prepared after the books are locked.
 - Reopening a year reverses its resultaatbestemming into the same adjustment
-  period and records the reason. The months stay locked, so the month a correction
-  belongs in is reopened on its own; closing again writes a fresh entry.
+  period and records the reason. The months stay locked, so once the year is open
+  the month a correction belongs in is reopened on its own; closing again writes a
+  fresh entry.
 - A closed year refuses postings whatever the state of its months: a month
   reopened inside a closed year still takes none, because the year is the fact
-  that decides.
+  that decides. For the same reason a month in a closed year refuses to reopen at
+  all — the button would change a status and allow nothing.
 
 ### 3.4 Open items and subledgers
 

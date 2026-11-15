@@ -290,6 +290,11 @@ pub(crate) fn lock_period_in(
 /// The lock event stays: unlocking is a fact like locking was, so a reader can see
 /// that a month was closed and why somebody reopened it. A posting made between the
 /// two is not undone, which is what makes a close worth having.
+///
+/// A month inside a closed year is refused: reopening it would change a status and
+/// allow nothing, because the year is what refuses the postings. The year is the
+/// thing to reopen, and the sentence says so — a month reopened there would be a
+/// button that appears to work and then cannot.
 pub fn reopen_period(
     conn: &Connection,
     period_id: FiscalPeriodId,
@@ -301,19 +306,24 @@ pub fn reopen_period(
         return Err(StoreError::Rejected("reopening a period needs a reason".to_owned()));
     }
     let transaction = conn.unchecked_transaction()?;
-    let status: Option<String> = transaction
+    let found: Option<(String, i32, String)> = transaction
         .query_row(
-            "SELECT status FROM fiscal_period WHERE id = ?1",
+            "SELECT status, year, seller_id FROM fiscal_period WHERE id = ?1",
             params![period_id.to_string()],
-            |row| row.get(0),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
         .optional()?;
-    match status.as_deref() {
-        None => return Err(StoreError::NotFound(format!("period {period_id}"))),
-        Some("open") => {
-            return Err(StoreError::Rejected("the period is not closed".to_owned()));
-        }
-        Some(_) => {}
+    let Some((status, year, seller)) = found else {
+        return Err(StoreError::NotFound(format!("period {period_id}")));
+    };
+    if status == "open" {
+        return Err(StoreError::Rejected("the period is not closed".to_owned()));
+    }
+    let seller_id = SellerId::parse_str(&seller).map_err(|error| StoreError::Data(error.to_string()))?;
+    if year_is_closed(&transaction, seller_id, year)? {
+        return Err(StoreError::Rejected(format!(
+            "{year} is closed; reopen the year before one of its months (`bonk ledger reopen-year --year {year} --reason \"...\"`)"
+        )));
     }
 
     transaction.execute(
