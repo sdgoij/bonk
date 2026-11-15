@@ -141,6 +141,14 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("../migrations/0018_bank_rules.sql"),
         down: Some(include_str!("../migrations/0018_bank_rules_down.sql")),
     },
+    Migration {
+        version: 19,
+        name: "0019_document_account",
+        // Reversible until a posted document carries a choice: the account is on
+        // the journal line, but who decided it lives only in this table.
+        sql: include_str!("../migrations/0019_document_account.sql"),
+        down: Some(include_str!("../migrations/0019_document_account_down.sql")),
+    },
 ];
 
 /// SHA-256 of the migration source, hex encoded.
@@ -280,19 +288,19 @@ mod tests {
     fn rollback_is_preflighted_and_refuses_irreversible_migrations() {
         let mut conn = Connection::open_in_memory().unwrap();
         apply(&mut conn).unwrap();
-        assert_eq!(current_version(&conn), 18);
+        assert_eq!(current_version(&conn), 19);
 
         assert!(rollback_to(&mut conn, 1).is_err());
         assert_eq!(
             current_version(&conn),
-            18,
+            19,
             "a refused rollback must not partially apply"
         );
 
         assert_eq!(
             rollback_to(&mut conn, 2).unwrap(),
-            16,
-            "0018 through 0003 all declare a down"
+            17,
+            "0019 through 0003 all declare a down"
         );
         assert_eq!(current_version(&conn), 2);
     }
@@ -323,7 +331,7 @@ mod tests {
         assert!(text.contains("no_postings"), "unexpected error: {text}");
         assert_eq!(
             current_version(&conn),
-            18,
+            19,
             "nothing may be dropped before the guard trips"
         );
     }

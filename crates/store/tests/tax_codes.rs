@@ -259,7 +259,7 @@ fn only_received_documents_take_a_code() {
     let sale = books.sell(TaxTreatment::standard(VatRate::STANDARD_NL), 100, "2026-01-10");
 
     let error = store::assign_tax_code(books.database.connection(), sale, "NL-AE-GOODS", "ada", NOW).unwrap_err();
-    assert!(error.to_string().contains("received documents"), "{error}");
+    assert!(error.to_string().contains("we issued"), "{error}");
 }
 
 #[test]

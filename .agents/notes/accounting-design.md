@@ -124,6 +124,17 @@ useless to an accountant). The model is: user accounts are primary, each may
 carry an RGS code, and a ~60-account starter chart ships pre-mapped. Reports can
 be produced either per account or rolled up per RGS group.
 
+**Where a purchase lands.** A sale posts itself: its category and rate decide the
+revenue account and the VAT. A purchase cannot — the invoice says what it cost, not
+which of our accounts that is — so the account is a decision a person makes, stored
+as `document_account` with an author and a time, and snapshotted on the posting.
+Until somebody decides, the cost posts to `9999 Nog te rubriceren`, and that is a
+real account with a real balance rather than a marker: a period close refuses while
+it holds anything, because a return built on half-placed costs is worse than no
+return. The decision is per document, not per line; splitting a mixed purchase
+still needs a memorial entry, which is where per-line classification belongs once
+an item catalogue exists.
+
 ### 3.3 Periods
 
 - A fiscal year is configured per seller (start month, typically January).

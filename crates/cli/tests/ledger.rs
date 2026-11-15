@@ -851,6 +851,41 @@ fn a_rule_books_a_bank_fee_without_an_invoice() {
 }
 
 #[test]
+fn a_purchase_is_put_on_an_expense_account_before_it_is_posted() {
+    let archive = Archive::new();
+    archive.run(&["ledger", "setup"]);
+
+    // The archive's own invoice, imported back under a supplier's number, so there
+    // is a received document to place.
+    let issued = std::fs::read_to_string(format!("{}/2026-0001.xml", archive.out)).expect("the issued UBL");
+    let received = archive.dir.path().join("inkoop.xml");
+    std::fs::write(&received, issued.replacen("2026-0001", "INK-1", 1)).expect("the inbound UBL");
+    let said = archive.run(&["import", received.to_str().expect("utf-8")]);
+    assert!(said.contains("2026-0001") || said.contains("INK-1"), "{said}");
+
+    // Until somebody decides, the cost has nowhere to go.
+    let said = archive.run(&["ledger", "account", "INK-1"]);
+    assert!(said.contains("none"), "{said}");
+    assert!(said.contains("9999"), "{said}");
+
+    let said = archive.run(&["ledger", "account", "INK-1", "7100"]);
+    assert!(said.contains("account:   7100"), "{said}");
+
+    let said = archive.run(&["ledger", "post"]);
+    assert!(said.contains("posted INK-1"), "{said}");
+
+    // The cost is on the chosen account, and nothing is left unclassified.
+    let said = archive.run(&["ledger", "trial-balance", "--from", "2026-01-01", "--to", "2026-12-31"]);
+    assert!(said.contains("7100"), "{said}");
+    assert!(!said.contains("9999"), "nothing unclassified: {said}");
+    assert!(said.trim_end().ends_with("balanced"), "{said}");
+
+    // The entry snapshotted the account, so it cannot be changed afterwards.
+    let said = archive.fail(&["ledger", "account", "INK-1", "7000"]);
+    assert!(said.contains("already posted"), "{said}");
+}
+
+#[test]
 fn a_memorial_entry_is_written_and_must_balance() {
     let archive = Archive::new();
     archive.run(&["ledger", "setup"]);
@@ -941,7 +976,11 @@ fn tax_codes_are_listed_and_a_sale_has_none_to_choose() {
 
     // Only received documents take a code: a sale is placed by its own category.
     let said = archive.fail(&["ledger", "tax-code", "2026-0001", "NL-AE-GOODS"]);
-    assert!(said.contains("received documents"), "{said}");
+    assert!(said.contains("we issued"), "{said}");
+
+    // And no cost account either, for the same reason.
+    let said = archive.fail(&["ledger", "account", "2026-0001", "7100"]);
+    assert!(said.contains("we issued"), "{said}");
 
     // The same applies to a correction: there is no box to move on a sale.
     let said = archive.fail(&["ledger", "reclassify", "VK:2026-0001", "NL-AE-GOODS", "--reason", "x"]);

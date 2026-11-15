@@ -159,13 +159,11 @@ impl Books {
                 |row| row.get(0),
             )
             .unwrap();
-        post_document(
-            self.database.connection(),
-            DocumentId::parse_str(&id).unwrap(),
-            "ada",
-            NOW,
-        )
-        .unwrap();
+        let document = DocumentId::parse_str(&id).unwrap();
+        // A purchase is given an account before it posts: the cost belongs somewhere
+        // in the chart, and a period cannot close while `9999` holds anything.
+        store::expense::assign(self.database.connection(), document, "7000", "ada", NOW).unwrap();
+        post_document(self.database.connection(), document, "ada", NOW).unwrap();
     }
 
     /// A traded quarter: five sales across the treatments the rules support and

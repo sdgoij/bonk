@@ -766,7 +766,7 @@ mod tests {
 
         assert!(Archive::unlock(&database, &keystore, "wrong").is_err());
         let archive = Archive::unlock(&database, &keystore, "passphrase").unwrap();
-        assert_eq!(archive.summary().unwrap().schema_version, 18);
+        assert_eq!(archive.summary().unwrap().schema_version, 19);
         assert_eq!(archive.database_path(), database);
     }
 

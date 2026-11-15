@@ -245,6 +245,7 @@ bonk ledger rebuild-open-items                          # fill the subledger of 
 bonk ledger tax-codes                                   # the treatments a purchase can be filed under
 bonk ledger tax-code 2026-0042                          # what a document is filed under
 bonk ledger tax-code 2026-0042 NL-AE-GOODS              # put its reverse-charged VAT in 4b
+bonk ledger account 2026-0042 7100                     # where its cost lands, before it is posted
 bonk ledger post-manual --date 2026-03-01 --description "Bankkosten" --line "7100|debit|12.50" --line "1100|credit|12.50"
 bonk ledger reclassify IK:2026-0001 NL-AE-GOODS --reason "verkeerde rubriek"
 bonk ledger open-items --kind payable --aging --as-of 2026-03-31
@@ -332,6 +333,16 @@ rule guessing a rate would under-declare input tax silently. `--dry-run` shows w
 a rule would book before it books it, and `bank unclassify` reverses it — the same
 reversal-rather-than-delete rule as everywhere else in the ledger.
 
+A purchase also has to land somewhere in the chart. An invoice says what it cost,
+not where it belongs, and EN 16931 has no field whose meaning is "office costs" for
+every business, so `bonk ledger account <document> 7100` decides it — before the
+posting, because the entry snapshots the account. Until somebody decides, the cost
+posts to `9999 Nog te rubriceren`, which is a real account with a real balance and
+a period close that will not accept it: a month cannot be locked while that account
+holds anything. A cost already dated in a month with a `9999` balance is moved with
+a memorial entry dated in the same month — the reversal pair the memorial journal
+exists for — because a posted document's own entry is append-only.
+
 One box needs a person to decide it. `AE` says "reverse charge" and nothing more,
 and the form asks reverse-charged goods (4b) and services (4a) separately, so a
 reverse-charged purchase lands in 4a unless someone names the treatment:
@@ -379,11 +390,10 @@ that names one invoice, a transfer that pays two at once, a part payment, two ba
 fees the rule recognises, interest nothing will ever match, and a supplier payment.
 `bonk ledger bank classify --dry-run` therefore prints two fees that would be
 posted, four payments reserved for their invoices, and one line with no rule at
-all — which is the whole behaviour of the guards in one screen. `bonk ledger
-vat-return --year <year> --month <month>` is fileable on the demo, because posting
-every document is what makes a period fileable; the purchases land on `9999 Nog te
-rubriceren` until someone rubrics them, which is what that account is for and the
-one place the demo looks unfinished on purpose.
+all — which is the whole behaviour of the guards in one screen. Every purchase is
+given an expense account before it is posted, so `9999 Nog te rubriceren` is empty
+and a period can be closed; `bonk ledger vat-return --year <year> --month <month>`
+is fileable on the demo for the same reason.
 
 ### The window
 

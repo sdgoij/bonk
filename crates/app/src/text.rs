@@ -1162,6 +1162,57 @@ pub mod find {
         )
     }
 
+    /// The label of the account picker.
+    pub fn account_label(language: Language) -> &'static str {
+        sentence!(language, "Cost account", "Kostenrekening")
+    }
+
+    /// The account a purchase lands on when nobody has chosen one.
+    pub fn account_none(language: Language) -> &'static str {
+        sentence!(language, "not decided yet", "nog niet bepaald")
+    }
+
+    /// The button that returns a purchase to that default.
+    pub fn account_clear_action(language: Language) -> &'static str {
+        sentence!(language, "Undecide", "Onbepaald")
+    }
+
+    /// A hint under the picker.
+    pub fn account_hint(language: Language) -> &'static str {
+        sentence!(
+            language,
+            "Where the cost of this purchase lands. Until you choose, it lands on 9999 and the period cannot be closed.",
+            "Waar de kosten van deze inkoop landen. Tot je kiest, landen ze op 9999 en kan de periode niet sluiten."
+        )
+    }
+
+    /// The account is already in the entry, so it is not editable here.
+    pub fn account_posted(language: Language) -> &'static str {
+        sentence!(
+            language,
+            "Posted: the account is fixed in its entry. A correction is a memorial entry.",
+            "Geboekt: de rekening staat vast in de boeking. Een correctie is een memoriaalboeking."
+        )
+    }
+
+    /// The account was chosen.
+    pub fn account_assigned(language: Language, code: &str) -> String {
+        sentence!(
+            language,
+            format!("Its cost lands on {code}."),
+            format!("De kosten landen op {code}.")
+        )
+    }
+
+    /// The choice was removed.
+    pub fn account_cleared(language: Language) -> &'static str {
+        sentence!(
+            language,
+            "Account cleared; its cost lands on 9999 again.",
+            "Rekening gewist; de kosten landen weer op 9999."
+        )
+    }
+
     /// The assignment changed.
     pub fn tax_code_assigned(language: Language, code: &str, rubriek: &str) -> String {
         sentence!(

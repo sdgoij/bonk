@@ -24,6 +24,7 @@ pub mod device;
 mod dto;
 pub mod error;
 pub mod evidence;
+pub mod expense;
 pub mod import_profile;
 pub mod integrity;
 pub mod keystore;

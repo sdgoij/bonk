@@ -15,7 +15,7 @@
 //! resolved code on its lines, so a report never has to ask the document again.
 
 use crux::{DocumentId, Journal, VatCategory};
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, params};
 use serde_json::json;
 
 use crate::audit;
@@ -92,7 +92,7 @@ pub fn assign(
     let code = crux::TaxCode::parse(code).map_err(|error| StoreError::Rejected(error.to_string()))?;
 
     let transaction = conn.unchecked_transaction()?;
-    let breakdown = unposted_inbound(&transaction, document_id)?;
+    let breakdown = crate::posting::unposted_inbound(&transaction, document_id, "treatment")?;
     let record = load(&transaction, &code)?.ok_or_else(|| StoreError::NotFound(format!("tax code {code}")))?;
     if record.journal != Journal::Purchase {
         return Err(StoreError::Rejected(format!(
@@ -132,7 +132,7 @@ pub fn assign(
 /// Returns a document to the treatment its own category implies.
 pub fn clear(conn: &Connection, document_id: DocumentId, actor: &str, now: &str) -> Result<(), StoreError> {
     let transaction = conn.unchecked_transaction()?;
-    unposted_inbound(&transaction, document_id)?;
+    crate::posting::unposted_inbound(&transaction, document_id, "treatment")?;
     let removed = transaction.execute(
         "DELETE FROM document_tax_code WHERE document_id = ?1",
         [document_id.to_string()],
@@ -153,37 +153,6 @@ pub fn clear(conn: &Connection, document_id: DocumentId, actor: &str, now: &str)
     )?;
     transaction.commit()?;
     Ok(())
-}
-
-/// Reads a document's breakdown, refusing one that cannot be classified.
-fn unposted_inbound(conn: &Connection, document_id: DocumentId) -> Result<String, StoreError> {
-    let (direction, breakdown): (String, String) = conn
-        .query_row(
-            "SELECT direction, tax_breakdown_json FROM document WHERE id = ?1",
-            [document_id.to_string()],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )
-        .optional()?
-        .ok_or_else(|| StoreError::NotFound(format!("document {document_id}")))?;
-    if direction != "inbound" {
-        return Err(StoreError::Rejected(
-            "only received documents have a treatment to choose; a sale is placed by its own category and rate"
-                .to_owned(),
-        ));
-    }
-    let posted: Option<String> = conn
-        .query_row(
-            "SELECT id FROM journal_entry WHERE source_kind = 'inbound_document' AND source_id = ?1",
-            [document_id.to_string()],
-            |row| row.get(0),
-        )
-        .optional()?;
-    if posted.is_some() {
-        return Err(StoreError::Rejected(format!(
-            "document {document_id} is already posted; its treatment is fixed in the entry that was written"
-        )));
-    }
-    Ok(breakdown)
 }
 
 /// True when the stored breakdown has a row of this category.

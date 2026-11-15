@@ -1404,10 +1404,9 @@ month while any document dated in it is unposted, so the obvious shortcut (post 
 newest few) would have shown every month as `fileable: no` with a list of blockers
 nobody could clear from the window. The cap that remains is for the
 twenty-thousand-document search benchmark, where posting all of it would turn a
-minute of seeding into an hour. The consequence worth knowing: the received
-purchases land on `9999 Nog te rubriceren`, because nothing maps a supplier's line to
-an expense account — the account exists for exactly that, and it is the one place
-the demo looks unfinished on purpose.
+minute of seeding into an hour. The received purchases were left on `9999 Nog te
+rubriceren` at first, because nothing could move them; 0019 gave them a decision in
+front of them, and the seed now makes that decision.
 
 The statement carries one of each thing the queue can show: a payment naming one
 invoice, a transfer paying two (so both the partial singles and the group offer
@@ -1422,6 +1421,35 @@ One behaviour changed to keep the register honest: `advance_payable` now stops a
 marked paid with no settlement behind it would either leave the document unposted
 (unfileable month) or post a debt the register calls settled; the statement pays one
 supplier invoice instead, which is what the queue is for.
+
+**Status, 2026-11-15 (a purchase's cost has somewhere to go).** Migration 0019 adds
+`document_account`: the account a received document's cost lands on, decided by a
+person with an author and a time, in the same shape as the tax code beside it.
+`store::expense::assign` refuses an account that is not an expense, one that holds a
+subledger, one that is archived, and `9999` itself (that is "undecided", and clearing
+the choice says it). The posting uses the choice instead of the default, so a
+classified purchase never touches `9999`; the CLI verb is `bonk ledger account
+<document> [<code>] [--clear]`, and the window puts a picker beside the tax-code one
+on an opened received document, disabled once the document is posted.
+
+The other half is the guard that comment in `posting.rs` has promised since the
+ledger landed and never had: `lock_period` now refuses while `9999 Nog te
+rubriceren` holds a balance, naming the amount. That made the wording matter — the
+first draft told people to "give the purchases an account", which is impossible
+after posting — so the refusal names the only remedy that exists: a memorial entry
+dated in the period. Two tests walk it: the close refuses, the memorial pair zeroes
+the account, the close succeeds.
+
+What this does not do: a posted purchase cannot have its account changed in place.
+The entry is append-only and there is no reverse-and-repost for it the way there is
+for a tax code (`reclassify`). The remedy is the memorial entry, which is honest but
+coarser — the document's own entry keeps saying `9999` while the pair moves the
+cost. A `reclassify --account` is the obvious follow-up, and it is not free: it has
+to leave the subledger item alone while replacing the entry.
+
+Also worth knowing: nothing in the CLI closes a period yet, so the guard is
+reachable from the store and the tests today, not from a command. `ledger close`
+with the blockers `reconcile` already computes is the natural next step.
 
 ---
 

@@ -735,6 +735,23 @@ enum LedgerCommand {
         #[arg(long, default_value = "cli")]
         actor: String,
     },
+    /// Show or choose the account a received document's cost lands on.
+    ///
+    /// An invoice says what it cost, not where it belongs in your chart, so until
+    /// somebody decides, its base posts to `9999 Nog te rubriceren` — and a period
+    /// cannot be closed while that account holds anything.
+    Account {
+        /// The document, by number or identifier.
+        document: String,
+        /// The account to put the cost on; omit it to show what is chosen.
+        #[arg(conflicts_with = "clear")]
+        code: Option<String>,
+        /// Return the document to the account purchases land on by default.
+        #[arg(long)]
+        clear: bool,
+        #[arg(long, default_value = "cli")]
+        actor: String,
+    },
     /// Post a balanced entry a person wrote (memoriaal).
     ///
     /// The escape hatch for a correction no rule can derive. A line is
@@ -2179,6 +2196,40 @@ fn ledger(access: &Access, database: &Path, keystore: &Path, command: LedgerComm
             println!("assigned:  {} ({})", assigned.code, assigned.name);
             println!("box:       {} {}", assigned.rubriek.code(), assigned.rubriek.label());
             println!("the next `bonk ledger post` puts the VAT there");
+            Ok(())
+        }
+        LedgerCommand::Account {
+            document,
+            code,
+            clear,
+            actor,
+        } => {
+            let id = resolve_document(connection, owner, &document)?
+                .ok_or_else(|| CliError::Input(format!("no document matching {document:?}")))?;
+            if clear {
+                store::expense::clear(connection, id, &actor, &now)?;
+                println!("cleared:   {document}");
+                println!(
+                    "its cost falls back to {} Nog te rubriceren",
+                    store::UNCLASSIFIED_ACCOUNT
+                );
+                return Ok(());
+            }
+            let Some(code) = code else {
+                println!("document:  {document}");
+                match store::expense::chosen(connection, id)? {
+                    Some(chosen) => println!("account:   {chosen}"),
+                    None => println!(
+                        "account:   none; its cost posts to {} Nog te rubriceren",
+                        store::UNCLASSIFIED_ACCOUNT
+                    ),
+                }
+                return Ok(());
+            };
+            let chosen = store::expense::assign(connection, id, &code, &actor, &now)?;
+            println!("document:  {document}");
+            println!("account:   {chosen}");
+            println!("the next posting puts its cost there");
             Ok(())
         }
         LedgerCommand::PostManual {

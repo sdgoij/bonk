@@ -12,7 +12,7 @@
 
 use crux::{
     AccountCode, AccountKind, DocumentId, FiscalPeriodId, Journal, JournalEntryId, LedgerEntry, LedgerLine, LocalDate,
-    SellerId, TaxCode, VatCategory, VatRate,
+    Money, SellerId, TaxCode, VatCategory, VatRate,
 };
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::json;
@@ -247,6 +247,32 @@ pub fn lock_period(conn: &Connection, period_id: FiscalPeriodId, actor: &str, at
         None => return Err(StoreError::NotFound(format!("period {period_id}"))),
         Some("locked") => return Err(StoreError::Rejected("the period is already locked".to_owned())),
         Some(_) => {}
+    }
+
+    // A locked period is what a filed return rests on, so it cannot be closed with
+    // costs nobody has placed: `9999 Nog te rubriceren` is a real account with a
+    // real balance, and its whole purpose is to be emptied rather than lived in.
+    let unclassified: i64 = transaction.query_row(
+        "SELECT COALESCE(sum(CASE l.side WHEN 'debit' THEN l.amount_micros ELSE -l.amount_micros END), 0)
+         FROM journal_line l JOIN journal_entry e ON e.id = l.entry_id
+         WHERE e.period_id = ?1 AND l.account_code = ?2",
+        params![period_id.to_string(), UNCLASSIFIED_ACCOUNT],
+        |row| row.get(0),
+    )?;
+    if unclassified != 0 {
+        let seller: String = transaction.query_row(
+            "SELECT seller_id FROM fiscal_period WHERE id = ?1",
+            [period_id.to_string()],
+            |row| row.get(0),
+        )?;
+        let currency = crate::reporting_currency(
+            &transaction,
+            SellerId::parse_str(&seller).map_err(|error| StoreError::Data(error.to_string()))?,
+        )?;
+        return Err(StoreError::Rejected(format!(
+            "the period cannot be closed while {UNCLASSIFIED_ACCOUNT} holds {}; a cost posted there has to be moved with a memorial entry dated in the period, because an account chosen on a document applies before it is posted",
+            Money::from_micros(unclassified, currency)
+        )));
     }
 
     transaction.execute(

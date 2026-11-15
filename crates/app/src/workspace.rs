@@ -12,9 +12,9 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant, SystemTime};
 
 use crux::{
-    Address, CountryCode, Currency, CustomerId, DocType, DocumentId, DomainError, DraftLine, Finding, InvoiceDraft,
-    LineId, LocalDate, Money, Party, PhoneNumber, PrecedingInvoice, Quantity, SavedSearchId, SellerId, Severity,
-    TaxTreatment, UnitCode, VatCategory, VatRate, calculate_totals, has_blocking, validate_draft,
+    AccountCode, Address, CountryCode, Currency, CustomerId, DocType, DocumentId, DomainError, DraftLine, Finding,
+    InvoiceDraft, LineId, LocalDate, Money, Party, PhoneNumber, PrecedingInvoice, Quantity, SavedSearchId, SellerId,
+    Severity, TaxTreatment, UnitCode, VatCategory, VatRate, calculate_totals, has_blocking, validate_draft,
 };
 use store::backup::BackupStage;
 use store::{
@@ -89,6 +89,8 @@ pub struct Workspace {
     /// opened: the catalogue is a published artefact and does not change while a
     /// window is up.
     tax_codes: Vec<store::TaxCodeRecord>,
+    /// The accounts a purchase's cost may land on.
+    expense_accounts: Vec<store::Account>,
     seller_form: SellerForm,
     customer_form: CustomerForm,
     show_customer_form: bool,
@@ -159,6 +161,8 @@ struct SearchView {
     opened: Option<DocumentView>,
     /// The treatment the open document is filed under, when one is chosen.
     opened_tax_code: Option<store::TaxCodeRecord>,
+    /// The account the open purchase's cost lands on, when one was chosen.
+    opened_account: Option<AccountCode>,
     /// True when the open document has an entry, so its treatment is fixed.
     opened_posted: bool,
     /// Why the last attempt to open a result failed, if it did.
@@ -191,6 +195,7 @@ impl Default for SearchView {
             table: Table::new(&[1.2, 0.8, 2.6, 1.0, 1.1, 1.0]),
             last_request: None,
             ran: false,
+            opened_account: None,
             counts: SearchCounts::default(),
             query_error: None,
             opened: None,
@@ -540,6 +545,7 @@ impl SearchView {
             Ok(Some(view)) => {
                 let connection = database.connection();
                 self.opened_tax_code = store::assigned_tax_code(connection, id).ok().flatten();
+                self.opened_account = store::expense::chosen(connection, id).ok().flatten();
                 self.opened_posted = store::entry_for_document(connection, id).ok().flatten().is_some();
                 self.opened = Some(view);
                 self.open_error = None;
@@ -547,11 +553,13 @@ impl SearchView {
             Ok(None) => {
                 self.opened = None;
                 self.opened_tax_code = None;
+                self.opened_account = None;
                 self.open_error = Some("that document is no longer in this archive; run the search again".to_owned());
             }
             Err(error) => {
                 self.opened = None;
                 self.opened_tax_code = None;
+                self.opened_account = None;
                 self.open_error = Some(error.to_string());
             }
         }
@@ -1130,6 +1138,13 @@ impl Workspace {
             seller: first_seller(connection)?,
             customers: list_customers(connection)?,
             tax_codes: store::list_tax_codes(connection).unwrap_or_default(),
+            expense_accounts: store::list_accounts(connection)
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|account| {
+                    account.kind == crux::AccountKind::Expense && !account.archived && !account.is_control
+                })
+                .collect(),
             seller_form: SellerForm::default(),
             customer_form: CustomerForm::default(),
             show_customer_form: false,
@@ -1524,6 +1539,7 @@ impl Workspace {
         let mut settle = None;
         let mut match_supplier = None;
         let mut tax_code: Option<Option<crux::TaxCode>> = None;
+        let mut account: Option<Option<AccountCode>> = None;
         let list = egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             ui.set_width(width);
             if self.search.results.is_empty() {
@@ -1610,9 +1626,11 @@ impl Workspace {
                                 view,
                                 &self.customers,
                                 &mut self.match_target,
-                                &TaxCodePicker {
+                                &PurchaseDecisions {
                                     codes: &self.tax_codes,
                                     assigned: self.search.opened_tax_code.as_ref(),
+                                    accounts: &self.expense_accounts,
+                                    account: self.search.opened_account.as_ref(),
                                     posted: self.search.opened_posted,
                                 },
                             ),
@@ -1626,6 +1644,7 @@ impl Workspace {
                         DocumentAction::Advance(status) => settle = Some(status),
                         DocumentAction::Match(customer) => match_supplier = Some(customer),
                         DocumentAction::TaxCode(code) => tax_code = Some(code),
+                        DocumentAction::Account(code) => account = Some(code),
                     }
                     ui.add_space(4.0);
                 }
@@ -1671,6 +1690,11 @@ impl Workspace {
             && let Some(id) = self.search.opened.as_ref().map(|view| view.id)
         {
             self.set_tax_code(session, id, code);
+        }
+        if let Some(code) = account
+            && let Some(id) = self.search.opened.as_ref().map(|view| view.id)
+        {
+            self.set_account(session, id, code);
         }
         if close_panel {
             self.search.opened = None;
@@ -4199,6 +4223,26 @@ impl Workspace {
         }
     }
 
+    /// Puts the open purchase's cost on an account, or back on the default.
+    fn set_account(&mut self, session: &Session, id: DocumentId, code: Option<AccountCode>) {
+        let language = self.language;
+        let connection = session.database().connection();
+        let now = store::now_rfc3339();
+        let outcome = match code {
+            Some(code) => store::expense::assign(connection, id, code.as_str(), ACTOR, &now)
+                .map(|chosen| text::find::account_assigned(language, chosen.as_str())),
+            None => store::expense::clear(connection, id, ACTOR, &now)
+                .map(|()| text::find::account_cleared(language).to_owned()),
+        };
+        match outcome {
+            Ok(message) => {
+                self.message = Some(Message::ok(message));
+                self.refresh_opened(session, id);
+            }
+            Err(error) => self.message = Some(Message::error(error.to_string())),
+        }
+    }
+
     /// Moves the open received document forward one status.
     fn advance_opened(&mut self, session: &Session, target: DocumentStatus) {
         let Some(id) = self.search.opened.as_ref().map(|view| view.id) else {
@@ -5537,15 +5581,23 @@ enum DocumentAction {
     Match(CustomerId),
     /// File the open purchase under a code, or under its own category again.
     TaxCode(Option<crux::TaxCode>),
+    /// Put the open purchase's cost on an account, or back on the default.
+    Account(Option<AccountCode>),
 }
 
 /// The treatments offered for one document, and whether it can still change.
-struct TaxCodePicker<'a> {
+/// The two decisions a purchase carries: the treatment it is filed under, and the
+/// account its cost lands on.
+struct PurchaseDecisions<'a> {
     /// The whole catalogue; the row offers the codes its categories allow.
     codes: &'a [store::TaxCodeRecord],
     /// What the document is filed under now.
     assigned: Option<&'a store::TaxCodeRecord>,
-    /// True when the posting already snapshotted the treatment.
+    /// The expense accounts a cost may land on.
+    accounts: &'a [store::Account],
+    /// The account its cost lands on now, when somebody chose one.
+    account: Option<&'a AccountCode>,
+    /// True when the posting already snapshotted both.
     posted: bool,
 }
 
@@ -5556,7 +5608,7 @@ fn document_panel(
     view: &DocumentView,
     customers: &[CustomerRecord],
     match_target: &mut Option<CustomerId>,
-    picker: &TaxCodePicker<'_>,
+    picker: &PurchaseDecisions<'_>,
 ) -> DocumentAction {
     let mut action = DocumentAction::None;
     ui.horizontal(|ui| {
@@ -5608,6 +5660,9 @@ fn document_panel(
     if view.direction == Direction::Inbound {
         action = received_actions(ui, language, view, customers, match_target);
         if let Some(chosen) = tax_code_row(ui, language, view, picker) {
+            action = chosen;
+        }
+        if let Some(chosen) = account_row(ui, language, picker) {
             action = chosen;
         }
         ui.add_space(6.0);
@@ -5754,7 +5809,7 @@ fn tax_code_row(
     ui: &mut egui::Ui,
     language: Language,
     view: &DocumentView,
-    picker: &TaxCodePicker<'_>,
+    picker: &PurchaseDecisions<'_>,
 ) -> Option<DocumentAction> {
     let categories: Vec<VatCategory> = view
         .totals
@@ -5807,6 +5862,52 @@ fn tax_code_row(
         text::find::tax_code_posted(language)
     } else {
         text::find::tax_code_hint(language)
+    });
+    action
+}
+
+/// The picker for the account a purchase's cost lands on.
+///
+/// Only the expense accounts are offered, and only until the document is posted:
+/// the posting snapshots the account on the lines it wrote, so a change afterwards
+/// would look like it had moved a cost that is already in the books. A purchase
+/// that has been posted is corrected with a memorial entry, which is what the
+/// refusal in the period close says.
+fn account_row(ui: &mut egui::Ui, language: Language, decisions: &PurchaseDecisions<'_>) -> Option<DocumentAction> {
+    let mut action = None;
+    ui.horizontal(|ui| {
+        ui.label(text::find::account_label(language));
+        let selected = decisions.account.map_or_else(
+            || text::find::account_none(language).to_owned(),
+            |code| code.to_string(),
+        );
+        ui.add_enabled_ui(!decisions.posted, |ui| {
+            egui::ComboBox::from_id_salt("document-account")
+                .selected_text(selected)
+                .show_ui(ui, |ui| {
+                    for account in decisions.accounts {
+                        let chosen = decisions.account == Some(&account.code);
+                        let label = format!("{} {}", account.code, account.name);
+                        if ui.selectable_label(chosen, label).clicked() {
+                            action = Some(DocumentAction::Account(Some(account.code.clone())));
+                        }
+                    }
+                });
+            if ui
+                .add_enabled(
+                    decisions.account.is_some(),
+                    egui::Button::new(text::find::account_clear_action(language)),
+                )
+                .clicked()
+            {
+                action = Some(DocumentAction::Account(None));
+            }
+        });
+    });
+    ui.weak(if decisions.posted {
+        text::find::account_posted(language)
+    } else {
+        text::find::account_hint(language)
     });
     action
 }
@@ -7892,6 +7993,13 @@ mod tests {
         workspace.set_tax_code(&session, id, Some(crux::TaxCode::parse("NL-AE-GOODS").unwrap()));
         let message = workspace.message.as_ref().expect("a refusal is reported");
         assert!(message.error, "{}", message.text);
-        assert!(message.text.contains("received documents"), "{}", message.text);
+        assert!(message.text.contains("we issued"), "{}", message.text);
+
+        // And no account either, for the same reason: the rules decide where a sale
+        // is booked.
+        workspace.set_account(&session, id, Some(AccountCode::parse("7100").unwrap()));
+        let message = workspace.message.as_ref().expect("a refusal is reported");
+        assert!(message.error, "{}", message.text);
+        assert!(message.text.contains("we issued"), "{}", message.text);
     }
 }

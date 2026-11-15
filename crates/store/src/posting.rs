@@ -16,7 +16,7 @@ use crux::{
     AccountCode, Currency, DocumentId, Journal, LedgerEntry, LedgerLine, LocalDate, Money, SellerId, VatCategory,
     VatRate,
 };
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use serde_json::Value;
 
 use crate::error::StoreError;
@@ -360,6 +360,13 @@ fn inbound_entry_for(document: &DocumentFacts) -> Result<LedgerEntry, StoreError
 
     let mut lines = Vec::new();
     let mut classified = false;
+    // Where the cost goes: the account a person chose, or the one nobody has
+    // classified yet. A period cannot be closed while the latter holds anything,
+    // which is what makes the choice part of the work rather than an extra.
+    let cost = match &document.expense_account {
+        Some(chosen) => chosen.clone(),
+        None => account(UNCLASSIFIED_EXPENSE)?,
+    };
     for row in breakdown {
         let category = VatCategory::parse(&text(row, "category")?).map_err(domain)?;
         let base = money(row, "taxable_base", currency)?;
@@ -377,7 +384,7 @@ fn inbound_entry_for(document: &DocumentFacts) -> Result<LedgerEntry, StoreError
         // can carry both a domestic line and a reverse-charged one.
         let code = document.tax_code.as_ref().filter(|code| code.category == category);
         lines.push(coded(
-            LedgerLine::debit(account(UNCLASSIFIED_EXPENSE)?, base)
+            LedgerLine::debit(cost.clone(), base)
                 .map_err(domain)?
                 .tagged(category, rate),
             code,
@@ -439,6 +446,42 @@ fn inbound_entry_for(document: &DocumentFacts) -> Result<LedgerEntry, StoreError
     }
 }
 
+/// Refuses a document that is not a received, unposted one.
+///
+/// `what` names the decision being made, so the sentence reads "its account is
+/// fixed" or "its treatment is fixed". Shared by the two decisions a purchase
+/// carries, because the rule is the same for both: the posting snapshots them,
+/// entries are append-only, so the moment to decide is before the posting. Returns
+/// the stored tax breakdown, which the decision may need to look at.
+pub(crate) fn unposted_inbound(conn: &Connection, document_id: DocumentId, what: &str) -> Result<String, StoreError> {
+    let (direction, breakdown): (String, String) = conn
+        .query_row(
+            "SELECT direction, tax_breakdown_json FROM document WHERE id = ?1",
+            [document_id.to_string()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?
+        .ok_or_else(|| StoreError::NotFound(format!("document {document_id}")))?;
+    if direction != "inbound" {
+        return Err(StoreError::Rejected(format!(
+            "a document we issued has no {what} to choose; its category and rate decide everything"
+        )));
+    }
+    let posted: Option<String> = conn
+        .query_row(
+            "SELECT id FROM journal_entry WHERE source_kind = 'inbound_document' AND source_id = ?1",
+            [document_id.to_string()],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if posted.is_some() {
+        return Err(StoreError::Rejected(format!(
+            "document {document_id} is already posted; its {what} is fixed in the entry that was written"
+        )));
+    }
+    Ok(breakdown)
+}
+
 /// The stored facts of a document that posting needs.
 struct DocumentFacts {
     direction: String,
@@ -452,6 +495,8 @@ struct DocumentFacts {
     totals: Value,
     /// The treatment a person chose for the purchase, when one was chosen.
     tax_code: Option<crate::tax_code::TaxCodeRecord>,
+    /// The account a person chose for its cost, when one was chosen.
+    expense_account: Option<AccountCode>,
 }
 
 impl DocumentFacts {
@@ -489,6 +534,7 @@ fn load_document(conn: &Connection, id: DocumentId) -> Result<DocumentFacts, Sto
             .map_err(domain)?,
         totals: serde_json::from_str(&row.get::<_, String>(8)?)?,
         tax_code: crate::tax_code::assigned(conn, id)?,
+        expense_account: crate::expense::chosen(conn, id)?,
     })
 }
 

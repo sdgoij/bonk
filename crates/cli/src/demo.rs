@@ -445,6 +445,11 @@ fn seed_books(
         posted += 1;
     }
     for document in payables.iter().take(LEDGER_DOCUMENTS) {
+        // Every purchase is given an account before it is posted, so the books can
+        // actually be closed: an unclassified cost is exactly what the close refuses,
+        // and a demo where no period could be locked would teach the opposite of
+        // what that account is for.
+        store::expense::assign(connection, *document, "7000", ACTOR, &at(today, 10, 15))?;
         store::post_document(connection, *document, ACTOR, &at(today, 10, 15))?;
         posted += 1;
     }
@@ -1471,6 +1476,34 @@ mod tests {
             "every demo transaction is waiting in the queue"
         );
         assert_eq!(store::bank_rule::list(connection, owner).unwrap().len(), seeded.rules);
+
+        // Nothing is left unclassified, so a period can actually be closed — which is
+        // what `9999` is for: to be emptied, not lived in.
+        let unclassified: i64 = connection
+            .query_row(
+                "SELECT COALESCE(sum(CASE side WHEN 'debit' THEN amount_micros ELSE -amount_micros END), 0)
+                 FROM journal_line WHERE account_code = '9999'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(unclassified, 0, "the demo leaves costs on Nog te rubriceren");
+
+        let period: String = connection
+            .query_row(
+                "SELECT id FROM fiscal_period ORDER BY year DESC, period_no DESC LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let stamp = at(today, 13, 0);
+        store::lock_period(
+            connection,
+            crux::FiscalPeriodId::parse_str(&period).unwrap(),
+            ACTOR,
+            &stamp,
+        )
+        .unwrap();
     }
 
     /// The demo's rule books the fees and nothing else.

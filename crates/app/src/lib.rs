@@ -844,7 +844,7 @@ mod tests {
         {
             let session = Session::create(&database, &keystore, "passphrase").unwrap();
             assert_eq!(session.summary().unwrap().sellers, 0);
-            assert_eq!(session.summary().unwrap().schema_version, 18);
+            assert_eq!(session.summary().unwrap().schema_version, 19);
             assert!(session.database_path().exists());
         }
 
@@ -1231,7 +1231,7 @@ mod tests {
 
         // The keystore is not consulted: the device store is enough.
         let reopened = Session::unlock_with_device(&database, &keystore, &store).unwrap();
-        assert_eq!(reopened.summary().unwrap().schema_version, 18);
+        assert_eq!(reopened.summary().unwrap().schema_version, 19);
 
         let trusted: i64 = reopened
             .database()
