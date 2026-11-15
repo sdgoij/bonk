@@ -2763,6 +2763,16 @@ fn bank(database: &store::Database, owner: SellerId, command: BankCommand, now: 
             println!("reversed:  BNK {}", undone.entry_id);
             println!("reversal:  BNK {}", undone.reversal_id);
             println!("the line is back in the queue");
+            // A rule that still fits would book the line again on the next sweep,
+            // which is the one thing a correction must not leave lying in wait.
+            if let store::bank_rule::Classification::Posted(again) =
+                store::bank_rule::classify_one(connection, owner, &transaction, true, "cli", now)?
+            {
+                println!(
+                    "note:     {} still fits this line; narrow or remove it, or the next classify books it again",
+                    again.rule
+                );
+            }
             Ok(())
         }
         BankCommand::Profile { command } => match command {

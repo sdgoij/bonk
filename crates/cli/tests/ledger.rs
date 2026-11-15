@@ -820,6 +820,10 @@ fn a_rule_books_a_bank_fee_without_an_invoice() {
         "verkeerde rekening",
     ]);
     assert!(said.contains("the line is back in the queue"), "{said}");
+    assert!(
+        said.contains("still fits this line"),
+        "it says the rule would take it again: {said}"
+    );
     let said = archive.run(&["ledger", "bank", "transactions", "--status", "new"]);
     assert!(said.contains("Bankkosten februari"), "{said}");
     let said = archive.run(&["ledger", "trial-balance", "--from", "2026-01-01", "--to", "2026-12-31"]);
