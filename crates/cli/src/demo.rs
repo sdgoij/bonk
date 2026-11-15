@@ -61,6 +61,12 @@ pub struct Seeded {
     pub drafts: usize,
     /// Saved find-panel views.
     pub views: usize,
+    /// Documents posted to the ledger.
+    pub posted: usize,
+    /// Bank transactions waiting in the queue.
+    pub bank_lines: usize,
+    /// Standing instructions that classify a bank line.
+    pub rules: usize,
 }
 
 /// Fills an empty archive with demo data.
@@ -119,21 +125,28 @@ pub fn seed(session: &mut Session, options: &Options) -> Result<Seeded, DemoErro
     }
     dates.sort_unstable();
 
+    let mut documents: Vec<Issued> = Vec::with_capacity(options.invoices);
     for (index, date) in dates.into_iter().enumerate() {
-        let mut credit = false;
-        if index > 0 && index % 20 == 0 {
-            credit = issue_credit_note(session, owner, &issued, date, today, &mut rng)?;
-        }
-        if credit {
+        let credit = if index > 0 && index % 20 == 0 {
+            issue_credit_note(session, owner, &issued, date, today, &mut rng)?
+        } else {
+            None
+        };
+        if let Some(note) = credit {
+            documents.push(note);
             credit_count += 1;
         } else {
             let customer = &customers[rng.below(customers.len() as u64) as usize];
             let draft = invoice_draft(owner, customer, date, &mut rng)?;
             let record = issue(session, &draft, &at(date, 9, 0))?;
-            issued.push(Issued {
+            let document = Issued {
+                id: record.id,
                 number: record.number,
                 date,
-            });
+            };
+            // Credit notes point at invoices, so only the invoices go in `issued`.
+            documents.push(document.clone());
+            issued.push(document);
             invoice_count += 1;
         }
     }
@@ -150,6 +163,7 @@ pub fn seed(session: &mut Session, options: &Options) -> Result<Seeded, DemoErro
 
     let drafts = seed_drafts(session, owner, &customers, today, &mut rng)?;
     let views = seed_views(session, owner, today)?;
+    let books = seed_books(session, owner, today, &documents, inbound.open.as_slice(), &customers)?;
 
     Ok(Seeded {
         customers: customers.len(),
@@ -160,6 +174,9 @@ pub fn seed(session: &mut Session, options: &Options) -> Result<Seeded, DemoErro
         parked: inbound.parked,
         drafts,
         views,
+        posted: books.posted,
+        bank_lines: books.bank_lines,
+        rules: books.rules,
     })
 }
 
@@ -175,23 +192,27 @@ fn issue_credit_note(
     date: LocalDate,
     today: LocalDate,
     rng: &mut Rng,
-) -> Result<bool, DemoError> {
+) -> Result<Option<Issued>, DemoError> {
     if issued.is_empty() {
-        return Ok(false);
+        return Ok(None);
     }
     let previous = &issued[rng.below(issued.len() as u64) as usize];
     if previous.date >= today {
-        return Ok(false);
+        return Ok(None);
     }
 
     let earliest = previous.date.plus_days(1)?;
     let credit_date = if date > earliest { date } else { earliest };
     let Some(draft) = credit_note_for(session.database().connection(), owner, &previous.number, credit_date)? else {
-        return Ok(false);
+        return Ok(None);
     };
 
-    issue(session, &draft, &at(credit_date, 10, 0))?;
-    Ok(true)
+    let record = issue(session, &draft, &at(credit_date, 10, 0))?;
+    Ok(Some(Issued {
+        id: record.id,
+        number: record.number,
+        date: credit_date,
+    }))
 }
 
 /// Creates a handful of drafts that were never issued.
@@ -262,6 +283,9 @@ struct InboundCounts {
     received: usize,
     matched: usize,
     parked: usize,
+    /// Documents that matched a supplier and are still waiting to be paid, so they
+    /// can be posted and become open payables the bank queue can settle.
+    open: Vec<DocumentId>,
 }
 
 /// Records invoices (and the occasional supplier document) received from
@@ -328,14 +352,28 @@ fn seed_inbound(
         advance_payable(session, outcome.document_id, date, days_ago, today, rng)?;
     }
 
+    // Every received document is posted, matched or not: the VAT readiness check
+    // refuses a month while any document dated in it is unposted, and a purchase
+    // that arrived is a liability whether or not somebody has said who sent it.
+    let open = store::list_received(session.database().connection(), owner)?
+        .into_iter()
+        .map(|row| row.id)
+        .collect();
+
     Ok(InboundCounts {
         received: count,
         matched,
         parked,
+        open,
     })
 }
 
 /// Moves a received document as far through the register as its age suggests.
+///
+/// It stops at approved. A paid purchase would need a settlement the demo does not
+/// invent: the books would either carry a debt the register calls settled, or leave
+/// the document unposted and make its month unfileable. The bank statement pays one
+/// of these invoices instead, which is what the queue is for.
 fn advance_payable(
     session: &Session,
     document: DocumentId,
@@ -344,36 +382,232 @@ fn advance_payable(
     today: LocalDate,
     rng: &mut Rng,
 ) -> Result<(), DemoError> {
-    let steps: &[DocumentStatus] = if days_ago >= 150 {
-        &[DocumentStatus::Approved, DocumentStatus::Paid, DocumentStatus::Archived]
-    } else if days_ago >= 75 {
-        &[DocumentStatus::Approved, DocumentStatus::Paid]
-    } else if days_ago >= 30 {
-        &[DocumentStatus::Approved]
-    } else {
-        &[]
-    };
-
-    // Some old documents stay open on purpose: an archive where everything is
-    // settled does not exercise the "open purchases" view.
-    let steps = if !steps.is_empty() && rng.below(6) == 0 {
-        &steps[..steps.len() - 1]
-    } else {
-        steps
-    };
-
-    for (index, status) in steps.iter().enumerate() {
-        let days = 15 * (index as i64 + 1);
-        let when = earliest(today, date.plus_days(days)?);
+    let approved = days_ago >= 75 || (days_ago >= 30 && rng.below(2) == 0);
+    if approved {
+        let when = earliest(today, date.plus_days(15)?);
         advance_status(
             session.database().connection(),
             document,
-            *status,
+            DocumentStatus::Approved,
             ACTOR,
             &at(when, 12, 0),
         )?;
     }
     Ok(())
+}
+
+/// What the books hold after seeding.
+struct BookCounts {
+    posted: usize,
+    bank_lines: usize,
+    rules: usize,
+}
+
+/// How many documents the demo posts to the ledger.
+///
+/// The default archive issues about three hundred documents, and all of them post:
+/// the VAT readiness check refuses a period while any document dated in it is
+/// unposted, so a demo that stopped halfway would show every month as `fileable:
+/// no` and teach the opposite of what the books are for. The cap is there for the
+/// twenty-thousand-document search benchmark, where posting everything would turn a
+/// minute of seeding into an hour; that archive keeps the newest few months of
+/// books, which is all its reports are read for.
+const LEDGER_DOCUMENTS: usize = 400;
+
+/// Fills the ledger, a bank account, and the queue the window works.
+///
+/// Everything is written through the same functions the CLI uses, so the demo
+/// archive is an ordinary archive whose entries the reports actually read. The
+/// bank statement is built to hold one of each thing the queue can show: a payment
+/// that names one invoice, a transfer that pays two, a part payment, a fee a rule
+/// books, interest nothing will ever match, and a supplier payment.
+fn seed_books(
+    session: &Session,
+    owner: SellerId,
+    today: LocalDate,
+    issued: &[Issued],
+    payables: &[DocumentId],
+    customers: &[SeededCustomer],
+) -> Result<BookCounts, DemoError> {
+    let connection = session.database().connection();
+    store::seed_starter_chart(connection, &at(today, 8, 45))?;
+
+    let mut posted = 0_usize;
+    let mut newest: Vec<&Issued> = issued.iter().collect();
+    newest.sort_by(|left, right| right.date.cmp(&left.date).then_with(|| left.number.cmp(&right.number)));
+    for document in newest.into_iter().take(LEDGER_DOCUMENTS) {
+        store::post_document(
+            connection,
+            document.id,
+            ACTOR,
+            &at(earliest(today, document.date), 10, 0),
+        )?;
+        posted += 1;
+    }
+    for document in payables.iter().take(LEDGER_DOCUMENTS) {
+        store::post_document(connection, *document, ACTOR, &at(today, 10, 15))?;
+        posted += 1;
+    }
+
+    store::insert_bank_account(
+        connection,
+        &store::BankAccount {
+            id: BANK_ACCOUNT.to_owned(),
+            seller_id: owner,
+            name: "Zakelijke rekening".to_owned(),
+            iban: Some("NL91ABNA0417164300".to_owned()),
+            currency: Currency::EUR,
+            ledger_account_code: crux::AccountCode::parse("1100")?,
+            import_profile: None,
+        },
+        &at(today, 10, 30),
+    )?;
+
+    let receivables = open_items(session, owner, store::OpenItemKind::Receivable)?;
+    let open_payables = open_items(session, owner, store::OpenItemKind::Payable)?;
+    let statement = demo_statement(today, &receivables, &open_payables, customers)?;
+
+    let mut bank_lines = 0_usize;
+    if !statement.transactions.is_empty() {
+        let report = store::import_statement(
+            connection,
+            BANK_ACCOUNT,
+            &statement,
+            &store::audit::sha256_hex(b"demo/inbound/afschrift-2026"),
+            &at(today, 11, 0),
+        )?;
+        bank_lines = report.imported;
+    }
+
+    // One rule, pointed at the fee lines, so `bonk ledger bank classify --dry-run`
+    // has something to show and the queue has something a person came for. The
+    // interest line is deliberately left without one: it is nobody's invoice and
+    // no rule's business, which is what the queue is for.
+    let rule = store::bank_rule::RuleDefinition {
+        name: "bankkosten".to_owned(),
+        direction: Some(-1),
+        counterparty_iban: None,
+        remittance_contains: Some("kosten".to_owned()),
+        counterparty_contains: None,
+        account_code: "7100".to_owned(),
+    };
+    store::bank_rule::add(connection, owner, &rule, ACTOR, &at(today, 11, 15))?;
+
+    Ok(BookCounts {
+        posted,
+        bank_lines,
+        rules: 1,
+    })
+}
+
+/// The bank account the demo statements belong to.
+const BANK_ACCOUNT: &str = "demo-zakelijk";
+
+/// Open items of one kind, newest first.
+fn open_items(
+    session: &Session,
+    owner: SellerId,
+    kind: store::OpenItemKind,
+) -> Result<Vec<store::OpenItem>, DemoError> {
+    let mut items: Vec<store::OpenItem> = store::open_items::list(session.database().connection(), owner, kind)?
+        .into_iter()
+        .filter(store::OpenItem::is_open)
+        .collect();
+    items.sort_by(|left, right| {
+        right
+            .original_date
+            .cmp(&left.original_date)
+            .then_with(|| left.number.cmp(&right.number))
+    });
+    Ok(items)
+}
+
+/// A statement holding one of each thing the queue can show.
+fn demo_statement(
+    today: LocalDate,
+    receivables: &[store::OpenItem],
+    payables: &[store::OpenItem],
+    customers: &[SeededCustomer],
+) -> Result<store::ParsedStatement, DemoError> {
+    let name_of = |item: &store::OpenItem| {
+        customers
+            .iter()
+            .find(|customer| customer.id == item.party_id)
+            .map(|customer| customer.party.legal_name.clone())
+            .unwrap_or_else(|| "Klant".to_owned())
+    };
+    let mut transactions = Vec::new();
+    let mut add = |days_ago: i64, amount: i64, counterparty: &str, iban: &str, remittance: String| {
+        let booking_date = today.plus_days(-days_ago)?;
+        transactions.push(store::ParsedTransaction {
+            booking_date,
+            value_date: None,
+            amount_micros: amount,
+            currency: Currency::EUR,
+            counterparty_name: Some(counterparty.to_owned()),
+            counterparty_iban: if iban.is_empty() { None } else { Some(iban.to_owned()) },
+            remittance_info: Some(remittance),
+            external_ref: None,
+        });
+        Ok::<(), DemoError>(())
+    };
+
+    if let Some(item) = receivables.first() {
+        add(
+            25,
+            item.outstanding.micros(),
+            &name_of(item),
+            "NL02RABO0123456789",
+            format!("Betaling factuur {}", item.number),
+        )?;
+    }
+    if receivables.len() >= 3 {
+        let (first, second) = (&receivables[1], &receivables[2]);
+        add(
+            22,
+            first.outstanding.micros() + second.outstanding.micros(),
+            &name_of(first),
+            "NL02RABO0123456789",
+            format!("Facturen {} en {}", first.number, second.number),
+        )?;
+    }
+    if let Some(item) = receivables.get(3) {
+        // Half of it, so the queue shows money still unaccounted for.
+        add(
+            18,
+            item.outstanding.micros() / 2,
+            &name_of(item),
+            "NL02RABO0123456789",
+            format!("Deelbetaling {}", item.number),
+        )?;
+    }
+    add(15, -12_500_000, "Rabobank", "", "Kosten zakelijke rekening".to_owned())?;
+    add(12, 3_400_000, "Rabobank", "", "Rente spaarrekening".to_owned())?;
+    add(9, -12_500_000, "Rabobank", "", "Kosten pinapparaten".to_owned())?;
+    if let Some(item) = payables.first() {
+        add(
+            6,
+            -item.outstanding.micros(),
+            &name_of(item),
+            "NL66INGB0001234567",
+            format!("Betaling {}", item.number),
+        )?;
+    }
+
+    let opening: i64 = 1_000_000_000;
+    let movements: i64 = transactions.iter().map(|line| line.amount_micros).sum();
+    let first = transactions.first().map(|line| line.booking_date);
+    let last = transactions.last().map(|line| line.booking_date);
+    Ok(store::ParsedStatement {
+        format: "mt940",
+        source_name: Some("demo/bank/afschrift-2026.txt".to_owned()),
+        currency: Currency::EUR,
+        period_start: first,
+        period_end: last,
+        opening_balance_micros: Some(opening),
+        closing_balance_micros: Some(opening + movements),
+        transactions,
+    })
 }
 
 /// Inserts a draft and issues it in one step.
@@ -401,7 +635,9 @@ struct SeededCustomer {
 }
 
 /// An invoice we issued, kept so a credit note can point at it.
+#[derive(Clone)]
 struct Issued {
+    id: DocumentId,
     number: String,
     date: LocalDate,
 }
@@ -1202,6 +1438,82 @@ mod tests {
 
         let views = store::saved::list(connection, owner(&session)).unwrap();
         assert_eq!(views.len(), 4);
+    }
+
+    #[test]
+    fn the_demo_archive_carries_a_queue_to_work() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut session = create(directory.path());
+        let seeded = seed(&mut session, &options(40, 10)).unwrap();
+        let connection = session.database().connection();
+        let owner = owner(&session);
+        let today = LocalDate::parse_iso("2026-10-28").unwrap();
+
+        // The documents post, and the books they post to balance.
+        assert!(seeded.posted > 0, "nothing was posted");
+        let report = store::trial_balance(connection, owner, today.plus_days(-450).unwrap(), today).unwrap();
+        assert!(report.balances(), "the demo ledger does not net to zero");
+
+        // There is money to work with on both sides of the subledger, and a bank
+        // account whose statement is waiting.
+        for kind in [store::OpenItemKind::Receivable, store::OpenItemKind::Payable] {
+            let open = store::open_items::list(connection, owner, kind)
+                .unwrap()
+                .into_iter()
+                .filter(store::OpenItem::is_open)
+                .count();
+            assert!(open > 0, "nothing is open on the {} side", kind.as_str());
+        }
+        assert_eq!(store::list_bank_accounts(connection, owner).unwrap().len(), 1);
+        assert_eq!(
+            store::list_transactions(connection, owner, Some("new")).unwrap().len(),
+            seeded.bank_lines,
+            "every demo transaction is waiting in the queue"
+        );
+        assert_eq!(store::bank_rule::list(connection, owner).unwrap().len(), seeded.rules);
+    }
+
+    /// The demo's rule books the fees and nothing else.
+    ///
+    /// This is the property the seed has to keep: an archive that demonstrates the
+    /// queue must not also demonstrate a rule taking a customer's payment, so the
+    /// guards are checked against the data rather than assumed.
+    #[test]
+    fn the_demo_rule_takes_the_fees_and_leaves_the_payments_alone() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut session = create(directory.path());
+        seed(&mut session, &options(40, 10)).unwrap();
+        let owner = owner(&session);
+
+        let stamp = at(LocalDate::parse_iso("2026-10-28").unwrap(), 12, 0);
+        let outcomes = store::bank_rule::classify(session.database().connection(), owner, true, ACTOR, &stamp).unwrap();
+        let posted: Vec<&store::bank_rule::Classified> = outcomes
+            .iter()
+            .filter_map(|outcome| match outcome {
+                store::bank_rule::Classification::Posted(classified) => Some(classified),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(posted.len(), 2, "the two fee lines are the only ones a rule fits");
+        for classified in &posted {
+            assert_eq!(classified.rule, "bankkosten");
+            assert_eq!(classified.amount.currency(), Currency::EUR);
+            assert_eq!(classified.amount.micros(), 12_500_000, "a fee, not a payment");
+        }
+
+        // The lines that name an invoice are proposed for it, which is what keeps a
+        // rule away from them.
+        let reserved = outcomes
+            .iter()
+            .filter(|outcome| matches!(outcome, store::bank_rule::Classification::Reserved { .. }))
+            .count();
+        assert!(reserved >= 3, "the payments should be reserved, saw {reserved}");
+        assert!(
+            outcomes
+                .iter()
+                .any(|outcome| matches!(outcome, store::bank_rule::Classification::NoRule { .. })),
+            "the interest line is nobody's invoice and no rule's business"
+        );
     }
 
     #[test]

@@ -365,12 +365,25 @@ bonk gui
 `demo-seed` writes an encrypted archive at the default location with a seller,
 eighteen customers, a few hundred issued documents (some corrected by credit
 notes), invoices received from suppliers (some parked because the supplier is
-not on file), a handful of drafts, and saved find views. It refuses to replace an
-existing archive unless `--force` is given. The data is deterministic: the same
+not on file), a handful of drafts, saved find views, and the books those documents
+post to: a starter chart, every document posted, a bank account whose statement is
+waiting in the queue, and one rule that books the bank fees. It refuses to replace
+an existing archive unless `--force` is given. The data is deterministic: the same
 `--seed` and day produce the same numbers, dates, and amounts. The passphrase is
 `bonk-demo` unless `--passphrase` says otherwise. Everything is written through
 the same repository functions the rest of the app uses, so `bonk verify` passes
 on it.
+
+The statement is built to hold one of each thing the queue can show: a payment
+that names one invoice, a transfer that pays two at once, a part payment, two bank
+fees the rule recognises, interest nothing will ever match, and a supplier payment.
+`bonk ledger bank classify --dry-run` therefore prints two fees that would be
+posted, four payments reserved for their invoices, and one line with no rule at
+all — which is the whole behaviour of the guards in one screen. `bonk ledger
+vat-return --year <year> --month <month>` is fileable on the demo, because posting
+every document is what makes a period fileable; the purchases land on `9999 Nog te
+rubriceren` until someone rubrics them, which is what that account is for and the
+one place the demo looks unfinished on purpose.
 
 ### The window
 

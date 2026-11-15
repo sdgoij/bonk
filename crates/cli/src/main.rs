@@ -56,8 +56,10 @@ enum Command {
     ///
     /// The data is generated deterministically from `--seed`: a seller, a
     /// catalogue of customers, issued invoices (some corrected by credit
-    /// notes), documents received from suppliers, a few drafts, and saved
-    /// search views. It is ordinary archive data, so `verify` passes on it.
+    /// notes), documents received from suppliers, a few drafts, saved search
+    /// views, and the books those documents post to — a bank account with a
+    /// statement in its queue, and one rule that books the fees. It is ordinary
+    /// archive data, so `verify` passes on it.
     #[command(name = "demo-seed")]
     DemoSeed {
         /// Customers to create; the catalogue holds 18.
@@ -2967,6 +2969,11 @@ fn seed_demo(
     );
     println!("drafts:     {}", seeded.drafts);
     println!("views:      {} saved searches", seeded.views);
+    println!("ledger:     {} documents posted to the books", seeded.posted);
+    println!(
+        "bank:       {} transactions waiting, {} rule(s)",
+        seeded.bank_lines, seeded.rules
+    );
     println!();
     let (default_database, _) = app::default_paths();
     if default_database.as_path() == database {

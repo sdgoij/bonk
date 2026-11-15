@@ -1393,6 +1393,36 @@ still deliberately absent: a ranked guess between two invoices is the one thing 
 person can do and a score cannot. A4 is otherwise complete; CSV profiles, rules, and
 the queue were its last three.
 
+**Status, 2026-11-15 (the demo has books, and a queue to work).** `demo-seed` used to
+write documents and no accounts, so the Ledger tab opened on an empty archive and the
+queue had nothing in it. It now seeds the shipped chart, posts every document it
+created — issued invoices, credit notes, and received purchases — adds a bank account
+with a statement, and one rule.
+
+Posting everything is what makes a period fileable, and the readiness check refuses a
+month while any document dated in it is unposted, so the obvious shortcut (post the
+newest few) would have shown every month as `fileable: no` with a list of blockers
+nobody could clear from the window. The cap that remains is for the
+twenty-thousand-document search benchmark, where posting all of it would turn a
+minute of seeding into an hour. The consequence worth knowing: the received
+purchases land on `9999 Nog te rubriceren`, because nothing maps a supplier's line to
+an expense account — the account exists for exactly that, and it is the one place
+the demo looks unfinished on purpose.
+
+The statement carries one of each thing the queue can show: a payment naming one
+invoice, a transfer paying two (so both the partial singles and the group offer
+appear), a part payment, two fees the rule books, interest no rule and no invoice
+touches, and a supplier payment. A test asserts that this stays true — the rule
+classifies exactly the two fees, the payments are all `Reserved`, and the interest is
+`NoRule` — because a demo that quietly taught a rule to swallow a customer payment
+would be worse than no demo.
+
+One behaviour changed to keep the register honest: `advance_payable` now stops at
+`Approved` rather than walking some purchases to `Paid` and `Archived`. A purchase
+marked paid with no settlement behind it would either leave the document unposted
+(unfileable month) or post a debt the register calls settled; the statement pays one
+supplier invoice instead, which is what the queue is for.
+
 ---
 
 ## 5. First two weeks, concretely
