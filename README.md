@@ -415,6 +415,14 @@ an existing archive unless `--force` is given. The data is deterministic: the sa
 the same repository functions the rest of the app uses, so `bonk verify` passes
 on it.
 
+The archive holds two kinds of year on purpose. The year before its last one is
+finished: every document dated in it is posted and the year is closed with the
+same `close_year` the command runs, so the VAT section has a closed year to open —
+with its result on equity — and this year is still open, which is where the month
+controls and the queue are worked. `--skip-last-year` leaves it unfinished, which
+is what the twenty-thousand-document search archive does: posting another year
+there is minutes of seeding for a year nobody opens.
+
 The statement is built to hold one of each thing the queue can show: a payment
 that names one invoice, a transfer that pays two at once, a part payment, two bank
 fees the rule recognises, interest nothing will ever match, and a supplier payment.

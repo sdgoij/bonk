@@ -1522,10 +1522,9 @@ warnings, not blockers: filing and closing are separate gates, and preparing a
 return after the books close posts nothing. The design note's older requirement that
 open items be settled was dropped — an invoice unpaid at year end is a receivable.
 
-What this does not do: the window has no year control yet, only the month one in the
-VAT section; and no opening balances are carried forward, because the balance sheet
-is cumulative and zeroing the profit and loss accounts is what makes next year's
-figures right.
+What this does not do: no opening balances are carried forward, because the balance
+sheet is cumulative and zeroing the profit and loss accounts is what makes next
+year's figures right.
 
 The window got the same controls, because a guard that only exists in a command is
 a guard nobody meets. The VAT section draws the year first: **Close year** with the
@@ -1538,6 +1537,19 @@ Both reason fields are required, so the store's refusals are backstops rather th
 the user interface. A success says what happened and forgets the loaded report,
 since the state it showed changed; a refusal shows the store's own sentence.
 The note above the sections lost its flat "read-only" promise to say so.
+
+The demo archive now holds two kinds of year, which is what makes the new control
+visible without setting anything up: the year before its data's last one is
+finished — every document dated in it posted through the ordinary functions, then
+`store::close_year` — and this year is left open. A test pins both, the equity the
+resultaatbestemming leaves behind, and that a posting dated in the closed year is
+refused. The seed posts every document anyway, matched or not, because a purchase
+that arrived is a liability whether or not somebody has said who sent it; the
+finish step's own posting loop only bites in a capped archive, where the newest
+`LEDGER_DOCUMENTS` are posted and the rest of last year is picked up here.
+`demo-seed --skip-last-year` turns it off, and the twenty-thousand-document search
+archive passes it: posting another year there is minutes of seeding for a year
+nobody opens.
 
 ---
 

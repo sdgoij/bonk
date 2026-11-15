@@ -44,8 +44,11 @@ demo:
     {{cargo}} run -p cli -- demo-seed --force
 
 # A 20 000-document archive, for the M5 search criterion.
+#
+# `--skip-last-year` leaves the previous year unposted: the archive is a search
+# benchmark, and posting another year would be minutes of seeding for nothing.
 demo-20k:
-    {{cargo}} run -p cli -- --db {{bench-db}} demo-seed --force --invoices 20000
+    {{cargo}} run -p cli -- --db {{bench-db}} demo-seed --force --invoices 20000 --skip-last-year
 
 # M5 exit criterion: typed queries under 30 ms p95 at 20 000 documents.
 #

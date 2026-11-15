@@ -40,6 +40,10 @@ pub struct Options {
     pub seed: u64,
     /// Business date the data ends on; tests pin it, the command uses today.
     pub today: Option<LocalDate>,
+    /// Finish the year before the data's last one: post everything dated in it and
+    /// close it, so a fresh archive has a closed year — with its result on equity —
+    /// to open in the window, and this year is visibly still work in progress.
+    pub close_last_year: bool,
 }
 
 /// What was written.
@@ -67,6 +71,8 @@ pub struct Seeded {
     pub bank_lines: usize,
     /// Standing instructions that classify a bank line.
     pub rules: usize,
+    /// The year the archive has closed, when it has one.
+    pub closed_year: Option<i32>,
 }
 
 /// Fills an empty archive with demo data.
@@ -163,7 +169,15 @@ pub fn seed(session: &mut Session, options: &Options) -> Result<Seeded, DemoErro
 
     let drafts = seed_drafts(session, owner, &customers, today, &mut rng)?;
     let views = seed_views(session, owner, today)?;
-    let books = seed_books(session, owner, today, &documents, inbound.open.as_slice(), &customers)?;
+    let books = seed_books(
+        session,
+        owner,
+        today,
+        &documents,
+        inbound.open.as_slice(),
+        &customers,
+        options.close_last_year,
+    )?;
 
     Ok(Seeded {
         customers: customers.len(),
@@ -177,6 +191,7 @@ pub fn seed(session: &mut Session, options: &Options) -> Result<Seeded, DemoErro
         posted: books.posted,
         bank_lines: books.bank_lines,
         rules: books.rules,
+        closed_year: books.closed_year,
     })
 }
 
@@ -401,6 +416,7 @@ struct BookCounts {
     posted: usize,
     bank_lines: usize,
     rules: usize,
+    closed_year: Option<i32>,
 }
 
 /// How many documents the demo posts to the ledger.
@@ -428,6 +444,7 @@ fn seed_books(
     issued: &[Issued],
     payables: &[DocumentId],
     customers: &[SeededCustomer],
+    close_last_year: bool,
 ) -> Result<BookCounts, DemoError> {
     let connection = session.database().connection();
     store::seed_starter_chart(connection, &at(today, 8, 45))?;
@@ -453,6 +470,21 @@ fn seed_books(
         store::post_document(connection, *document, ACTOR, &at(today, 10, 15))?;
         posted += 1;
     }
+
+    // Two kinds of year in one archive: last year finished, this one in progress.
+    // The close is the same one `bonk ledger close-year` performs, so the demo's
+    // closed year is an ordinary closed year rather than a flag somebody set.
+    let closed_year = if close_last_year {
+        match finish_last_year(session, owner, today)? {
+            Some((year, finished)) => {
+                posted += finished;
+                Some(year)
+            }
+            None => None,
+        }
+    } else {
+        None
+    };
 
     store::insert_bank_account(
         connection,
@@ -502,7 +534,44 @@ fn seed_books(
         posted,
         bank_lines,
         rules: 1,
+        closed_year,
     })
+}
+
+/// Posts whatever is still missing from last year and closes it.
+///
+/// The year before the data's last one is finished here: every document dated in it
+/// is in the books and the year is closed, which is what puts a `closed` year and a
+/// result on equity in front of somebody opening the demo. This year stays open,
+/// because that is what the queue, the payable register, and the month controls are
+/// for.
+///
+/// Nothing is invented for it: the documents are the ones the generator already
+/// created, and the close is the same `store::close_year` the command runs. A year
+/// with no postings is left alone — there would be nothing to close.
+fn finish_last_year(session: &Session, owner: SellerId, today: LocalDate) -> Result<Option<(i32, usize)>, DemoError> {
+    let connection = session.database().connection();
+    let year = today.as_date().year() - 1;
+    if store::list_periods(connection, owner, year)?.is_empty() {
+        return Ok(None);
+    }
+
+    let stamp = at(today, 10, 20);
+    let pending = store::posting::pending(connection, owner)?;
+    let mut posted = 0_usize;
+    for document in pending
+        .iter()
+        .filter(|document| document.issue_date.as_date().year() == year)
+    {
+        if document.direction == "inbound" {
+            store::expense::assign(connection, document.id, "7000", ACTOR, &stamp)?;
+        }
+        store::post_document(connection, document.id, ACTOR, &stamp)?;
+        posted += 1;
+    }
+
+    store::close_year(connection, owner, year, ACTOR, &at(today, 12, 0))?;
+    Ok(Some((year, posted)))
 }
 
 /// The bank account the demo statements belong to.
@@ -1373,6 +1442,7 @@ mod tests {
             received,
             seed: 99,
             today: Some(LocalDate::parse_iso("2026-10-28").unwrap()),
+            close_last_year: true,
         }
     }
 
@@ -1504,6 +1574,65 @@ mod tests {
             &stamp,
         )
         .unwrap();
+    }
+
+    /// The archive holds two kinds of year: last year finished, this one in progress,
+    /// so the window has a closed year to open and an actionable refusal on the other.
+    #[test]
+    fn the_demo_archive_has_a_finished_year_and_an_open_one() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut session = create(directory.path());
+        let seeded = seed(&mut session, &options(40, 10)).unwrap();
+        let connection = session.database().connection();
+        let owner = owner(&session);
+        let today = LocalDate::parse_iso("2026-10-28").unwrap();
+        let last = today.as_date().year() - 1;
+
+        assert_eq!(seeded.closed_year, Some(last), "last year is closed by the seed");
+        assert!(store::year_is_closed(connection, owner, last).unwrap());
+        assert!(
+            !store::year_is_closed(connection, owner, today.as_date().year()).unwrap(),
+            "this year is still open"
+        );
+
+        // The closed year's months are locked and its result is on equity.
+        for period in store::list_periods(connection, owner, last).unwrap() {
+            assert!(!period.is_open(), "{}-{:02} is open", last, period.period_no);
+        }
+        let equity: i64 = connection
+            .query_row(
+                "SELECT COALESCE(sum(CASE side WHEN 'debit' THEN amount_micros ELSE -amount_micros END), 0)
+                 FROM journal_line WHERE account_code = ?1",
+                [store::RESULT_ACCOUNT],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_ne!(equity, 0, "the resultaatbestemming put last year's result on equity");
+
+        // And it refuses a posting, which is what a closed year is for.
+        let said = store::post_manual_entry(
+            connection,
+            owner,
+            today.plus_days(-400).unwrap(),
+            "Te laat",
+            vec![
+                crux::LedgerLine::debit(
+                    crux::AccountCode::parse("7100").unwrap(),
+                    Money::from_major_units(5, Currency::EUR).unwrap(),
+                )
+                .unwrap(),
+                crux::LedgerLine::credit(
+                    crux::AccountCode::parse("1100").unwrap(),
+                    Money::from_major_units(5, Currency::EUR).unwrap(),
+                )
+                .unwrap(),
+            ],
+            ACTOR,
+            &at(today, 13, 0),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(said.contains("is closed"), "{said}");
     }
 
     /// The demo's rule books the fees and nothing else.

@@ -74,6 +74,11 @@ enum Command {
         /// Generator seed; the same seed and day produce the same data.
         #[arg(long, default_value_t = 2026)]
         seed: u64,
+        /// Leave last year unfinished: its documents stay unposted and the year stays
+        /// open. The twenty-thousand-document archive passes this, because posting
+        /// another year there is minutes of seeding for a closed year nobody opens.
+        #[arg(long)]
+        skip_last_year: bool,
         /// Replace an existing archive at the target paths.
         #[arg(long)]
         force: bool,
@@ -1243,6 +1248,7 @@ fn run(cli: Cli) -> Result<(), CliError> {
             invoices,
             received,
             seed,
+            skip_last_year,
             force,
         }) => seed_demo(
             &database,
@@ -1254,6 +1260,7 @@ fn run(cli: Cli) -> Result<(), CliError> {
                 received,
                 seed,
                 today: None,
+                close_last_year: !skip_last_year,
             },
             force,
         ),
@@ -3297,6 +3304,9 @@ fn seed_demo(
     println!("drafts:     {}", seeded.drafts);
     println!("views:      {} saved searches", seeded.views);
     println!("ledger:     {} documents posted to the books", seeded.posted);
+    if let Some(year) = seeded.closed_year {
+        println!("last year:  {year} closed, with its result on equity");
+    }
     println!(
         "bank:       {} transactions waiting, {} rule(s)",
         seeded.bank_lines, seeded.rules
