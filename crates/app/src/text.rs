@@ -342,6 +342,18 @@ pub mod ledger {
         )
     }
 
+    /// The note under the section buttons while the queue is showing.
+    ///
+    /// The queue is the one part of this tab that writes, so it says so instead of
+    /// repeating a promise the section would break.
+    pub fn bank_note(language: Language) -> &'static str {
+        sentence!(
+            language,
+            "Work the queue with the keyboard: ↓ opens a line, Enter settles it. The other sections are read-only.",
+            "Werk de wachtrij met het toetsenbord: ↓ opent een mutatie, Enter lettert af. De andere onderdelen zijn alleen lezen."
+        )
+    }
+
     /// The chart of accounts.
     pub fn chart(language: Language) -> &'static str {
         sentence!(language, "Chart", "Rekeningschema")
@@ -469,12 +481,55 @@ pub mod ledger {
         )
     }
 
-    /// The column titles of the bank queue.
-    pub fn bank_columns(language: Language) -> [&'static str; 6] {
+    /// The column titles of the unmatched queue.
+    pub fn bank_columns(language: Language) -> [&'static str; 7] {
         sentence!(
             language,
-            ["Date", "Account", "Counterparty", "Remittance", "Amount", "Status"],
-            ["Datum", "Rekening", "Tegenpartij", "Omschrijving", "Bedrag", "Status"]
+            [
+                "Date",
+                "Account",
+                "Counterparty",
+                "Remittance",
+                "Amount",
+                "Left",
+                "Status"
+            ],
+            [
+                "Datum",
+                "Rekening",
+                "Tegenpartij",
+                "Omschrijving",
+                "Bedrag",
+                "Rest",
+                "Status"
+            ]
+        )
+    }
+
+    /// The keys the queue answers to.
+    pub fn bank_keys(language: Language) -> &'static str {
+        sentence!(
+            language,
+            "↑ ↓ move · Enter opens the offers · Enter accepts · Esc back",
+            "↑ ↓ verplaatsen · Enter opent de kandidaten · Enter accepteert · Esc terug"
+        )
+    }
+
+    /// That nothing open fits the line that is open.
+    pub fn bank_no_offers(language: Language) -> &'static str {
+        sentence!(
+            language,
+            "No open item fits this line. A rule can book it, or it is nobody's invoice yet.",
+            "Geen openstaande post past bij deze mutatie. Een regel kan hem boeken, of er is nog geen factuur voor."
+        )
+    }
+
+    /// What a payment settled, once it was accepted.
+    pub fn bank_settled(language: Language, number: &str, amount: &str) -> String {
+        sentence!(
+            language,
+            format!("settled {number} ({amount})"),
+            format!("{number} afgeletterd ({amount})")
         )
     }
 
@@ -614,12 +669,12 @@ pub mod ledger {
         )
     }
 
-    /// How many bank transactions wait.
-    pub fn bank_count(language: Language, count: usize) -> String {
+    /// How many lines are waiting, and what they come to.
+    pub fn bank_count(language: Language, count: usize, total: &str) -> String {
         sentence!(
             language,
-            format!("{count} transaction(s)"),
-            format!("{count} mutatie(s)")
+            format!("{count} line(s) waiting, {total} in total"),
+            format!("{count} mutatie(s) in afwachting, {total} in totaal")
         )
     }
 

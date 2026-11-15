@@ -10,6 +10,7 @@
 
 mod dialog;
 pub mod idle;
+mod queue;
 mod table;
 pub mod text;
 pub mod theme;

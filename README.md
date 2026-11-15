@@ -409,14 +409,24 @@ page to the width of the window, centred, so a wide window shows a larger sheet.
 What the preview shows is what gets filed; after issuing, the panel offers the
 PDF and the UBL again.
 
-Ledger is read-only: the chart, the trial balance, profit and loss, the balance
-sheet, the Dutch VAT form with its readiness checks, the open receivables and
-payables with their aging, and the bank transactions nothing has settled yet.
-Each report is keyed on the window (a date range, a date, or a return period) and
-re-queried only when that key changes, so scrolling a report does not re-scan the
-journal. A report whose two sides disagree says so and by how much; nothing is
-rounded into agreement. The window never posts, reverses, or files — those stay
-in the archive's own commands, where they leave the audit trail they must leave.
+Ledger is read-only except for the queue: the chart, the trial balance, profit
+and loss, the balance sheet, the Dutch VAT form with its readiness checks, the
+open receivables and payables with their aging, and — the one place the window
+writes — the bank transactions nothing has settled yet. Each report is keyed on
+the window (a date range, a date, or a return period) and re-queried only when
+that key changes, so scrolling a report does not re-scan the journal. A report
+whose two sides disagree says so and by how much; nothing is rounded into
+agreement. The rest of the window never posts, reverses, or files — those stay in
+the archive's own commands, where they leave the audit trail they must leave.
+
+The queue is worked without the mouse. `↓`/`↑` (or `j`/`k`) open a line and
+move between lines, and once a line is open they move between the ways it could
+be settled. `Enter` steps into the offers and then accepts the highlighted one,
+`Tab` swaps the two, and `Esc` goes back, then closes the line. Each line shows
+what is still unaccounted for (`Left`), the footer shows how many lines are
+waiting and what they come to, and the note under the section buttons says that
+this is the one part of the tab that writes. Keys are ignored while a field has
+the keyboard, so typing a date cannot walk the queue underneath the form.
 
 Every document chooses its own currency from a picker beside the customer; the
 seller's currency is only the default, and the line amounts are parsed in the

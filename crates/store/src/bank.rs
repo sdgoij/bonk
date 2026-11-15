@@ -300,6 +300,23 @@ pub fn fingerprint(line: &ParsedTransaction) -> String {
     audit::sha256_hex(canonical.as_bytes())
 }
 
+/// What has been allocated to a transaction so far, as a positive amount.
+///
+/// A line that is `partially_matched` has money the books cannot account for yet,
+/// and the queue shows that difference so a person can see what is still open
+/// rather than a status word that only says "not finished".
+///
+/// Allocations are stored negative when they settle and positive when they are
+/// undone, so the sum nets to what is still applied.
+pub fn allocated_micros(conn: &Connection, transaction_id: &str) -> Result<i64, StoreError> {
+    let total: i64 = conn.query_row(
+        "SELECT COALESCE(sum(amount_micros), 0) FROM allocation WHERE transaction_id = ?1",
+        [transaction_id],
+        |row| row.get(0),
+    )?;
+    Ok(total.abs())
+}
+
 /// Closing minus opening minus the sum of the lines, when the bank stated both.
 fn balance_difference(statement: &ParsedStatement) -> Option<i64> {
     let opening = statement.opening_balance_micros?;

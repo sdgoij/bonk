@@ -718,6 +718,22 @@ transaction, running totals, and a visible "difference" field. Bulk actions are
 limited to accepting proposals above a confidence threshold; anything ambiguous
 is a human decision.
 
+Built as `app::queue`, a state machine with no egui in it, and `bank_queue_table`
+in the window. Down and Up (or j/k) open a line and walk the queue, then move
+between its offers once it is open; Enter steps into the offers and then accepts
+one, so moving money takes two deliberate keypresses; Tab swaps the two lists and
+Escape goes back, then closes the line. Each row carries a `Left` column — the
+amount less what is already allocated, from `store::allocated_micros` — which is
+the difference field, and the footer totals what is left across the queue. Keys
+are ignored while a field holds the keyboard.
+
+There is no confidence threshold and no bulk accept, because nothing here scores
+candidates: an offer exists only when the remittance names the invoice and the
+amount agrees, or when two or three named invoices add up to the payment. "Anything
+ambiguous is a human decision" is therefore structural rather than a setting — two
+fits are never resolved, and a payment that names nothing is only proposed when a
+single open item has exactly that amount.
+
 ---
 
 ## 8. Reports and exports

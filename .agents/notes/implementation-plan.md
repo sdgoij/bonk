@@ -1367,7 +1367,31 @@ that carries VAT is a purchase invoice. `unclassify` reverses through
 cannot half-apply, and a line that was *matched* is refused there with a pointer to
 `bank unmatch` instead.
 
-Schema is 18. Still open in A4: the keyboard-first queue.
+**Status, 2026-11-15 (the queue is worked from the keyboard).** The one part of the
+Ledger tab that writes is now the one part that has to be quick. Down and Up (or
+j/k) open a line and walk the queue; once open they move between the ways it could
+be settled — the reference and amount proposals, and the group proposals beside
+them. Enter steps into the offers and then accepts the highlighted one, so settling
+a payment is two deliberate keypresses rather than one that happens to move money
+because a row was highlighted. Tab swaps between the two lists, Escape goes back
+and then closes the line, and the arrows never close anything.
+
+The rules of that interaction live in `app::queue` rather than in the drawing code,
+without a line of egui, because a queue where Enter silently does nothing or where
+the highlight walks off the end is a bug you meet at the worst moment; the state
+machine is unit-tested and the window only does what it says. Each line now carries
+`allocated_micros` and shows what is still unaccounted for (`store::allocated_micros`),
+so `partially_matched` means a number rather than a word, and the footer totals what
+is left across the queue. The keys are ignored while a field holds the keyboard —
+`egui_wants_keyboard_input` — so typing a date in the ledger filters cannot walk the
+queue underneath the form; a test pins that.
+
+The queue settles a payment and nothing else. Reversing, classifying with a rule,
+and filing stay in the commands that leave the audit trail they must leave, and
+§7.5's last rung — scoring candidates by name similarity and date proximity — is
+still deliberately absent: a ranked guess between two invoices is the one thing a
+person can do and a score cannot. A4 is otherwise complete; CSV profiles, rules, and
+the queue were its last three.
 
 ---
 

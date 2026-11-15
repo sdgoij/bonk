@@ -47,8 +47,8 @@ pub use audit::ChainHead;
 pub use backup::{BackupReport, BackupSummary, RETENTION};
 pub use bank::{
     BankAccount, BankTransactionRow, GroupProposal, ImportReport, MatchMethod, MatchReport, ParsedStatement,
-    ParsedTransaction, Proposal, allocate, allocate_group, auto_match, fingerprint, group_proposals, import_statement,
-    insert_bank_account, list_bank_accounts, list_transactions, proposals, unmatch,
+    ParsedTransaction, Proposal, allocate, allocate_group, allocated_micros, auto_match, fingerprint, group_proposals,
+    import_statement, insert_bank_account, list_bank_accounts, list_transactions, proposals, unmatch,
 };
 pub use db::Database;
 pub use device::DeviceStore;

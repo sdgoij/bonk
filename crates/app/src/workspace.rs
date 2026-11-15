@@ -29,6 +29,7 @@ use crate::Session;
 use crate::customers;
 use crate::dialog;
 use crate::health::{CheckOutcome, CheckPhase, Health, audit_archive_with_progress};
+use crate::queue;
 use crate::table::{Cell, Table};
 use crate::text::editor::Field;
 use crate::text::find::Fact;
@@ -293,7 +294,7 @@ impl LedgerSection {
             Self::ProfitAndLoss | Self::BalanceSheet => &[1.0, 3.4, 1.4],
             Self::Vat => &[],
             Self::OpenItems => &[0.9, 1.0, 1.1, 2.2, 1.1, 1.3],
-            Self::Bank => &[1.2, 1.2, 2.2, 2.6, 1.4, 1.3],
+            Self::Bank => &[1.1, 1.1, 2.0, 2.4, 1.3, 1.2, 1.2],
         }
     }
 }
@@ -340,7 +341,24 @@ enum LedgerData {
         prepared: Option<store::PreparedReturn>,
     },
     OpenItems(Box<OpenItemsData>),
-    Bank(Vec<store::BankTransactionRow>),
+    Bank(Vec<BankLine>),
+}
+
+/// One line of the unmatched queue.
+///
+/// The row carries what the table shows; `allocated_micros` is what is already
+/// applied to it, so the queue can show the money that is still unaccounted for
+/// rather than a status word that only says "not finished".
+struct BankLine {
+    row: store::BankTransactionRow,
+    allocated_micros: i64,
+}
+
+impl BankLine {
+    /// What the line still has to place: its amount less what is already applied.
+    fn left_micros(&self) -> i64 {
+        self.row.amount.micros().abs().saturating_sub(self.allocated_micros)
+    }
 }
 
 /// What the ledger tab holds between frames.
@@ -357,6 +375,10 @@ struct LedgerView {
     loaded: Option<LedgerRequest>,
     error: Option<String>,
     date_popup: Option<DatePopup>,
+    /// Which line of the unmatched queue is open, and where the keyboard is.
+    queue: queue::Queue,
+    /// What the last action did, so a keyboard user sees that it worked.
+    notice: Option<String>,
 }
 
 impl Default for LedgerView {
@@ -375,6 +397,8 @@ impl Default for LedgerView {
             loaded: None,
             error: None,
             date_popup: None,
+            queue: queue::Queue::default(),
+            notice: None,
         }
     }
 }
@@ -1816,7 +1840,11 @@ impl Workspace {
                 }
             }
         });
-        ui.weak(text::ledger::note(language));
+        if self.ledger.section == LedgerSection::Bank {
+            ui.weak(text::ledger::bank_note(language));
+        } else {
+            ui.weak(text::ledger::note(language));
+        }
         self.ledger_filters_ui(ui, language);
         self.load_ledger(session, seller);
 
@@ -1826,18 +1854,42 @@ impl Workspace {
         }
 
         let width = (ui.available_width() - ui.spacing().scroll.bar_width).max(320.0);
-        let Some(data) = self.ledger.data.as_ref() else {
+        let Some(data) = self.ledger.data.take() else {
             return;
         };
-        let table = &mut self.ledger.table;
-        match data {
-            LedgerData::Chart(accounts) => chart_table(table, ui, language, accounts, width),
-            LedgerData::TrialBalance(report) => trial_table(table, ui, language, report, width),
-            LedgerData::ProfitAndLoss(report) => profit_table(table, ui, language, report, width),
-            LedgerData::BalanceSheet(report) => sheet_table(table, ui, language, report, width),
-            LedgerData::Vat { readiness, prepared } => vat_panel(ui, language, readiness, prepared),
-            LedgerData::OpenItems(data) => open_items_panel(table, ui, language, data, width),
-            LedgerData::Bank(rows) => bank_table(table, ui, language, rows, width),
+        // The panels draw from the data the tab already loaded, so a report is not
+        // re-read per frame. They also need the view's own state, which is a
+        // different field: taken apart here so the queue can write while it draws.
+        let mut reload = false;
+        {
+            let table = &mut self.ledger.table;
+            match &data {
+                LedgerData::Chart(accounts) => chart_table(table, ui, language, accounts, width),
+                LedgerData::TrialBalance(report) => trial_table(table, ui, language, report, width),
+                LedgerData::ProfitAndLoss(report) => profit_table(table, ui, language, report, width),
+                LedgerData::BalanceSheet(report) => sheet_table(table, ui, language, report, width),
+                LedgerData::Vat { readiness, prepared } => vat_panel(ui, language, readiness, prepared),
+                LedgerData::OpenItems(data) => open_items_panel(table, ui, language, data, width),
+                LedgerData::Bank(lines) => {
+                    reload = bank_queue_table(
+                        ui,
+                        language,
+                        session,
+                        seller,
+                        table,
+                        &mut self.ledger.queue,
+                        &mut self.ledger.notice,
+                        lines,
+                        width,
+                    );
+                }
+            }
+        }
+        self.ledger.data = Some(data);
+        if reload {
+            // The line an offer settled has left the queue, so the next frame
+            // re-reads it.
+            self.ledger.loaded = None;
         }
     }
 
@@ -4258,7 +4310,12 @@ fn ledger_data(
         LedgerRequest::Bank => {
             let mut rows = store::list_transactions(connection, seller, Some("new"))?;
             rows.extend(store::list_transactions(connection, seller, Some("partially_matched"))?);
-            LedgerData::Bank(rows)
+            let mut lines = Vec::with_capacity(rows.len());
+            for row in rows {
+                let allocated_micros = store::allocated_micros(connection, &row.id)?;
+                lines.push(BankLine { row, allocated_micros });
+            }
+            LedgerData::Bank(lines)
         }
     })
 }
@@ -4694,51 +4751,221 @@ fn open_items_panel(table: &mut Table, ui: &mut egui::Ui, language: Language, da
     });
 }
 
-fn bank_table(
-    table: &mut Table,
+/// Draws the unmatched queue and works it from the keyboard.
+///
+/// Selection *is* the open line, so arrowing to a line loads the ways it could be
+/// settled. Accepting takes two steps — into the offers, then onto one — because a
+/// single Enter that moved money because a row happened to be highlighted is a
+/// hazard rather than a shortcut.
+///
+/// Returns true when an offer was accepted, which means the report has to be read
+/// again: the line it settled has left the queue.
+#[allow(clippy::too_many_arguments)]
+fn bank_queue_table(
     ui: &mut egui::Ui,
     language: Language,
-    rows: &[store::BankTransactionRow],
+    session: &Session,
+    seller: SellerId,
+    table: &mut Table,
+    state: &mut queue::Queue,
+    notice: &mut Option<String>,
+    lines: &[BankLine],
     width: f32,
-) {
+) -> bool {
     table.header(ui, "ledger-bank", &text::ledger::bank_columns(language), width);
-    if rows.is_empty() {
+    if lines.is_empty() {
         ui.add_space(10.0);
         ui.weak(text::ledger::empty_bank(language));
-        return;
+        if let Some(text) = notice.as_deref() {
+            ui.add_space(4.0);
+            ui.weak(text);
+        }
+        return false;
     }
 
-    let mut rows: Vec<&store::BankTransactionRow> = rows.iter().collect();
+    let mut rows: Vec<&BankLine> = lines.iter().collect();
     if let Some((column, descending)) = table.sort {
         rows.sort_by(|left, right| {
             let order = match column {
-                0 => left.booking_date.cmp(&right.booking_date),
-                1 => left.account_name.cmp(&right.account_name),
-                2 => left.counterparty_name.cmp(&right.counterparty_name),
-                3 => left.remittance_info.cmp(&right.remittance_info),
-                4 => left.amount.micros().cmp(&right.amount.micros()),
-                _ => left.status.cmp(&right.status),
+                0 => left.row.booking_date.cmp(&right.row.booking_date),
+                1 => left.row.account_name.cmp(&right.row.account_name),
+                2 => left.row.counterparty_name.cmp(&right.row.counterparty_name),
+                3 => left.row.remittance_info.cmp(&right.row.remittance_info),
+                4 => left.row.amount.micros().cmp(&right.row.amount.micros()),
+                5 => left.left_micros().cmp(&right.left_micros()),
+                _ => left.row.status.cmp(&right.row.status),
             };
             if descending { order.reverse() } else { order }
         });
     }
+    // The order the rows are drawn in is the order the arrows walk, so `Down` always
+    // means the row below the one on screen.
+    let order: Vec<String> = rows.iter().map(|line| line.row.id.clone()).collect();
+
+    let mut open: Option<String> = None;
+    let mut accept: Option<(String, usize)> = None;
+    let mut changed = false;
+    if !ui.ctx().egui_wants_keyboard_input()
+        && let Some(key) = queue_key(ui)
+    {
+        match state.press(key, &order) {
+            queue::Action::None => {}
+            queue::Action::Open(id) => open = Some(id),
+            queue::Action::Accept { transaction, offer } => accept = Some((transaction, offer)),
+            queue::Action::Close => {
+                state.close();
+                *notice = None;
+            }
+        }
+    }
+    if let Some(id) = open {
+        open_bank_line(state, session, seller, &id);
+    }
+    if let Some((transaction, offer)) = accept {
+        changed = accept_bank_offer(state, session, seller, language, &transaction, offer, notice);
+    }
+
+    let tokens = *theme::palette(ui.ctx());
+    let mut clicked: Option<String> = None;
+    let mut clicked_offer: Option<usize> = None;
 
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
         ui.set_width(width);
-        for (index, row) in rows.iter().enumerate() {
+        for (index, line) in rows.iter().enumerate() {
+            let opened = state.is_open(&line.row.id);
+            let left = line.left_micros();
             let cells = [
-                Cell::left(row.booking_date.to_iso_string()),
-                Cell::left(row.account_name.as_str()),
-                Cell::left(row.counterparty_name.as_deref().unwrap_or("—")),
-                Cell::left(row.remittance_info.as_deref().unwrap_or("—")).muted(),
-                Cell::right(money_text(row.amount)),
-                Cell::left(text::ledger::bank_status(language, &row.status)).muted(),
+                Cell::left(line.row.booking_date.to_iso_string()),
+                Cell::left(line.row.account_name.as_str()),
+                Cell::left(line.row.counterparty_name.as_deref().unwrap_or("—")),
+                Cell::left(line.row.remittance_info.as_deref().unwrap_or("—")).muted(),
+                Cell::right(money_text(line.row.amount)),
+                amount_cell(left, line.row.amount.currency()),
+                Cell::left(text::ledger::bank_status(language, &line.row.status)).muted(),
             ];
-            table.row(ui, width, &cells, false, index % 2 == 1);
+            if table.row(ui, width, &cells, opened, index % 2 == 1).clicked() {
+                clicked = Some(line.row.id.clone());
+            }
+
+            if !opened {
+                continue;
+            }
+            let indent = 26.0;
+            if let Some(note) = state.note() {
+                ui.horizontal(|ui| {
+                    ui.add_space(indent);
+                    ui.colored_label(tokens.error, note);
+                });
+            } else if state.offers().is_empty() {
+                ui.horizontal(|ui| {
+                    ui.add_space(indent);
+                    ui.weak(text::ledger::bank_no_offers(language));
+                });
+            }
+            for (position, offer) in state.offers().iter().enumerate() {
+                let highlighted = state.focus() == queue::Focus::Offers && state.highlight() == position;
+                let label = format!(
+                    "{}  ·  {}  ·  {}  ·  {}",
+                    offer.number,
+                    money_text(offer.amount),
+                    offer.method.as_str(),
+                    offer.reason
+                );
+                ui.horizontal(|ui| {
+                    ui.add_space(indent);
+                    if ui.selectable_label(highlighted, label).clicked() {
+                        clicked_offer = Some(position);
+                    }
+                });
+            }
         }
         ui.add_space(8.0);
-        ui.weak(text::ledger::bank_count(language, rows.len()));
+        let waiting: i64 = rows.iter().map(|line| line.left_micros()).sum();
+        let currency = rows
+            .first()
+            .map(|line| line.row.amount.currency())
+            .unwrap_or(Currency::EUR);
+        ui.weak(text::ledger::bank_count(
+            language,
+            rows.len(),
+            &amount_text(waiting, currency),
+        ));
+        ui.weak(text::ledger::bank_keys(language));
+        if let Some(text) = notice.as_deref() {
+            ui.weak(text);
+        }
     });
+
+    // The mouse is answered after the draw, because a click is what the row reports.
+    if let Some(id) = clicked {
+        open_bank_line(state, session, seller, &id);
+    } else if let Some(offer) = clicked_offer
+        && let Some(transaction) = state.opened().map(str::to_owned)
+    {
+        changed = accept_bank_offer(state, session, seller, language, &transaction, offer, notice);
+    }
+    changed
+}
+
+/// The key this frame pressed, when it is one the queue answers to.
+fn queue_key(ui: &egui::Ui) -> Option<queue::Key> {
+    ui.input(|input| {
+        if input.key_pressed(egui::Key::ArrowDown) || input.key_pressed(egui::Key::J) {
+            Some(queue::Key::Down)
+        } else if input.key_pressed(egui::Key::ArrowUp) || input.key_pressed(egui::Key::K) {
+            Some(queue::Key::Up)
+        } else if input.key_pressed(egui::Key::Enter) {
+            Some(queue::Key::Enter)
+        } else if input.key_pressed(egui::Key::Tab) {
+            Some(queue::Key::Tab)
+        } else if input.key_pressed(egui::Key::Escape) {
+            Some(queue::Key::Escape)
+        } else {
+            None
+        }
+    })
+}
+
+/// Opens a line, loading the ways it could be settled.
+fn open_bank_line(state: &mut queue::Queue, session: &Session, seller: SellerId, id: &str) {
+    match queue::offers(session.database(), seller, id) {
+        Ok(offers) => state.open(id, offers),
+        Err(error) => state.fail(id, error.to_string()),
+    }
+}
+
+/// Settles the open line with one of its offers, and says what happened.
+fn accept_bank_offer(
+    state: &mut queue::Queue,
+    session: &Session,
+    seller: SellerId,
+    language: Language,
+    transaction: &str,
+    offer: usize,
+    notice: &mut Option<String>,
+) -> bool {
+    let Some(chosen) = state.offers().get(offer).cloned() else {
+        return false;
+    };
+    let said = text::ledger::bank_settled(language, &chosen.number, &money_text(chosen.amount));
+    match queue::accept(
+        session.database(),
+        seller,
+        transaction,
+        &chosen,
+        ACTOR,
+        &store::now_rfc3339(),
+    ) {
+        Ok(()) => {
+            state.close();
+            *notice = Some(said);
+            true
+        }
+        Err(error) => {
+            state.fail(transaction, error.to_string());
+            false
+        }
+    }
 }
 
 /// The first characters of a hash, enough to compare two of them by eye.
@@ -7433,6 +7660,192 @@ mod tests {
             .clone()
             .expect("a date that is not one is reported");
         assert!(error.contains("last monday"), "{error}");
+    }
+
+    /// A chart, one posted invoice, a bank account, and one payment that names it.
+    ///
+    /// Returns the transaction the queue should hold.
+    fn session_with_an_unmatched_payment() -> (tempfile::TempDir, Session, SellerRecord, String) {
+        let (dir, session, seller) = posted_session();
+        let connection = session.database().connection();
+        let outstanding = store::open_items::list(connection, seller.id, store::OpenItemKind::Receivable)
+            .unwrap()
+            .into_iter()
+            .find(|item| item.is_open())
+            .expect("the posted invoice left an item open");
+
+        store::insert_bank_account(
+            connection,
+            &store::BankAccount {
+                id: "acct-1".to_owned(),
+                seller_id: seller.id,
+                name: "Zakelijk".to_owned(),
+                iban: Some("NL91ABNA0417164300".to_owned()),
+                currency: Currency::EUR,
+                ledger_account_code: crux::AccountCode::parse("1100").unwrap(),
+                import_profile: None,
+            },
+            NOW,
+        )
+        .unwrap();
+        let statement = store::ParsedStatement {
+            format: "csv",
+            source_name: Some("feb.csv".to_owned()),
+            currency: Currency::EUR,
+            period_start: None,
+            period_end: None,
+            opening_balance_micros: None,
+            closing_balance_micros: None,
+            transactions: vec![store::ParsedTransaction {
+                booking_date: LocalDate::parse_iso("2026-10-28").unwrap(),
+                value_date: None,
+                amount_micros: outstanding.outstanding.micros(),
+                currency: Currency::EUR,
+                counterparty_name: Some("Klant BV".to_owned()),
+                counterparty_iban: Some("NL02RABO0123456789".to_owned()),
+                remittance_info: Some(format!("Betaling factuur {}", outstanding.number)),
+                external_ref: None,
+            }],
+        };
+        let report = store::import_statement(
+            connection,
+            "acct-1",
+            &statement,
+            &store::audit::sha256_hex(b"feb.csv"),
+            NOW,
+        )
+        .unwrap();
+        let line: String = connection
+            .query_row(
+                "SELECT id FROM bank_transaction WHERE statement_id = ?1",
+                [&report.statement_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        (dir, session, seller, line)
+    }
+
+    /// One frame of the window, with one key pressed in it.
+    fn press(workspace: &mut Workspace, session: &mut Session, key: egui::Key) {
+        let context = egui::Context::default();
+        let mut appearance = egui::ThemePreference::System;
+        let mut language = Language::default();
+        let input = egui::RawInput {
+            events: vec![egui::Event::Key {
+                key,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+            ..Default::default()
+        };
+        let output = context.run_ui(input, |ui| {
+            let _ = workspace.ui(ui, session, &mut appearance, &mut language);
+        });
+        output.drop_without_applying_deltas();
+    }
+
+    #[test]
+    fn the_unmatched_queue_is_worked_from_the_keyboard() {
+        let (_dir, mut session, seller, line) = session_with_an_unmatched_payment();
+        let mut workspace = Workspace::new(&session).unwrap();
+        workspace.tab = Tab::Ledger;
+        workspace.ledger.section = LedgerSection::Bank;
+        workspace.load_ledger(&session, seller.id);
+
+        let Some(LedgerData::Bank(lines)) = workspace.ledger.data.as_ref() else {
+            panic!("the queue did not load: {:?}", workspace.ledger.error);
+        };
+        assert_eq!(lines.len(), 1, "one payment is waiting");
+        assert_eq!(lines[0].row.id, line);
+        assert_eq!(
+            lines[0].left_micros(),
+            lines[0].row.amount.micros().abs(),
+            "nothing is applied to it yet"
+        );
+
+        // Down opens the first line and loads what could settle it.
+        press(&mut workspace, &mut session, egui::Key::ArrowDown);
+        assert_eq!(workspace.ledger.queue.opened(), Some(line.as_str()));
+        assert_eq!(
+            workspace.ledger.queue.offers().len(),
+            1,
+            "the payment names the invoice: {:?}",
+            workspace.ledger.queue.note()
+        );
+        assert_eq!(workspace.ledger.queue.focus(), queue::Focus::List);
+
+        // Enter moves into the offers, and Enter again settles it.
+        press(&mut workspace, &mut session, egui::Key::Enter);
+        assert_eq!(workspace.ledger.queue.focus(), queue::Focus::Offers);
+        press(&mut workspace, &mut session, egui::Key::Enter);
+
+        let open = store::open_items::list(
+            session.database().connection(),
+            seller.id,
+            store::OpenItemKind::Receivable,
+        )
+        .unwrap()
+        .into_iter()
+        .filter(store::OpenItem::is_open)
+        .count();
+        assert_eq!(open, 0, "the invoice is settled");
+        assert!(
+            workspace
+                .ledger
+                .notice
+                .as_deref()
+                .is_some_and(|text| text.contains("settled")),
+            "a keyboard user is told it worked: {:?}",
+            workspace.ledger.notice
+        );
+
+        // The line has left the queue, and the section says so.
+        workspace.load_ledger(&session, seller.id);
+        let Some(LedgerData::Bank(lines)) = workspace.ledger.data.as_ref() else {
+            panic!("the queue did not reload: {:?}", workspace.ledger.error);
+        };
+        assert!(lines.is_empty(), "nothing is waiting any more");
+    }
+
+    #[test]
+    fn the_queue_does_not_answer_a_key_while_a_field_is_being_typed_in() {
+        let (_dir, mut session, seller, line) = session_with_an_unmatched_payment();
+        let mut workspace = Workspace::new(&session).unwrap();
+        workspace.tab = Tab::Ledger;
+        workspace.ledger.section = LedgerSection::Bank;
+        workspace.load_ledger(&session, seller.id);
+
+        // A frame where a field holds the focus: the queue must not take the key,
+        // or typing a date would walk the queue underneath the form.
+        let context = egui::Context::default();
+        context.memory_mut(|memory| memory.request_focus(egui::Id::unique("a-field-with-the-keyboard")));
+        let mut appearance = egui::ThemePreference::System;
+        let mut language = Language::default();
+        let input = egui::RawInput {
+            events: vec![egui::Event::Key {
+                key: egui::Key::ArrowDown,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+            ..Default::default()
+        };
+        let mut wanted = false;
+        let output = context.run_ui(input, |ui| {
+            wanted = ui.ctx().egui_wants_keyboard_input();
+            let _ = workspace.ui(ui, &mut session, &mut appearance, &mut language);
+        });
+        output.drop_without_applying_deltas();
+
+        assert!(wanted, "the frame has to want the keyboard, or this proves nothing");
+        assert_eq!(
+            workspace.ledger.queue.opened(),
+            None,
+            "{line} must not be opened by a key meant for a field"
+        );
     }
 
     #[test]
