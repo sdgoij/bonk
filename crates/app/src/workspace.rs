@@ -342,11 +342,35 @@ enum LedgerData {
     ProfitAndLoss(store::ProfitAndLoss),
     BalanceSheet(store::BalanceSheet),
     Vat {
+        /// The month itself, when anything has been posted in it.
+        period: Option<store::FiscalPeriod>,
+        /// What stops the month from closing; empty when it can close.
+        blockers: Vec<String>,
         readiness: Box<store::Readiness>,
         prepared: Option<store::PreparedReturn>,
     },
     OpenItems(Box<OpenItemsData>),
     Bank(Vec<BankLine>),
+}
+
+/// What the month's open/closed control last said.
+///
+/// A refusal is the store's own sentence, which names the account that has to be
+/// emptied before the month can close, so it is shown rather than paraphrased.
+#[derive(Debug)]
+enum PeriodNotice {
+    Done(String),
+    Refused(String),
+}
+
+/// What the month control was asked to do.
+///
+/// The action carries the whole period rather than its identifier, because the
+/// notice names the month it was about and the panel is the only place that knows
+/// which month is on screen.
+enum PeriodAction {
+    Close(store::FiscalPeriod),
+    Reopen(store::FiscalPeriod, String),
 }
 
 /// One line of the unmatched queue.
@@ -384,6 +408,10 @@ struct LedgerView {
     queue: queue::Queue,
     /// What the last action did, so a keyboard user sees that it worked.
     notice: Option<String>,
+    /// The reason typed for reopening the month.
+    reopen_reason: String,
+    /// What the month's open/closed control last did.
+    period_notice: Option<PeriodNotice>,
 }
 
 impl Default for LedgerView {
@@ -404,6 +432,8 @@ impl Default for LedgerView {
             date_popup: None,
             queue: queue::Queue::default(),
             notice: None,
+            reopen_reason: String::new(),
+            period_notice: None,
         }
     }
 }
@@ -1885,6 +1915,7 @@ impl Workspace {
         // re-read per frame. They also need the view's own state, which is a
         // different field: taken apart here so the queue can write while it draws.
         let mut reload = false;
+        let mut period_action = None;
         {
             let table = &mut self.ledger.table;
             match &data {
@@ -1892,7 +1923,25 @@ impl Workspace {
                 LedgerData::TrialBalance(report) => trial_table(table, ui, language, report, width),
                 LedgerData::ProfitAndLoss(report) => profit_table(table, ui, language, report, width),
                 LedgerData::BalanceSheet(report) => sheet_table(table, ui, language, report, width),
-                LedgerData::Vat { readiness, prepared } => vat_panel(ui, language, readiness, prepared),
+                LedgerData::Vat {
+                    period,
+                    blockers,
+                    readiness,
+                    prepared,
+                } => {
+                    period_action = vat_panel(
+                        ui,
+                        language,
+                        VatState {
+                            period: period.as_ref(),
+                            blockers,
+                            readiness,
+                            prepared,
+                            reason: &mut self.ledger.reopen_reason,
+                            notice: self.ledger.period_notice.as_ref(),
+                        },
+                    );
+                }
                 LedgerData::OpenItems(data) => open_items_panel(table, ui, language, data, width),
                 LedgerData::Bank(lines) => {
                     reload = bank_queue_table(
@@ -1910,10 +1959,44 @@ impl Workspace {
             }
         }
         self.ledger.data = Some(data);
+        if let Some(action) = period_action {
+            self.apply_period_action(session, action);
+        }
         if reload {
             // The line an offer settled has left the queue, so the next frame
             // re-reads it.
             self.ledger.loaded = None;
+        }
+    }
+
+    /// Closes or reopens the month the VAT section shows.
+    ///
+    /// Both are events rather than edits, so a success only has to say what
+    /// happened and forget the loaded report: the month's state and its blockers
+    /// both changed, and the same request now has a different answer.
+    fn apply_period_action(&mut self, session: &Session, action: PeriodAction) {
+        let now = store::now_rfc3339();
+        let connection = session.database().connection();
+        let language = self.language;
+        let (result, said) = match action {
+            PeriodAction::Close(period) => (
+                store::lock_period(connection, period.id, ACTOR, &now),
+                text::ledger::month_closed(language, period.year, period.period_no),
+            ),
+            PeriodAction::Reopen(period, reason) => (
+                store::reopen_period(connection, period.id, &reason, ACTOR, &now),
+                text::ledger::month_reopened(language, period.year, period.period_no),
+            ),
+        };
+        match result {
+            Ok(()) => {
+                self.ledger.reopen_reason.clear();
+                self.ledger.period_notice = Some(PeriodNotice::Done(said));
+                self.ledger.loaded = None;
+            }
+            Err(error) => {
+                self.ledger.period_notice = Some(PeriodNotice::Refused(error.to_string()));
+            }
         }
     }
 
@@ -4322,10 +4405,19 @@ fn ledger_data(
         LedgerRequest::BalanceSheet { as_of } => {
             LedgerData::BalanceSheet(store::report::balance_sheet(connection, seller, as_of)?)
         }
-        LedgerRequest::Vat { year, period } => LedgerData::Vat {
-            readiness: Box::new(store::readiness(connection, seller, year, period)?),
-            prepared: store::vat::prepared(connection, seller, year, period)?,
-        },
+        LedgerRequest::Vat { year, period } => {
+            let month = store::load_period(connection, seller, year, period)?;
+            let blockers = match &month {
+                Some(month) => store::close_blockers(connection, month.id)?,
+                None => Vec::new(),
+            };
+            LedgerData::Vat {
+                period: month,
+                blockers,
+                readiness: Box::new(store::readiness(connection, seller, year, period)?),
+                prepared: store::vat::prepared(connection, seller, year, period)?,
+            }
+        }
         LedgerRequest::OpenItems { as_of } => {
             let mut rows = Vec::new();
             for kind in [store::OpenItemKind::Receivable, store::OpenItemKind::Payable] {
@@ -4602,12 +4694,25 @@ fn sheet_table(table: &mut Table, ui: &mut egui::Ui, language: Language, report:
     });
 }
 
-fn vat_panel(
-    ui: &mut egui::Ui,
-    language: Language,
-    readiness: &store::Readiness,
-    prepared: &Option<store::PreparedReturn>,
-) {
+/// What the VAT section draws, and the two fields it owns between frames.
+struct VatState<'a> {
+    period: Option<&'a store::FiscalPeriod>,
+    blockers: &'a [String],
+    readiness: &'a store::Readiness,
+    prepared: &'a Option<store::PreparedReturn>,
+    reason: &'a mut String,
+    notice: Option<&'a PeriodNotice>,
+}
+
+fn vat_panel(ui: &mut egui::Ui, language: Language, state: VatState<'_>) -> Option<PeriodAction> {
+    let VatState {
+        period,
+        blockers,
+        readiness,
+        prepared,
+        reason,
+        notice,
+    } = state;
     let tokens = *theme::palette(ui.ctx());
     let checks = [
         (text::ledger::CheckName::LedgerToReturn, &readiness.ledger_to_return),
@@ -4615,6 +4720,68 @@ fn vat_panel(
         (text::ledger::CheckName::BalanceSheet, &readiness.balance_sheet),
         (text::ledger::CheckName::ControlAccounts, &readiness.control_accounts),
     ];
+    let mut action = None;
+
+    // The month and the one control in this tab that writes. It sits outside the
+    // scroll area because it is about the whole month, not about a row of it.
+    ui.horizontal(|ui| {
+        ui.label(text::ledger::month_label(language));
+        let Some(period) = period else {
+            ui.weak(text::ledger::no_period(language));
+            return;
+        };
+        let state = if period.is_open() {
+            text::ledger::period_open(language)
+        } else {
+            text::ledger::period_closed(language)
+        };
+        ui.label(format!("{}-{:02} · {state}", period.year, period.period_no));
+        if period.is_open() {
+            let button = ui.add_enabled(
+                blockers.is_empty(),
+                egui::Button::new(text::ledger::close_month_action(language)),
+            );
+            if button.clicked() {
+                action = Some(PeriodAction::Close(period.clone()));
+            }
+            if !blockers.is_empty() {
+                button.on_disabled_hover_text(text::ledger::cannot_close(language));
+            }
+        } else {
+            ui.add(
+                egui::TextEdit::singleline(reason)
+                    .hint_text(text::ledger::reopen_reason_hint(language))
+                    .desired_width(220.0),
+            );
+            // A reopening without a reason is refused by the store, so the button
+            // does not offer the mistake in the first place.
+            if ui
+                .add_enabled(
+                    !reason.trim().is_empty(),
+                    egui::Button::new(text::ledger::reopen_month_action(language)),
+                )
+                .clicked()
+            {
+                action = Some(PeriodAction::Reopen(period.clone(), reason.trim().to_owned()));
+            }
+        }
+    });
+
+    if period.is_some_and(store::FiscalPeriod::is_open) && !blockers.is_empty() {
+        ui.weak(text::ledger::cannot_close(language));
+        for blocker in blockers {
+            ui.colored_label(tokens.error, blocker);
+        }
+    }
+    match notice {
+        Some(PeriodNotice::Done(said)) => {
+            ui.weak(said);
+        }
+        Some(PeriodNotice::Refused(said)) => {
+            ui.colored_label(tokens.error, said);
+        }
+        None => {}
+    }
 
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
         egui::Grid::new("ledger-vat-checks")
@@ -4702,6 +4869,8 @@ fn vat_panel(
                 }
             });
     });
+
+    action
 }
 
 /// One aging bucket's amount.
@@ -7736,14 +7905,149 @@ mod tests {
         workspace.ledger.section = LedgerSection::Vat;
         workspace.load_ledger(&session, seller.id);
         match workspace.ledger.data.as_ref() {
-            Some(LedgerData::Vat { readiness, prepared }) => {
+            Some(LedgerData::Vat {
+                readiness,
+                prepared,
+                period,
+                blockers,
+            }) => {
                 assert!(
                     readiness.report.line(store::Rubriek::HighRate).is_some(),
                     "the sale is in 1a"
                 );
                 assert!(prepared.is_none(), "nothing has been filed for this month");
+                let period = period.as_ref().expect("the posting created the month");
+                assert!(period.is_open(), "nothing has closed it");
+                assert!(blockers.is_empty(), "nothing is unplaced: {blockers:?}");
             }
             _ => panic!("the VAT return did not load: {:?}", workspace.ledger.error),
+        }
+    }
+
+    /// The month control is the one thing this tab writes, so it is worth walking:
+    /// the close takes effect, the tab reloads the month it is looking at, and a
+    /// month nothing was posted in has nothing to close.
+    #[test]
+    fn a_month_is_closed_and_reopened_from_the_ledger_tab() {
+        let (_dir, session, seller) = posted_session();
+        let mut workspace = Workspace::new(&session).unwrap();
+        workspace.tab = Tab::Ledger;
+        workspace.ledger.section = LedgerSection::Vat;
+        workspace.load_ledger(&session, seller.id);
+
+        let period = match workspace.ledger.data.as_ref() {
+            Some(LedgerData::Vat {
+                period: Some(period), ..
+            }) => period.clone(),
+            _ => panic!("the month did not load: {:?}", workspace.ledger.error),
+        };
+        assert!(period.is_open(), "nothing has closed it yet");
+
+        workspace.apply_period_action(&session, PeriodAction::Close(period.clone()));
+        assert!(
+            matches!(workspace.ledger.period_notice, Some(PeriodNotice::Done(_))),
+            "the tab says what it did: {:?}",
+            workspace.ledger.period_notice
+        );
+
+        workspace.load_ledger(&session, seller.id);
+        match workspace.ledger.data.as_ref() {
+            Some(LedgerData::Vat {
+                period: Some(period), ..
+            }) => assert!(!period.is_open(), "the month is closed now"),
+            _ => panic!("the month did not reload: {:?}", workspace.ledger.error),
+        }
+
+        // Reopening needs a reason, which the tab keeps in the field as typed.
+        workspace.ledger.reopen_reason = "vergeten factuur".to_owned();
+        workspace.apply_period_action(
+            &session,
+            PeriodAction::Reopen(period.clone(), workspace.ledger.reopen_reason.trim().to_owned()),
+        );
+        assert!(
+            workspace.ledger.reopen_reason.is_empty(),
+            "the field is cleared once the reason is on the record"
+        );
+        workspace.load_ledger(&session, seller.id);
+        match workspace.ledger.data.as_ref() {
+            Some(LedgerData::Vat {
+                period: Some(period), ..
+            }) => assert!(period.is_open(), "the month takes postings again"),
+            _ => panic!("the month did not reload: {:?}", workspace.ledger.error),
+        }
+
+        // A month nothing was posted in has no period, so there is nothing to close.
+        workspace.ledger.year = "1999".to_owned();
+        workspace.ledger.month = "1".to_owned();
+        workspace.load_ledger(&session, seller.id);
+        match workspace.ledger.data.as_ref() {
+            Some(LedgerData::Vat { period: None, .. }) => {}
+            _ => panic!(
+                "a month with nothing posted is not a period: {:?}",
+                workspace.ledger.error
+            ),
+        }
+    }
+
+    /// A cost nobody placed is what the close refuses on, and the refusal is the
+    /// store's sentence: it names the account that has to be emptied.
+    #[test]
+    fn a_month_with_an_unplaced_cost_refuses_to_close() {
+        let (_dir, session, seller) = posted_session();
+        store::post_manual_entry(
+            session.database().connection(),
+            seller.id,
+            LocalDate::today_utc(),
+            "Kosten zonder rekening",
+            vec![
+                crux::LedgerLine::debit(
+                    AccountCode::parse(store::UNCLASSIFIED_ACCOUNT).unwrap(),
+                    Money::from_major_units(10, Currency::EUR).unwrap(),
+                )
+                .unwrap(),
+                crux::LedgerLine::credit(
+                    AccountCode::parse("1100").unwrap(),
+                    Money::from_major_units(10, Currency::EUR).unwrap(),
+                )
+                .unwrap(),
+            ],
+            "test",
+            NOW,
+        )
+        .unwrap();
+
+        let mut workspace = Workspace::new(&session).unwrap();
+        workspace.tab = Tab::Ledger;
+        workspace.ledger.section = LedgerSection::Vat;
+        workspace.load_ledger(&session, seller.id);
+
+        let (period, blockers) = match workspace.ledger.data.as_ref() {
+            Some(LedgerData::Vat {
+                period: Some(period),
+                blockers,
+                ..
+            }) => (period.clone(), blockers.clone()),
+            _ => panic!("the month did not load: {:?}", workspace.ledger.error),
+        };
+        assert_eq!(blockers.len(), 1, "the guard account is named once: {blockers:?}");
+        assert!(blockers[0].contains(store::UNCLASSIFIED_ACCOUNT), "{}", blockers[0]);
+
+        workspace.apply_period_action(&session, PeriodAction::Close(period));
+        match workspace.ledger.period_notice.as_ref() {
+            Some(PeriodNotice::Refused(said)) => {
+                assert!(
+                    said.contains(store::UNCLASSIFIED_ACCOUNT),
+                    "the refusal names the account: {said}"
+                );
+            }
+            other => panic!("the close should have been refused: {other:?}"),
+        }
+        workspace.load_ledger(&session, seller.id);
+        match workspace.ledger.data.as_ref() {
+            Some(LedgerData::Vat {
+                period: Some(period), ..
+            }) => assert!(period.is_open(), "a refused close changes nothing"),
+            _ => panic!("the month did not reload: {:?}", workspace.ledger.error),
         }
     }
 

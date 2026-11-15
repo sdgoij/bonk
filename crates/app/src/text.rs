@@ -337,20 +337,20 @@ pub mod ledger {
     pub fn note(language: Language) -> &'static str {
         sentence!(
             language,
-            "Read-only: these figures are computed from the posted entries.",
-            "Alleen lezen: deze cijfers volgen uit de geboekte mutaties."
+            "Read-only, apart from closing a month: these figures are computed from the posted entries.",
+            "Alleen lezen, op het afsluiten van een maand na: deze cijfers volgen uit de geboekte mutaties."
         )
     }
 
     /// The note under the section buttons while the queue is showing.
     ///
-    /// The queue is the one part of this tab that writes, so it says so instead of
-    /// repeating a promise the section would break.
+    /// The queue is the one part of this section that writes, so it says what the
+    /// keyboard does instead of making a promise the section would break.
     pub fn bank_note(language: Language) -> &'static str {
         sentence!(
             language,
-            "Work the queue with the keyboard: ↓ opens a line, Enter settles it. The other sections are read-only.",
-            "Werk de wachtrij met het toetsenbord: ↓ opent een mutatie, Enter lettert af. De andere onderdelen zijn alleen lezen."
+            "Work the queue with the keyboard: ↓ opens a line, Enter settles it.",
+            "Werk de wachtrij met het toetsenbord: ↓ opent een mutatie, Enter lettert af."
         )
     }
 
@@ -377,6 +377,70 @@ pub mod ledger {
     /// The VAT return.
     pub fn vat(language: Language) -> &'static str {
         sentence!(language, "VAT return", "Btw-aangifte")
+    }
+
+    /// The state of the month the VAT section shows.
+    pub fn period_open(language: Language) -> &'static str {
+        sentence!(language, "open", "open")
+    }
+
+    /// The state of a month that takes no postings.
+    pub fn period_closed(language: Language) -> &'static str {
+        sentence!(language, "closed", "afgesloten")
+    }
+
+    /// The button that closes the month.
+    pub fn close_month_action(language: Language) -> &'static str {
+        sentence!(language, "Close month", "Maand afsluiten")
+    }
+
+    /// The button that reopens it.
+    pub fn reopen_month_action(language: Language) -> &'static str {
+        sentence!(language, "Reopen month", "Maand heropenen")
+    }
+
+    /// The field that records why a month is reopened.
+    ///
+    /// The reason is required, so the field carries it as a hint rather than as a
+    /// label beside it: there is one thing to type here and it says what it is.
+    pub fn reopen_reason_hint(language: Language) -> &'static str {
+        sentence!(language, "Why it is reopened", "Waarom hij weer opengaat")
+    }
+
+    /// What stands between a month and a close.
+    pub fn cannot_close(language: Language) -> &'static str {
+        sentence!(
+            language,
+            "A month with a cost nobody has placed cannot close:",
+            "Een maand met een kost die niemand heeft geplaatst kan niet dicht:"
+        )
+    }
+
+    /// That there is no month to close yet.
+    pub fn no_period(language: Language) -> &'static str {
+        sentence!(
+            language,
+            "Nothing was posted in this month, so there is nothing to close.",
+            "In deze maand is niets geboekt, dus er valt niets af te sluiten."
+        )
+    }
+
+    /// What a close did.
+    pub fn month_closed(language: Language, year: i32, month: u8) -> String {
+        sentence!(
+            language,
+            format!("{year}-{month:02} is closed; nothing can be posted into it now."),
+            format!("{year}-{month:02} is afgesloten; er kan nu niets meer in geboekt worden.")
+        )
+    }
+
+    /// What a reopening did.
+    pub fn month_reopened(language: Language, year: i32, month: u8) -> String {
+        sentence!(
+            language,
+            format!("{year}-{month:02} is open again; the reason is on the record."),
+            format!("{year}-{month:02} is weer open; de reden staat in het grootboek.")
+        )
     }
 
     /// Outstanding debtors and creditors.

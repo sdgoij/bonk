@@ -1488,6 +1488,16 @@ What this does not do: there is no year-end close. `period_event.kind` has carri
 an unused `closed` since migration 0011, which is where a 13th-period or
 year-end close would go; the monthly lock and its reopening are what exists.
 
+The window got the same two controls, because a guard that only exists in a command
+is a guard nobody meets. The VAT section shows the month's state and offers **Close
+month** — disabled, with the blockers listed, when something is unplaced — and a
+reason field with **Reopen month** once it is closed. The reason is required there
+too: the button stays dead until something is typed, so the store's refusal is a
+backstop rather than the user interface. A success says what happened and forgets
+the loaded report, since the month's state and its blockers both changed; a refusal
+shows the store's own sentence, which names `9999` and the amount it holds. The note
+above the sections lost its flat "read-only" promise to say so.
+
 ---
 
 ## 5. First two weeks, concretely
