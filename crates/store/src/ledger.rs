@@ -252,27 +252,8 @@ pub fn lock_period(conn: &Connection, period_id: FiscalPeriodId, actor: &str, at
     // A locked period is what a filed return rests on, so it cannot be closed with
     // costs nobody has placed: `9999 Nog te rubriceren` is a real account with a
     // real balance, and its whole purpose is to be emptied rather than lived in.
-    let unclassified: i64 = transaction.query_row(
-        "SELECT COALESCE(sum(CASE l.side WHEN 'debit' THEN l.amount_micros ELSE -l.amount_micros END), 0)
-         FROM journal_line l JOIN journal_entry e ON e.id = l.entry_id
-         WHERE e.period_id = ?1 AND l.account_code = ?2",
-        params![period_id.to_string(), UNCLASSIFIED_ACCOUNT],
-        |row| row.get(0),
-    )?;
-    if unclassified != 0 {
-        let seller: String = transaction.query_row(
-            "SELECT seller_id FROM fiscal_period WHERE id = ?1",
-            [period_id.to_string()],
-            |row| row.get(0),
-        )?;
-        let currency = crate::reporting_currency(
-            &transaction,
-            SellerId::parse_str(&seller).map_err(|error| StoreError::Data(error.to_string()))?,
-        )?;
-        return Err(StoreError::Rejected(format!(
-            "the period cannot be closed while {UNCLASSIFIED_ACCOUNT} holds {}; a cost posted there has to be moved with a memorial entry dated in the period, because an account chosen on a document applies before it is posted",
-            Money::from_micros(unclassified, currency)
-        )));
+    if let Some(blocker) = close_blockers(&transaction, period_id)?.into_iter().next() {
+        return Err(StoreError::Rejected(blocker));
     }
 
     transaction.execute(
@@ -285,6 +266,87 @@ pub fn lock_period(conn: &Connection, period_id: FiscalPeriodId, actor: &str, at
     )?;
     transaction.commit()?;
     Ok(())
+}
+
+/// Reopens a locked period, appending the reason to the record.
+///
+/// The lock event stays: unlocking is a fact like locking was, so a reader can see
+/// that a month was closed and why somebody reopened it. A posting made between the
+/// two is not undone, which is what makes a close worth having.
+pub fn reopen_period(
+    conn: &Connection,
+    period_id: FiscalPeriodId,
+    reason: &str,
+    actor: &str,
+    at: &str,
+) -> Result<(), StoreError> {
+    if reason.trim().is_empty() {
+        return Err(StoreError::Rejected("reopening a period needs a reason".to_owned()));
+    }
+    let transaction = conn.unchecked_transaction()?;
+    let status: Option<String> = transaction
+        .query_row(
+            "SELECT status FROM fiscal_period WHERE id = ?1",
+            params![period_id.to_string()],
+            |row| row.get(0),
+        )
+        .optional()?;
+    match status.as_deref() {
+        None => return Err(StoreError::NotFound(format!("period {period_id}"))),
+        Some("open") => {
+            return Err(StoreError::Rejected("the period is not closed".to_owned()));
+        }
+        Some(_) => {}
+    }
+
+    transaction.execute(
+        "UPDATE fiscal_period SET status = 'open' WHERE id = ?1",
+        params![period_id.to_string()],
+    )?;
+    transaction.execute(
+        "INSERT INTO period_event (id, period_id, kind, reason, at, actor) VALUES (?1, ?2, 'reopened', ?3, ?4, ?5)",
+        params![
+            FiscalPeriodId::new().to_string(),
+            period_id.to_string(),
+            reason.trim(),
+            at,
+            actor
+        ],
+    )?;
+    transaction.commit()?;
+    Ok(())
+}
+
+/// Everything that stops a period from being locked, in the order to read it.
+///
+/// This is the close's own gate rather than part of the VAT readiness set: a return
+/// can be filed while a cost is still unplaced — the VAT on it is right either way —
+/// but the books it rests on cannot be closed. `lock_period` refuses with the same
+/// sentence, so a dry run and the real thing say the same thing.
+pub fn close_blockers(conn: &Connection, period_id: FiscalPeriodId) -> Result<Vec<String>, StoreError> {
+    let unclassified: i64 = conn.query_row(
+        "SELECT COALESCE(sum(CASE l.side WHEN 'debit' THEN l.amount_micros ELSE -l.amount_micros END), 0)
+         FROM journal_line l JOIN journal_entry e ON e.id = l.entry_id
+         WHERE e.period_id = ?1 AND l.account_code = ?2",
+        params![period_id.to_string(), UNCLASSIFIED_ACCOUNT],
+        |row| row.get(0),
+    )?;
+    if unclassified == 0 {
+        return Ok(Vec::new());
+    }
+    let seller: String = conn.query_row(
+        "SELECT seller_id FROM fiscal_period WHERE id = ?1",
+        [period_id.to_string()],
+        |row| row.get(0),
+    )?;
+    let currency = crate::reporting_currency(
+        conn,
+        SellerId::parse_str(&seller).map_err(|error| StoreError::Data(error.to_string()))?,
+    )?;
+    Ok(vec![format!(
+        "{UNCLASSIFIED_ACCOUNT} holds {}; a cost posted there has to be moved with a memorial entry dated in the period, because an account chosen on a document applies before it is posted",
+        Money::from_micros(unclassified, currency)
+    )])
 }
 
 /// The guard account for lines nobody has classified yet.

@@ -143,6 +143,15 @@ an item catalogue exists.
 - Each period is `open` or `locked`. Locking is itself an immutable event; a
   posting into a locked period is rejected by a database trigger and by the
   application, belt and braces.
+- Reopening is an event too, and it carries a required reason stored beside the
+  lock rather than replacing it: the record of a month shows that it was closed,
+  when, by whom, and why it opened again. Nothing that was posted between the two
+  is undone.
+- Two gates, deliberately separate. A period can be *filed* only when every
+  document dated in it is posted and the return reconciles; it can be *closed*
+  only when nothing sits on `9999 Nog te rubriceren`. A month with an unplaced
+  cost is therefore fileable and not closeable — the VAT on that cost is right
+  either way, while the books a filed return rests on are not.
 - Reopening a period requires an explicit action, a reason, and an audit event.
   It never deletes the lock event; it appends a `reopened` fact.
 - Closing a year requires: trial balance balances, every open item either

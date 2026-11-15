@@ -12,6 +12,7 @@ use store::{
 use tempfile::TempDir;
 
 const NOW: &str = "2026-11-06T19:00:00.123456Z";
+const LATER: &str = "2026-11-07T09:30:00.000000Z";
 
 fn date(raw: &str) -> LocalDate {
     LocalDate::parse_iso(raw).unwrap()
@@ -291,6 +292,128 @@ fn a_memorial_correction_lets_a_period_with_unclassified_costs_close() {
     assert_eq!(books.balance("9999"), 0, "the account is empty again");
     assert_eq!(books.balance("7100"), 1_000_000_000);
     store::lock_period(books.database.connection(), books.period(10), "ada", NOW).unwrap();
+}
+
+/// The refusal a person sees when they close a month that still holds unplaced
+/// costs is the sentence a dry run prints: one message, two entry points.
+#[test]
+fn the_close_refusal_is_the_sentence_a_dry_run_prints() {
+    let books = Books::open();
+    let document = books.buy(1_000, "2026-10-10", "L-1");
+    store::post_document(books.database.connection(), document, "ada", NOW).unwrap();
+    let period = books.period(10);
+
+    let blockers = store::close_blockers(books.database.connection(), period).unwrap();
+    assert_eq!(blockers.len(), 1, "{blockers:?}");
+    let refused = store::lock_period(books.database.connection(), period, "ada", NOW)
+        .unwrap_err()
+        .to_string();
+    assert_eq!(refused, blockers[0], "a dry run and the real close agree");
+    assert_eq!(
+        store::close_blockers(books.database.connection(), period).unwrap(),
+        blockers,
+        "the refused close changed nothing"
+    );
+}
+
+#[test]
+fn a_period_with_nothing_to_place_has_no_blockers() {
+    let books = Books::open();
+    let period = store::ensure_period(books.database.connection(), books.seller, date("2026-10-10"))
+        .unwrap()
+        .id;
+    assert!(
+        store::close_blockers(books.database.connection(), period)
+            .unwrap()
+            .is_empty()
+    );
+}
+
+/// Reopening is a fact like locking was: the reason is kept and the lock stays in
+/// the record, and postings into the month are accepted again.
+#[test]
+fn reopening_records_why_and_lets_the_month_take_postings_again() {
+    let books = Books::open();
+    let connection = books.database.connection();
+    let document = books.buy(1_000, "2026-10-10", "L-1");
+    store::expense::assign(connection, document, "7100", "ada", NOW).unwrap();
+    store::post_document(connection, document, "ada", NOW).unwrap();
+    let period = books.period(10);
+    store::lock_period(connection, period, "ada", NOW).unwrap();
+
+    store::reopen_period(connection, period, "a supplier invoice arrived late", "ada", LATER).unwrap();
+
+    let reopened = store::load_period(connection, books.seller, 2026, 10).unwrap().unwrap();
+    assert!(reopened.is_open(), "the month takes postings again");
+
+    let mut statement = connection
+        .prepare("SELECT kind, reason FROM period_event WHERE period_id = ?1 ORDER BY at, rowid")
+        .unwrap();
+    let events: Vec<(String, Option<String>)> = statement
+        .query_map([period.to_string()], |row| Ok((row.get(0)?, row.get(1)?)))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(
+        events,
+        vec![
+            ("locked".to_owned(), None),
+            (
+                "reopened".to_owned(),
+                Some("a supplier invoice arrived late".to_owned())
+            ),
+        ],
+        "the lock is not erased by the reopening"
+    );
+
+    store::post_manual_entry(
+        connection,
+        books.seller,
+        date("2026-10-20"),
+        "Bankkosten",
+        vec![
+            crux::LedgerLine::debit(AccountCode::parse("7100").unwrap(), euros(10)).unwrap(),
+            crux::LedgerLine::credit(AccountCode::parse("1100").unwrap(), euros(10)).unwrap(),
+        ],
+        "ada",
+        LATER,
+    )
+    .expect("a reopened month accepts postings");
+
+    // Closing it again is allowed, and the second lock is its own event.
+    store::lock_period(connection, period, "ada", LATER).unwrap();
+    let locked = store::load_period(connection, books.seller, 2026, 10).unwrap().unwrap();
+    assert!(!locked.is_open());
+    store::post_document(connection, books.buy(1_000, "2026-10-12", "L-2"), "ada", LATER)
+        .map(|_| ())
+        .expect_err("a second close refuses postings too");
+}
+
+#[test]
+fn reopening_an_open_period_or_without_a_reason_is_refused() {
+    let books = Books::open();
+    let connection = books.database.connection();
+    let period = store::ensure_period(connection, books.seller, date("2026-10-10"))
+        .unwrap()
+        .id;
+
+    let said = store::reopen_period(connection, period, "because", "ada", NOW)
+        .unwrap_err()
+        .to_string();
+    assert!(said.contains("not closed"), "{said}");
+
+    store::lock_period(connection, period, "ada", NOW).unwrap();
+    let said = store::reopen_period(connection, period, "   ", "ada", NOW)
+        .unwrap_err()
+        .to_string();
+    assert!(said.contains("needs a reason"), "{said}");
+
+    let still = store::load_period(connection, books.seller, 2026, 10).unwrap().unwrap();
+    assert_eq!(
+        still.status,
+        store::PeriodStatus::Locked,
+        "a refused reopening wrote nothing"
+    );
 }
 
 #[test]

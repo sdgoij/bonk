@@ -987,6 +987,111 @@ fn tax_codes_are_listed_and_a_sale_has_none_to_choose() {
     assert!(said.contains("only a purchase"), "{said}");
 }
 
+/// A month is closed from the command line, refuses postings while it is closed,
+/// and opens again with a recorded reason.
+#[test]
+fn a_month_closes_and_reopens_from_the_command_line() {
+    let archive = Archive::new();
+    archive.run(&["ledger", "setup"]);
+    archive.run(&["ledger", "post"]);
+
+    // The archive's invoice is dated 10 February, so that is the month.
+    let said = archive.run(&["ledger", "close", "--year", "2026", "--month", "2", "--dry-run"]);
+    assert!(
+        said.contains("period:  2026-02 (2026-02-01 to 2026-02-28), open"),
+        "{said}"
+    );
+    assert!(said.contains("close:   nothing blocks it"), "{said}");
+
+    let said = archive.run(&["ledger", "close", "--year", "2026", "--month", "2"]);
+    assert!(said.contains("closed:  2026-02 by cli"), "{said}");
+
+    let said = archive.fail(&["ledger", "close", "--year", "2026", "--month", "2"]);
+    assert!(said.contains("already closed"), "{said}");
+
+    // While it is closed, nothing can be posted into it.
+    let said = archive.fail(&[
+        "ledger",
+        "post-manual",
+        "--date",
+        "2026-02-15",
+        "--description",
+        "Bankkosten",
+        "--line",
+        "7100|debit|12.50",
+        "--line",
+        "1100|credit|12.50",
+    ]);
+    assert!(said.contains("2026-02 is locked"), "{said}");
+
+    // Reopening needs a reason, and the reason is printed back.
+    let said = archive.fail(&["ledger", "reopen", "--year", "2026", "--month", "2"]);
+    assert!(said.contains("--reason"), "{said}");
+
+    let said = archive.run(&[
+        "ledger",
+        "reopen",
+        "--year",
+        "2026",
+        "--month",
+        "2",
+        "--reason",
+        "vergeten factuur",
+    ]);
+    assert!(said.contains("reopened: 2026-02 by cli: vergeten factuur"), "{said}");
+
+    let said = archive.run(&[
+        "ledger",
+        "post-manual",
+        "--date",
+        "2026-02-15",
+        "--description",
+        "Bankkosten",
+        "--line",
+        "7100|debit|12.50",
+        "--line",
+        "1100|credit|12.50",
+    ]);
+    assert!(said.contains("posted MEM 2026-0001"), "{said}");
+
+    // Reopening a month that is already open changes nothing and says so.
+    let said = archive.fail(&[
+        "ledger", "reopen", "--year", "2026", "--month", "2", "--reason", "again",
+    ]);
+    assert!(said.contains("not closed"), "{said}");
+
+    let said = archive.run(&["ledger", "close", "--year", "2026", "--month", "2"]);
+    assert!(said.contains("closed:  2026-02 by cli"), "{said}");
+}
+
+/// A close whose blocker cannot be had says which month is missing, and a month
+/// that holds unplaced costs refuses to close.
+#[test]
+fn a_close_names_what_stands_in_the_way() {
+    let archive = Archive::new();
+    archive.run(&["ledger", "setup"]);
+
+    let said = archive.fail(&["ledger", "close", "--year", "2026", "--month", "2"]);
+    assert!(said.contains("no period for 2026-02"), "{said}");
+
+    // The archive's own invoice, imported back under a supplier's number, is a
+    // purchase nobody has placed an account on: its base lands on 9999.
+    let issued = std::fs::read_to_string(format!("{}/2026-0001.xml", archive.out)).expect("the issued UBL");
+    let received = archive.dir.path().join("inkoop.xml");
+    std::fs::write(&received, issued.replacen("2026-0001", "INK-1", 1)).expect("the inbound UBL");
+    archive.run(&["import", received.to_str().expect("utf-8")]);
+    archive.run(&["ledger", "post"]);
+
+    let said = archive.run(&["ledger", "close", "--year", "2026", "--month", "2", "--dry-run"]);
+    assert!(said.contains("close:   blocked"), "{said}");
+    assert!(said.contains("9999"), "the account is named: {said}");
+    assert!(said.contains("memorial entry"), "the remedy is named: {said}");
+
+    let said = archive.fail(&["ledger", "close", "--year", "2026", "--month", "2"]);
+    assert!(said.contains("was not closed"), "{said}");
+    assert!(said.contains("listed above"), "{said}");
+}
+
 #[test]
 fn the_subledger_can_be_rebuilt_after_the_fact() {
     let archive = Archive::new();

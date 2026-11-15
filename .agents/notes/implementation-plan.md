@@ -1447,9 +1447,29 @@ coarser — the document's own entry keeps saying `9999` while the pair moves th
 cost. A `reclassify --account` is the obvious follow-up, and it is not free: it has
 to leave the subledger item alone while replacing the entry.
 
-Also worth knowing: nothing in the CLI closes a period yet, so the guard is
-reachable from the store and the tests today, not from a command. `ledger close`
-with the blockers `reconcile` already computes is the natural next step.
+**Status, 2026-11-15 (a month can be closed, and opened again on the record).**
+`bonk ledger close --year Y --month M` prints the period, its window, whether it is
+open, and every blocker `close_blockers` finds; `--dry-run` stops there. The store
+was already the one place the refusal lived — `lock_period` returns the first
+blocker's sentence, so a dry run and the real close say the same words, and a test
+asserts they are equal. `bonk ledger reopen --year Y --month M --reason "…"` is
+the other half: `reopen_period` refuses an empty reason and an open period, flips
+the status back, and appends a `reopened` event carrying the reason while the
+`locked` event stays, so the record shows that the month was closed and why it
+opened. A posting made in between is not undone — that is the point of a close.
+
+The CLI also made the two gates visible, because conflating them would have taught
+the wrong thing. Filing is refused while a document dated in the month is
+unposted; closing is refused while `9999` holds a balance. A month can be filed
+with an unplaced cost (the VAT on it is right either way) and cannot be closed
+with one, so `close` warns about `readiness` without refusing, and refuses on the
+blocker it can fix. A period exists only once something is posted in it, and a
+close of a month that was never touched says so rather than silently creating an
+empty one.
+
+What this does not do: there is no year-end close. `period_event.kind` has carried
+an unused `closed` since migration 0011, which is where a 13th-period or
+year-end close would go; the monthly lock and its reopening are what exists.
 
 ---
 

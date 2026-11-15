@@ -240,6 +240,9 @@ bonk ledger balance-sheet --as-of 2026-03-31
 bonk ledger reverse VK:2026-0001 --reason "wrong customer" --date 2026-04-02
 bonk ledger vat-return --year 2026 --month 3            # preview the aangifte
 bonk ledger vat-return --year 2026 --month 3 --prepare  # store it, with its basis
+bonk ledger close --year 2026 --month 3                 # refuse postings into the month
+bonk ledger close --year 2026 --month 3 --dry-run       # what would stop it
+bonk ledger reopen --year 2026 --month 3 --reason "vergeten factuur"
 bonk ledger open-items                                  # what customers still owe
 bonk ledger rebuild-open-items                          # fill the subledger of an older archive
 bonk ledger tax-codes                                   # the treatments a purchase can be filed under
@@ -275,6 +278,15 @@ it. Preparing is refused while a check is red: every document dated in the perio
 has to be posted, the VAT posted per document has to equal the VAT on that
 document, and the trial balance has to net to zero. The AR and AP control accounts are
 compared against the open items behind them, which bank payments settle.
+
+A month is closed with `ledger close` and opened again with `ledger reopen --reason`,
+and the two gates are deliberately separate. Filing is refused while a document
+dated in the month is unposted; closing is refused while `9999 Nog te rubriceren`
+holds a balance. So a month with a cost nobody has placed is fileable and not
+closeable — the VAT on that cost is right either way, while the books a filed
+return rests on are not. `close` prints both sets, refuses on the one it can fix,
+and warns on the other. Reopening stores its reason beside the lock instead of
+erasing it, so a month that was closed and opened again still says so.
 
 A bank statement is imported once, whatever range the bank sends it in: the file
 is stored by hash and each payment by a fingerprint of what identifies it, so an

@@ -60,9 +60,10 @@ pub use keystore::{KdfParams, KeyStore, copy_to_directory};
 pub use kit::KitReport;
 pub use ledger::{
     Account, FiscalPeriod, OpeningBalance, PeriodStatus, PostedEntry, PostingRequest, PostingSource, Reclassified,
-    StoredEntry, UNCLASSIFIED_ACCOUNT, content_hash, ensure_period, entry_for_document, find_entry, insert_account,
-    list_accounts, list_periods, load_account, load_entry, load_period, lock_period, post_entry, post_manual_entry,
-    post_opening_balances, reclassify, reversal_of, reverse_entry, seed_starter_chart, starter_chart, update_account,
+    StoredEntry, UNCLASSIFIED_ACCOUNT, close_blockers, content_hash, ensure_period, entry_for_document, find_entry,
+    insert_account, list_accounts, list_periods, load_account, load_entry, load_period, lock_period, post_entry,
+    post_manual_entry, post_opening_balances, reclassify, reopen_period, reversal_of, reverse_entry,
+    seed_starter_chart, starter_chart, update_account,
 };
 pub use open_items::{
     Aging, OpenItem, OpenItemKind, RebuildReport, aging, list as open_items, rebuild as rebuild_open_items,

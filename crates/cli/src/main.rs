@@ -683,6 +683,44 @@ enum LedgerCommand {
         #[arg(long, default_value = "cli")]
         actor: String,
     },
+    /// Close a month, so nothing can be posted into it.
+    ///
+    /// Prints what the period is and what stands in the way; with `--dry-run` it
+    /// stops there. Filing a return and closing the books are separate gates: a
+    /// month whose return is not ready still closes, because the VAT on a cost is
+    /// right whether or not somebody has decided which account it belongs on, but
+    /// a month whose `9999 Nog te rubriceren` holds a balance does not.
+    Close {
+        /// Year; defaults to the year of the month being closed.
+        #[arg(long)]
+        year: Option<i32>,
+        /// Month 1-12; defaults to the month before this one.
+        #[arg(long)]
+        month: Option<u8>,
+        /// Show what the close would do without closing anything.
+        #[arg(long = "dry-run")]
+        dry_run: bool,
+        #[arg(long, default_value = "cli")]
+        actor: String,
+    },
+    /// Reopen a closed month, recording why.
+    ///
+    /// The lock event stays and a `reopened` event is added beside it, so the
+    /// books still show that the month was closed and why it opened again. A
+    /// posting made between the two is not undone: that is what a close is for.
+    Reopen {
+        /// Year; defaults to the year of the month being reopened.
+        #[arg(long)]
+        year: Option<i32>,
+        /// Month 1-12; defaults to the month before this one.
+        #[arg(long)]
+        month: Option<u8>,
+        /// Why the month is reopened; it becomes part of the record.
+        #[arg(long)]
+        reason: String,
+        #[arg(long, default_value = "cli")]
+        actor: String,
+    },
     /// Import bank statements and see what is unmatched.
     Bank {
         #[command(subcommand)]
@@ -2038,22 +2076,7 @@ fn ledger(access: &Access, database: &Path, keystore: &Path, command: LedgerComm
             prepare,
             actor,
         } => {
-            let (year, month) = match (year, month) {
-                (Some(year), Some(month)) => (year, month),
-                (year, None) => {
-                    let today = LocalDate::today_utc();
-                    let (default_year, default_month) = if u8::from(today.as_date().month()) == 1 {
-                        (today.as_date().year() - 1, 12)
-                    } else {
-                        (today.as_date().year(), u8::from(today.as_date().month()) - 1)
-                    };
-                    (year.unwrap_or(default_year), default_month)
-                }
-                (None, Some(month)) => (LocalDate::today_utc().as_date().year(), month),
-            };
-            if !(1..=12).contains(&month) {
-                return Err(CliError::Input(format!("month {month} is not 1-12")));
-            }
+            let (year, month) = month_of(year, month)?;
             let (starts, ends) = store::vat::period_bounds(year, month)?;
 
             let report = if prepare {
@@ -2125,6 +2148,76 @@ fn ledger(access: &Access, database: &Path, keystore: &Path, command: LedgerComm
                 println!("not checked: {reason}");
             }
             println!("mapping      {}", store::vat::MAPPING_VERSION);
+            Ok(())
+        }
+        LedgerCommand::Close {
+            year,
+            month,
+            dry_run,
+            actor,
+        } => {
+            let (year, month) = month_of(year, month)?;
+            let period = month_period(session.database(), owner, year, month)?;
+            println!(
+                "period:  {year}-{month:02} ({} to {}), {}",
+                period.starts_on,
+                period.ends_on,
+                period_text(period.status)
+            );
+            if !period.is_open() {
+                return Err(CliError::Input(format!(
+                    "the period {year}-{month:02} is already closed"
+                )));
+            }
+
+            let blockers = store::close_blockers(connection, period.id)?;
+            if blockers.is_empty() {
+                println!("close:   nothing blocks it");
+            } else {
+                println!("close:   blocked");
+                for blocker in &blockers {
+                    println!("  {blocker}");
+                }
+            }
+
+            // A return can be filed with a cost still unplaced, so this is a
+            // warning rather than a refusal: it is a different gate.
+            let filing = store::readiness(connection, owner, year, month)?;
+            if !filing.is_ready() {
+                println!("filing:  not ready");
+                for blocker in filing.blockers() {
+                    println!("  {blocker}");
+                }
+            }
+
+            if dry_run {
+                return Ok(());
+            }
+            if !blockers.is_empty() {
+                return Err(CliError::Input(format!(
+                    "{year}-{month:02} was not closed: the blockers are listed above"
+                )));
+            }
+            store::lock_period(connection, period.id, &actor, &now)?;
+            println!("closed:  {year}-{month:02} by {actor}");
+            Ok(())
+        }
+        LedgerCommand::Reopen {
+            year,
+            month,
+            reason,
+            actor,
+        } => {
+            let (year, month) = month_of(year, month)?;
+            let period = month_period(session.database(), owner, year, month)?;
+            println!(
+                "period:  {year}-{month:02} ({} to {}), {}",
+                period.starts_on,
+                period.ends_on,
+                period_text(period.status)
+            );
+            store::reopen_period(connection, period.id, &reason, &actor, &now)?;
+            println!("reopened: {year}-{month:02} by {actor}: {}", reason.trim());
             Ok(())
         }
         LedgerCommand::Bank { command } => bank(session.database(), owner, command, &now),
@@ -2917,6 +3010,49 @@ fn resolve_entry(database: &store::Database, needle: &str) -> Result<JournalEntr
         }
         None => JournalEntryId::parse_str(needle)
             .map_err(|_| CliError::Input(format!("{needle:?} is neither VK:2026-0001 nor an entry identifier"))),
+    }
+}
+
+/// Resolves `--year`/`--month` to a month, defaulting to the one before this one.
+fn month_of(year: Option<i32>, month: Option<u8>) -> Result<(i32, u8), CliError> {
+    let today = LocalDate::today_utc();
+    let (year, month) = match (year, month) {
+        (Some(year), Some(month)) => (year, month),
+        (year, None) => {
+            let (default_year, default_month) = if u8::from(today.as_date().month()) == 1 {
+                (today.as_date().year() - 1, 12)
+            } else {
+                (today.as_date().year(), u8::from(today.as_date().month()) - 1)
+            };
+            (year.unwrap_or(default_year), default_month)
+        }
+        (None, Some(month)) => (today.as_date().year(), month),
+    };
+    if !(1..=12).contains(&month) {
+        return Err(CliError::Input(format!("month {month} is not 1-12")));
+    }
+    Ok((year, month))
+}
+
+/// The period a month has, or a pointer when nothing has been posted in it.
+fn month_period(
+    database: &store::Database,
+    owner: SellerId,
+    year: i32,
+    month: u8,
+) -> Result<store::FiscalPeriod, CliError> {
+    store::load_period(database.connection(), owner, year, month)?.ok_or_else(|| {
+        CliError::Input(format!(
+            "this archive has no period for {year}-{month:02}; a period exists once something is posted in it"
+        ))
+    })
+}
+
+/// How a period's status reads in a sentence.
+fn period_text(status: store::PeriodStatus) -> &'static str {
+    match status {
+        store::PeriodStatus::Open => "open",
+        store::PeriodStatus::Locked => "locked",
     }
 }
 
