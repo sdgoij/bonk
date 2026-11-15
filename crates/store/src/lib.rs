@@ -59,11 +59,12 @@ pub use integrity::IntegrityReport;
 pub use keystore::{KdfParams, KeyStore, copy_to_directory};
 pub use kit::KitReport;
 pub use ledger::{
-    Account, FiscalPeriod, OpeningBalance, PeriodStatus, PostedEntry, PostingRequest, PostingSource, Reclassified,
-    StoredEntry, UNCLASSIFIED_ACCOUNT, close_blockers, content_hash, ensure_period, entry_for_document, find_entry,
-    insert_account, list_accounts, list_periods, load_account, load_entry, load_period, lock_period, post_entry,
-    post_manual_entry, post_opening_balances, reclassify, reclassify_account, reopen_period, reversal_of,
-    reverse_entry, seed_starter_chart, starter_chart, update_account,
+    Account, FiscalPeriod, OpeningBalance, PeriodStatus, PostedEntry, PostingRequest, PostingSource, RESULT_ACCOUNT,
+    Reclassified, StoredEntry, UNCLASSIFIED_ACCOUNT, YearClose, adjustment_period, close_blockers, close_year,
+    content_hash, ensure_period, entry_for_document, find_entry, insert_account, list_accounts, list_periods,
+    load_account, load_entry, load_period, lock_period, post_entry, post_manual_entry, post_opening_balances,
+    reclassify, reclassify_account, reopen_period, reopen_year, reversal_of, reverse_entry, seed_starter_chart,
+    starter_chart, update_account, year_close_blockers, year_close_warnings, year_result,
 };
 pub use open_items::{
     Aging, OpenItem, OpenItemKind, RebuildReport, aging, list as open_items, rebuild as rebuild_open_items,

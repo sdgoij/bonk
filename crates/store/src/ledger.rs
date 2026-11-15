@@ -11,8 +11,8 @@
 //!   because there is none in the schema either.
 
 use crux::{
-    AccountCode, AccountKind, DocumentId, FiscalPeriodId, Journal, JournalEntryId, LedgerEntry, LedgerLine, LocalDate,
-    Money, SellerId, TaxCode, VatCategory, VatRate,
+    AccountCode, AccountKind, Currency, DocumentId, FiscalPeriodId, Journal, JournalEntryId, LedgerEntry, LedgerLine,
+    LocalDate, Money, SellerId, TaxCode, VatCategory, VatRate,
 };
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::json;
@@ -175,9 +175,14 @@ pub fn update_account(conn: &Connection, account: &Account, now: &str) -> Result
 ///
 /// Creating on demand is deliberate: a business starts posting in the middle of
 /// a year, and asking it to declare twelve months up front only produces months
-/// that exist for no reason.
+/// that exist for no reason. A closed year is the one exception: a date in it is
+/// refused before a period is made, so a refused posting never leaves an open
+/// month behind in a year somebody finished.
 pub fn ensure_period(conn: &Connection, seller_id: SellerId, date: LocalDate) -> Result<FiscalPeriod, StoreError> {
     let (year, month) = (date.as_date().year(), u8::from(date.as_date().month()));
+    if year_is_closed(conn, seller_id, year)? {
+        return Err(StoreError::Rejected(closed_year_sentence(year)));
+    }
     let (starts_on, ends_on) = month_bounds(year, month)?;
 
     conn.execute(
@@ -236,6 +241,19 @@ pub fn list_periods(conn: &Connection, seller_id: SellerId, year: i32) -> Result
 /// the period was closed and by whom.
 pub fn lock_period(conn: &Connection, period_id: FiscalPeriodId, actor: &str, at: &str) -> Result<(), StoreError> {
     let transaction = conn.unchecked_transaction()?;
+    lock_period_in(&transaction, period_id, actor, at)?;
+    transaction.commit()?;
+    Ok(())
+}
+
+/// The body of [`lock_period`], inside a transaction the caller owns.
+pub(crate) fn lock_period_in(
+    conn: &Connection,
+    period_id: FiscalPeriodId,
+    actor: &str,
+    at: &str,
+) -> Result<(), StoreError> {
+    let transaction = conn;
     let status: Option<String> = transaction
         .query_row(
             "SELECT status FROM fiscal_period WHERE id = ?1",
@@ -252,7 +270,7 @@ pub fn lock_period(conn: &Connection, period_id: FiscalPeriodId, actor: &str, at
     // A locked period is what a filed return rests on, so it cannot be closed with
     // costs nobody has placed: `9999 Nog te rubriceren` is a real account with a
     // real balance, and its whole purpose is to be emptied rather than lived in.
-    if let Some(blocker) = close_blockers(&transaction, period_id)?.into_iter().next() {
+    if let Some(blocker) = close_blockers(transaction, period_id)?.into_iter().next() {
         return Err(StoreError::Rejected(blocker));
     }
 
@@ -264,7 +282,6 @@ pub fn lock_period(conn: &Connection, period_id: FiscalPeriodId, actor: &str, at
         "INSERT INTO period_event (id, period_id, kind, reason, at, actor) VALUES (?1, ?2, 'locked', NULL, ?3, ?4)",
         params![FiscalPeriodId::new().to_string(), period_id.to_string(), at, actor],
     )?;
-    transaction.commit()?;
     Ok(())
 }
 
@@ -347,6 +364,374 @@ pub fn close_blockers(conn: &Connection, period_id: FiscalPeriodId) -> Result<Ve
         "{UNCLASSIFIED_ACCOUNT} holds {}; a cost posted there has to be moved with a memorial entry dated in the period, because an account chosen on a document applies before it is posted",
         Money::from_micros(unclassified, currency)
     )])
+}
+
+/// The account a closed year's result is moved to.
+///
+/// The starter chart's `0500 Eigen vermogen`, which is where a Dutch small business
+/// keeps its equity. A chart without it cannot close a year, and that is said
+/// rather than guessed at: putting a result on an account nobody chose would be
+/// worse than refusing.
+pub const RESULT_ACCOUNT: &str = "0500";
+
+/// What a year-end close did, or would do.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct YearClose {
+    /// The year that was closed.
+    pub year: i32,
+    /// Reporting currency of the books.
+    pub currency: Currency,
+    /// The result moved to equity; positive is a profit.
+    pub result_micros: i64,
+    /// The entry that moved it, when anything had to move.
+    pub posted: Option<PostedEntry>,
+    /// The months this close locked, in order.
+    pub locked: Vec<u8>,
+    /// Returns that could be prepared and have not been.
+    pub warnings: Vec<String>,
+}
+
+/// The year's adjustment period, created open on first use.
+///
+/// Period 13 shares the last day of the year with December, but no date maps to
+/// it: `ensure_period` reads a date as a month, so a year-end close is the only
+/// thing that writes there, and a monthly VAT return — which reads by period —
+/// never sees it. That is exactly what an adjustment period is for.
+pub fn adjustment_period(conn: &Connection, seller_id: SellerId, year: i32) -> Result<FiscalPeriod, StoreError> {
+    let (_, ends_on) = month_bounds(year, 12)?;
+    conn.execute(
+        "INSERT INTO fiscal_period (id, seller_id, year, period_no, starts_on, ends_on, status)
+         VALUES (?1, ?2, ?3, 13, ?4, ?4, 'open')
+         ON CONFLICT (seller_id, year, period_no) DO NOTHING",
+        params![
+            FiscalPeriodId::new().to_string(),
+            seller_id.to_string(),
+            year,
+            ends_on.to_iso_string()
+        ],
+    )?;
+    load_period(conn, seller_id, year, 13)?
+        .ok_or_else(|| StoreError::Data(format!("the adjustment period of {year} did not appear")))
+}
+
+/// The result a year would move to equity, before it is moved.
+pub fn year_result(conn: &Connection, seller_id: SellerId, year: i32) -> Result<Money, StoreError> {
+    let (starts_on, ends_on) = year_bounds(year)?;
+    let report = crate::report::profit_and_loss(conn, seller_id, starts_on, ends_on)?;
+    Ok(Money::from_micros(report.result_micros(), report.currency))
+}
+
+/// Everything that stops a year from being closed, in the order to read it.
+///
+/// A document nobody posted comes first: until it is in the books, the result is
+/// not the year's result. Then the months' own close rule — a cost nobody placed —
+/// with the month named, because that remedy is per month. The trial balance is a
+/// check on the archive rather than on the work: every entry balances when it is
+/// written, so a year that does not is a ledger somebody has been in with a
+/// screwdriver.
+pub fn year_close_blockers(conn: &Connection, seller_id: SellerId, year: i32) -> Result<Vec<String>, StoreError> {
+    let months: Vec<FiscalPeriod> = list_periods(conn, seller_id, year)?
+        .into_iter()
+        .filter(|period| period.period_no <= 12)
+        .collect();
+    if months.is_empty() {
+        return Ok(vec![format!(
+            "nothing was posted in {year}, so there is no year to close"
+        )]);
+    }
+
+    let mut blockers = Vec::new();
+    let unposted: Vec<String> = crate::posting::pending(conn, seller_id)?
+        .into_iter()
+        .filter(|document| document.issue_date.as_date().year() == year)
+        .map(|document| document.number)
+        .collect();
+    if !unposted.is_empty() {
+        let named: Vec<&str> = unposted.iter().take(5).map(String::as_str).collect();
+        let more = if unposted.len() > named.len() {
+            format!(", and {} more", unposted.len() - named.len())
+        } else {
+            String::new()
+        };
+        blockers.push(format!(
+            "{} document(s) dated in {year} have not been posted: {}{more}",
+            unposted.len(),
+            named.join(", ")
+        ));
+    }
+    for period in &months {
+        for blocker in close_blockers(conn, period.id)? {
+            blockers.push(format!("{year}-{:02}: {blocker}", period.period_no));
+        }
+    }
+
+    let (starts_on, _) = month_bounds(year, 1)?;
+    let (_, ends_on) = month_bounds(year, 12)?;
+    let balance = crate::report::trial_balance(conn, seller_id, starts_on, ends_on)?;
+    if !balance.balances() {
+        blockers.push(format!(
+            "the trial balance of {year} does not balance: off by {}",
+            Money::from_micros(balance.difference_micros(), balance.currency)
+        ));
+    }
+    Ok(blockers)
+}
+
+/// The returns a closed year should have prepared and has not.
+///
+/// Not blockers. Filing and closing are separate gates, and an unprepared return
+/// can still be prepared after the books are locked, because preparing one posts
+/// nothing: it stores what the period already says.
+pub fn year_close_warnings(conn: &Connection, seller_id: SellerId, year: i32) -> Result<Vec<String>, StoreError> {
+    let mut warnings = Vec::new();
+    for period in list_periods(conn, seller_id, year)? {
+        if period.period_no > 12 {
+            continue;
+        }
+        if crate::vat::prepared(conn, seller_id, year, period.period_no)?.is_none() {
+            warnings.push(format!(
+                "the btw-aangifte for {year}-{:02} has not been prepared",
+                period.period_no
+            ));
+        }
+    }
+    Ok(warnings)
+}
+
+/// Closes a year: moves its result to equity and locks it.
+///
+/// The closing entry is the ordinary resultaatbestemming — every revenue and
+/// expense account zeroed, the difference to `0500` — written into the year's
+/// adjustment period, which is why December's VAT return is unchanged by it.
+///
+/// Locking is part of the close rather than twelve commands beforehand, because a
+/// year that still has an open month is not closed, and the months' own rule is
+/// applied to each of them first. The `closed` event goes on the adjustment period:
+/// that period exists for the close, so it is where a reader asks whether a year
+/// was closed.
+pub fn close_year(
+    conn: &Connection,
+    seller_id: SellerId,
+    year: i32,
+    actor: &str,
+    at: &str,
+) -> Result<YearClose, StoreError> {
+    if year_is_closed(conn, seller_id, year)? {
+        return Err(StoreError::Rejected(format!("{year} is already closed")));
+    }
+    if let Some(blocker) = year_close_blockers(conn, seller_id, year)?.into_iter().next() {
+        return Err(StoreError::Rejected(blocker));
+    }
+    let warnings = year_close_warnings(conn, seller_id, year)?;
+
+    let (starts_on, ends_on) = year_bounds(year)?;
+    let report = crate::report::profit_and_loss(conn, seller_id, starts_on, ends_on)?;
+    let currency = report.currency;
+    let mut lines = Vec::new();
+    let mut result_micros = 0_i64;
+    for row in report.revenue.iter().chain(report.expenses.iter()) {
+        let net = row.net_micros();
+        if net == 0 {
+            continue;
+        }
+        result_micros -= net;
+        let amount = Money::from_micros(net.abs(), currency);
+        let line = if net > 0 {
+            LedgerLine::credit(row.code.clone(), amount)
+        } else {
+            LedgerLine::debit(row.code.clone(), amount)
+        };
+        lines.push(line.map_err(|error| StoreError::Data(error.to_string()))?);
+    }
+    if result_micros != 0 {
+        let equity = AccountCode::parse(RESULT_ACCOUNT).map_err(|error| StoreError::Data(error.to_string()))?;
+        let stored = load_account(conn, &equity)?.ok_or_else(|| {
+            StoreError::Rejected(format!(
+                "account {RESULT_ACCOUNT} is not in the chart, so there is nowhere to put the result"
+            ))
+        })?;
+        if stored.archived {
+            return Err(StoreError::Rejected(format!(
+                "account {RESULT_ACCOUNT} is archived and takes no postings"
+            )));
+        }
+        let amount = Money::from_micros(result_micros.abs(), currency);
+        let line = if result_micros > 0 {
+            LedgerLine::credit(equity, amount)
+        } else {
+            LedgerLine::debit(equity, amount)
+        };
+        lines.push(line.map_err(|error| StoreError::Data(error.to_string()))?);
+    }
+
+    let transaction = conn.unchecked_transaction()?;
+    let adjustment = adjustment_period(&transaction, seller_id, year)?;
+    let posted = if lines.is_empty() {
+        None
+    } else {
+        let entry = LedgerEntry::new(Journal::Memorial, format!("Resultaatbestemming {year}"), lines)
+            .map_err(|error| StoreError::Rejected(error.to_string()))?;
+        Some(post_entry_into(
+            &transaction,
+            PostingRequest {
+                entry: &entry,
+                seller_id,
+                entry_date: ends_on,
+                source: PostingSource::Manual,
+                actor,
+                now: at,
+                posting_profile_id: "year-close",
+                rule_version: "1",
+                reverses: None,
+                open_item: None,
+            },
+            &adjustment,
+        )?)
+    };
+
+    let mut locked = Vec::new();
+    for period in list_periods(&transaction, seller_id, year)? {
+        if period.period_no > 12 || !period.is_open() {
+            continue;
+        }
+        lock_period_in(&transaction, period.id, actor, at)?;
+        locked.push(period.period_no);
+    }
+    lock_period_in(&transaction, adjustment.id, actor, at)?;
+
+    let reason = match &posted {
+        Some(posted) => format!("resultaatbestemming {} {}", posted.journal.code(), posted.number),
+        None => "no revenue or cost to move".to_owned(),
+    };
+    transaction.execute(
+        "INSERT INTO period_event (id, period_id, kind, reason, at, actor) VALUES (?1, ?2, 'closed', ?3, ?4, ?5)",
+        params![
+            FiscalPeriodId::new().to_string(),
+            adjustment.id.to_string(),
+            reason,
+            at,
+            actor
+        ],
+    )?;
+    transaction.commit()?;
+
+    Ok(YearClose {
+        year,
+        currency,
+        result_micros,
+        posted,
+        locked,
+        warnings,
+    })
+}
+
+/// Whether a year is closed, which the latest event on its adjustment period says.
+///
+/// A year that was closed and reopened has both events, and the later one decides —
+/// the same way a month's `status` column follows its lock and reopening.
+fn year_is_closed(conn: &Connection, seller_id: SellerId, year: i32) -> Result<bool, StoreError> {
+    let kind: Option<String> = conn
+        .query_row(
+            "SELECT e.kind FROM period_event e JOIN fiscal_period p ON p.id = e.period_id
+             WHERE p.seller_id = ?1 AND p.year = ?2 AND p.period_no = 13
+             ORDER BY e.rowid DESC LIMIT 1",
+            params![seller_id.to_string(), year],
+            |row| row.get(0),
+        )
+        .optional()?;
+    Ok(kind.as_deref() == Some("closed"))
+}
+
+/// Why nothing can be posted in a closed year.
+fn closed_year_sentence(year: i32) -> String {
+    format!(
+        "fiscal year {year} is closed and takes no postings; a correction that belongs to it is booked in an open year, or the year is reopened first"
+    )
+}
+
+/// The entry a year close wrote, when it wrote one.
+fn closing_entry(conn: &Connection, period_id: FiscalPeriodId) -> Result<Option<JournalEntryId>, StoreError> {
+    let id: Option<String> = conn
+        .query_row(
+            "SELECT id FROM journal_entry WHERE period_id = ?1 AND reverses_entry_id IS NULL
+             ORDER BY number DESC LIMIT 1",
+            [period_id.to_string()],
+            |row| row.get(0),
+        )
+        .optional()?;
+    match id {
+        Some(id) => Ok(Some(
+            JournalEntryId::parse_str(&id).map_err(|error| StoreError::Data(error.to_string()))?,
+        )),
+        None => Ok(None),
+    }
+}
+
+/// Reopens a closed year, reversing its resultaatbestemming and saying why.
+///
+/// The months stay as they were: a month lock is its own fact, and the month a
+/// correction belongs in is reopened on its own. What this undoes is the close —
+/// the closing entry is reversed into the same adjustment period, so the profit and
+/// loss accounts show the year's result again and equity no longer holds it. A
+/// close afterwards writes a fresh entry, which is the pair the books understand.
+pub fn reopen_year(
+    conn: &Connection,
+    seller_id: SellerId,
+    year: i32,
+    reason: &str,
+    actor: &str,
+    at: &str,
+) -> Result<Option<PostedEntry>, StoreError> {
+    if reason.trim().is_empty() {
+        return Err(StoreError::Rejected("reopening a year needs a reason".to_owned()));
+    }
+    if !year_is_closed(conn, seller_id, year)? {
+        return Err(StoreError::Rejected(format!("{year} is not closed")));
+    }
+
+    let transaction = conn.unchecked_transaction()?;
+    let mut adjustment = adjustment_period(&transaction, seller_id, year)?;
+    // The year stops being closed the moment the event says so, and the reversal
+    // below has to get past the guard that reads it.
+    transaction.execute(
+        "INSERT INTO period_event (id, period_id, kind, reason, at, actor) VALUES (?1, ?2, 'reopened', ?3, ?4, ?5)",
+        params![
+            FiscalPeriodId::new().to_string(),
+            adjustment.id.to_string(),
+            reason.trim(),
+            at,
+            actor
+        ],
+    )?;
+    transaction.execute(
+        "UPDATE fiscal_period SET status = 'open' WHERE id = ?1",
+        [adjustment.id.to_string()],
+    )?;
+    adjustment.status = PeriodStatus::Open;
+
+    let reversal = match closing_entry(&transaction, adjustment.id)? {
+        Some(entry) => {
+            let (_, ends_on) = year_bounds(year)?;
+            Some(reverse_entry_into(
+                &transaction,
+                entry,
+                reason,
+                ends_on,
+                actor,
+                at,
+                seller_id,
+                &adjustment,
+            )?)
+        }
+        None => None,
+    };
+    transaction.commit()?;
+    Ok(reversal)
+}
+
+/// The first and last day of a calendar year.
+fn year_bounds(year: i32) -> Result<(LocalDate, LocalDate), StoreError> {
+    Ok((month_bounds(year, 1)?.0, month_bounds(year, 12)?.1))
 }
 
 /// The guard account for lines nobody has classified yet.
@@ -597,6 +982,31 @@ pub fn post_entry(conn: &Connection, request: PostingRequest<'_>) -> Result<Post
 /// replaces it — has to write both or neither, so the body is available to a
 /// caller that already opened a transaction.
 pub(crate) fn post_entry_in(conn: &Connection, request: PostingRequest<'_>) -> Result<PostedEntry, StoreError> {
+    let period = ensure_period(conn, request.seller_id, request.entry_date)?;
+    post_entry_into(conn, request, &period)
+}
+
+/// The body of [`post_entry_in`], with the period already decided.
+///
+/// A year-end close writes into the year's adjustment period, which no date maps
+/// to, so the period is a parameter here and a lookup one level up.
+fn post_entry_into(
+    conn: &Connection,
+    request: PostingRequest<'_>,
+    period: &FiscalPeriod,
+) -> Result<PostedEntry, StoreError> {
+    // A month can be reopened in a closed year, and that month would take postings
+    // again; the year is the fact that decides, so it is checked here as well as
+    // where periods are created.
+    if year_is_closed(conn, request.seller_id, period.year)? {
+        return Err(StoreError::Rejected(closed_year_sentence(period.year)));
+    }
+    if !period.is_open() {
+        return Err(StoreError::Rejected(format!(
+            "fiscal period {}-{:02} is locked",
+            period.year, period.period_no
+        )));
+    }
     if let Some(existing) = find_posted(conn, request.source, request.entry.journal())? {
         return Ok(existing);
     }
@@ -610,14 +1020,6 @@ pub(crate) fn post_entry_in(conn: &Connection, request: PostingRequest<'_>) -> R
                 line.account()
             )));
         }
-    }
-
-    let period = ensure_period(conn, request.seller_id, request.entry_date)?;
-    if !period.is_open() {
-        return Err(StoreError::Rejected(format!(
-            "fiscal period {}-{:02} is locked",
-            period.year, period.period_no
-        )));
     }
 
     let number = next_entry_number(
@@ -984,6 +1386,27 @@ pub(crate) fn reverse_entry_in(
     actor: &str,
     now: &str,
 ) -> Result<PostedEntry, StoreError> {
+    let seller_id = seller_of(conn, entry_id)?;
+    let period = ensure_period(conn, seller_id, entry_date)?;
+    reverse_entry_into(conn, entry_id, reason, entry_date, actor, now, seller_id, &period)
+}
+
+/// The body of [`reverse_entry_in`], with the period already decided.
+///
+/// A year that is reopened has its resultaatbestemming reversed into the same
+/// adjustment period it was written in, which no date maps to, so the period is a
+/// parameter here and a lookup one level up.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn reverse_entry_into(
+    conn: &Connection,
+    entry_id: JournalEntryId,
+    reason: &str,
+    entry_date: LocalDate,
+    actor: &str,
+    now: &str,
+    seller_id: SellerId,
+    period: &FiscalPeriod,
+) -> Result<PostedEntry, StoreError> {
     if reason.trim().is_empty() {
         return Err(StoreError::Rejected("a reversal needs a reason".to_owned()));
     }
@@ -1002,11 +1425,11 @@ pub(crate) fn reverse_entry_in(
         .reversed(description)
         .map_err(|error| StoreError::Data(error.to_string()))?;
 
-    post_entry_in(
+    post_entry_into(
         conn,
         PostingRequest {
             entry: &entry,
-            seller_id: seller_of(conn, entry_id)?,
+            seller_id,
             entry_date,
             source: PostingSource::Manual,
             actor,
@@ -1016,6 +1439,7 @@ pub(crate) fn reverse_entry_in(
             reverses: Some(entry_id),
             open_item: None,
         },
+        period,
     )
 }
 

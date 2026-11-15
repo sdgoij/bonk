@@ -721,6 +721,42 @@ enum LedgerCommand {
         #[arg(long, default_value = "cli")]
         actor: String,
     },
+    /// Close a year: move its result to equity and lock every month of it.
+    ///
+    /// Posts the resultaatbestemming — every revenue and expense account zeroed,
+    /// the difference to `0500 Eigen vermogen` — into the year's adjustment period,
+    /// so December's btw-aangifte is unchanged by it, then locks the twelve months
+    /// and that period. A document dated in the year that was never posted, or a
+    /// month with a cost nobody placed, refuses the close and names itself. An
+    /// unprepared btw-aangifte is printed as a warning: a return can still be
+    /// prepared after the books close, because preparing one posts nothing.
+    #[command(name = "close-year")]
+    CloseYear {
+        /// Year to close; defaults to the year before this one.
+        #[arg(long)]
+        year: Option<i32>,
+        /// Show what the close would do without writing anything.
+        #[arg(long = "dry-run")]
+        dry_run: bool,
+        #[arg(long, default_value = "cli")]
+        actor: String,
+    },
+    /// Reopen a closed year: reverse its resultaatbestemming, recording why.
+    ///
+    /// The months stay closed. A month a correction belongs in is reopened on its
+    /// own, because a month lock is its own fact; closing the year again then
+    /// writes a fresh resultaatbestemming, which is the pair the books understand.
+    #[command(name = "reopen-year")]
+    ReopenYear {
+        /// Year to reopen; defaults to the year before this one.
+        #[arg(long)]
+        year: Option<i32>,
+        /// Why the year is reopened; it becomes part of the record.
+        #[arg(long)]
+        reason: String,
+        #[arg(long, default_value = "cli")]
+        actor: String,
+    },
     /// Import bank statements and see what is unmatched.
     Bank {
         #[command(subcommand)]
@@ -2227,6 +2263,69 @@ fn ledger(access: &Access, database: &Path, keystore: &Path, command: LedgerComm
             println!("reopened: {year}-{month:02} by {actor}: {}", reason.trim());
             Ok(())
         }
+        LedgerCommand::CloseYear { year, dry_run, actor } => {
+            let year = year.unwrap_or_else(|| LocalDate::today_utc().as_date().year() - 1);
+            let blockers = store::year_close_blockers(connection, owner, year)?;
+            let warnings = store::year_close_warnings(connection, owner, year)?;
+            let result = store::year_result(connection, owner, year)?;
+
+            println!("year:     {year}");
+            println!(
+                "result:   {} {} to {} {}",
+                amount_text(result.micros(), result.currency())?,
+                result.currency().as_str(),
+                store::RESULT_ACCOUNT,
+                equity_name(session.database())?
+            );
+            if blockers.is_empty() {
+                println!("close:    nothing blocks it");
+            } else {
+                println!("close:    blocked");
+                for blocker in &blockers {
+                    println!("  {blocker}");
+                }
+            }
+            for warning in &warnings {
+                println!("warn:     {warning}");
+            }
+            if dry_run {
+                return Ok(());
+            }
+            if !blockers.is_empty() {
+                return Err(CliError::Input(format!(
+                    "{year} was not closed: the blockers are listed above"
+                )));
+            }
+
+            let close = store::close_year(connection, owner, year, &actor, &now)?;
+            match &close.posted {
+                Some(posted) => println!(
+                    "posted:   {} {} resultaatbestemming",
+                    posted.journal.code(),
+                    posted.number
+                ),
+                None => println!("posted:   nothing; no revenue or cost was posted in {year}"),
+            }
+            println!(
+                "closed:   {year}; {} month(s) locked by this close, by {actor}",
+                close.locked.len()
+            );
+            Ok(())
+        }
+        LedgerCommand::ReopenYear { year, reason, actor } => {
+            let year = year.unwrap_or_else(|| LocalDate::today_utc().as_date().year() - 1);
+            let reversal = store::reopen_year(connection, owner, year, &reason, &actor, &now)?;
+            match &reversal {
+                Some(posted) => println!(
+                    "reversed {} {} resultaatbestemming",
+                    posted.journal.code(),
+                    posted.number
+                ),
+                None => println!("nothing to reverse: the close wrote no entry"),
+            }
+            println!("reopened: {year} by {actor}: {}", reason.trim());
+            Ok(())
+        }
         LedgerCommand::Bank { command } => bank(session.database(), owner, command, &now),
         LedgerCommand::RebuildOpenItems { actor } => {
             let report = store::rebuild_open_items(connection, owner, &actor, &now)?;
@@ -3085,6 +3184,16 @@ fn period_text(status: store::PeriodStatus) -> &'static str {
         store::PeriodStatus::Open => "open",
         store::PeriodStatus::Locked => "locked",
     }
+}
+
+/// The name of the account a year's result is moved to.
+///
+/// The close names the account it puts the result on, and a reader of a statement
+/// should not have to look up a code to know what happened.
+fn equity_name(database: &store::Database) -> Result<String, CliError> {
+    let code = AccountCode::parse(store::RESULT_ACCOUNT)?;
+    Ok(store::load_account(database.connection(), &code)?
+        .map_or_else(|| "Eigen vermogen".to_owned(), |account| account.name))
 }
 
 /// The window a report covers: this calendar year up to today unless asked otherwise.

@@ -14,6 +14,7 @@ use store::{Database, KdfParams, KeyStore, SellerRecord, StoreError, insert_sell
 use tempfile::TempDir;
 
 const NOW: &str = "2026-11-06T09:15:00.123456Z";
+const LATER: &str = "2026-11-07T10:00:00.000000Z";
 
 fn database() -> (TempDir, Database, SellerId) {
     let dir = TempDir::new().unwrap();
@@ -80,6 +81,19 @@ fn post(
         },
     )
     .unwrap()
+}
+
+/// Debits minus credits for one account: positive is a debit balance.
+fn balance(database: &Database, account: &str) -> i64 {
+    database
+        .connection()
+        .query_row(
+            "SELECT COALESCE(sum(CASE side WHEN 'debit' THEN amount_micros ELSE -amount_micros END), 0)
+             FROM journal_line WHERE account_code = ?1",
+            [account],
+            |row| row.get(0),
+        )
+        .unwrap()
 }
 
 #[test]
@@ -222,6 +236,252 @@ fn the_database_refuses_a_posting_into_a_locked_period() {
         error.to_string().contains("fiscal period is locked"),
         "unexpected error: {error}"
     );
+}
+
+#[test]
+fn closing_a_year_moves_the_result_to_equity_and_locks_it() {
+    let (_dir, database, seller) = database();
+    let connection = database.connection();
+    seed_starter_chart(connection, NOW).unwrap();
+
+    // The scenario matrix: 1 000 of revenue in March and 200 of cost in April.
+    post(
+        &database,
+        seller,
+        &domestic_sale("Invoice 2026-0001"),
+        "2026-03-15",
+        PostingSource::Manual,
+    );
+    let cost = LedgerEntry::new(
+        Journal::Purchase,
+        "Invoice INK-1",
+        vec![
+            LedgerLine::debit(code("7000"), euros(200)).unwrap(),
+            LedgerLine::credit(code("1400"), euros(200)).unwrap(),
+        ],
+    )
+    .unwrap();
+    post(&database, seller, &cost, "2026-04-02", PostingSource::Manual);
+
+    let preview = store::year_result(connection, seller, 2026).unwrap();
+    assert_eq!(preview.micros(), 800_000_000, "1 000 revenue less 200 cost");
+
+    let close = store::close_year(connection, seller, 2026, "ada", NOW).unwrap();
+    assert_eq!(close.year, 2026);
+    assert_eq!(close.result_micros, 800_000_000);
+    assert_eq!(close.locked, vec![3, 4], "the months that existed were the open ones");
+    assert_eq!(
+        close.warnings.len(),
+        2,
+        "neither month has a prepared return: {:?}",
+        close.warnings
+    );
+
+    // The result is on equity and the profit and loss accounts are empty again.
+    assert_eq!(
+        balance(&database, store::RESULT_ACCOUNT),
+        -800_000_000,
+        "equity is credited"
+    );
+    assert_eq!(balance(&database, "8000"), 0);
+    assert_eq!(balance(&database, "7000"), 0);
+
+    // The closing entry is a memorial one in the adjustment period, dated the last
+    // day of the year, so December's own period — and its return — never sees it.
+    let posted = close.posted.as_ref().expect("a result was moved");
+    assert_eq!(posted.journal, Journal::Memorial);
+    let (period_no, entry_date): (i64, String) = connection
+        .query_row(
+            "SELECT p.period_no, e.entry_date_local FROM journal_entry e
+             JOIN fiscal_period p ON p.id = e.period_id WHERE e.id = ?1",
+            [posted.id.to_string()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(period_no, 13);
+    assert_eq!(entry_date, "2026-12-31");
+
+    // Every period of the year is locked, and the close itself is on the record.
+    for period in list_periods(connection, seller, 2026).unwrap() {
+        assert!(
+            !period.is_open(),
+            "{}-{:02} is still open",
+            period.year,
+            period.period_no
+        );
+    }
+    let reason: String = connection
+        .query_row(
+            "SELECT e.reason FROM period_event e JOIN fiscal_period p ON p.id = e.period_id
+             WHERE p.year = 2026 AND p.period_no = 13 AND e.kind = 'closed'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(reason.contains("resultaatbestemming"), "{reason}");
+
+    // The books still add up, with nothing left in the derived result line.
+    let sheet = store::report::balance_sheet(connection, seller, date("2026-12-31")).unwrap();
+    assert!(sheet.balances(), "assets equal liabilities plus equity");
+    assert_eq!(sheet.result_micros, 0, "the result is in equity now");
+
+    // A posting into the closed year is refused, and so is a second close.
+    let refused = post_entry(
+        connection,
+        PostingRequest {
+            entry: &domestic_sale("Invoice 2026-0002"),
+            seller_id: seller,
+            entry_date: date("2026-05-01"),
+            source: PostingSource::Manual,
+            actor: "ada",
+            now: NOW,
+            posting_profile_id: "nl-sme",
+            rule_version: "1",
+            reverses: None,
+            open_item: None,
+        },
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(refused.contains("fiscal year 2026 is closed"), "{refused}");
+
+    let again = store::close_year(connection, seller, 2026, "ada", NOW)
+        .unwrap_err()
+        .to_string();
+    assert!(again.contains("already closed"), "{again}");
+}
+
+#[test]
+fn a_year_close_names_what_stops_it() {
+    let (_dir, database, seller) = database();
+    let connection = database.connection();
+    seed_starter_chart(connection, NOW).unwrap();
+
+    // Nothing has been posted, so there is no year to close.
+    let blockers = store::year_close_blockers(connection, seller, 2026).unwrap();
+    assert_eq!(blockers.len(), 1, "{blockers:?}");
+    assert!(blockers[0].contains("nothing was posted in 2026"), "{}", blockers[0]);
+
+    post(
+        &database,
+        seller,
+        &domestic_sale("Invoice 2026-0001"),
+        "2026-03-15",
+        PostingSource::Manual,
+    );
+    // A cost nobody placed, in April: the month is named, because the remedy is
+    // per month and not in the year.
+    let unplaced = LedgerEntry::new(
+        Journal::Purchase,
+        "Invoice INK-1",
+        vec![
+            LedgerLine::debit(code(UNCLASSIFIED_ACCOUNT), euros(50)).unwrap(),
+            LedgerLine::credit(code("1400"), euros(50)).unwrap(),
+        ],
+    )
+    .unwrap();
+    post(&database, seller, &unplaced, "2026-04-02", PostingSource::Manual);
+
+    let blockers = store::year_close_blockers(connection, seller, 2026).unwrap();
+    assert_eq!(blockers.len(), 1, "{blockers:?}");
+    assert!(blockers[0].starts_with("2026-04: "), "{}", blockers[0]);
+    assert!(blockers[0].contains(UNCLASSIFIED_ACCOUNT), "{}", blockers[0]);
+
+    let refused = store::close_year(connection, seller, 2026, "ada", NOW)
+        .unwrap_err()
+        .to_string();
+    assert!(refused.contains(UNCLASSIFIED_ACCOUNT), "{refused}");
+    assert!(
+        load_period(connection, seller, 2026, 13).unwrap().is_none(),
+        "a refused close writes nothing, not even the adjustment period"
+    );
+}
+
+#[test]
+fn a_year_with_nothing_to_move_is_closed_without_an_entry() {
+    let (_dir, database, seller) = database();
+    let connection = database.connection();
+    seed_starter_chart(connection, NOW).unwrap();
+
+    // Capital paid in: a balance-sheet fact, so the year has no result.
+    let capital = LedgerEntry::new(
+        Journal::Memorial,
+        "Kapitaal",
+        vec![
+            LedgerLine::debit(code("1100"), euros(500)).unwrap(),
+            LedgerLine::credit(code(store::RESULT_ACCOUNT), euros(500)).unwrap(),
+        ],
+    )
+    .unwrap();
+    post(&database, seller, &capital, "2026-01-02", PostingSource::Manual);
+
+    let close = store::close_year(connection, seller, 2026, "ada", NOW).unwrap();
+    assert!(close.posted.is_none(), "there was no result to move");
+    assert_eq!(close.result_micros, 0);
+    assert_eq!(
+        balance(&database, store::RESULT_ACCOUNT),
+        -500_000_000,
+        "equity is untouched"
+    );
+    assert!(!list_periods(connection, seller, 2026).unwrap()[0].is_open());
+}
+
+#[test]
+fn a_reopened_year_takes_a_correction_and_closes_again() {
+    let (_dir, database, seller) = database();
+    let connection = database.connection();
+    seed_starter_chart(connection, NOW).unwrap();
+    post(
+        &database,
+        seller,
+        &domestic_sale("Invoice 2026-0001"),
+        "2026-03-15",
+        PostingSource::Manual,
+    );
+
+    let first = store::close_year(connection, seller, 2026, "ada", NOW).unwrap();
+    assert_eq!(first.result_micros, 1_000_000_000);
+
+    let reversal = store::reopen_year(connection, seller, 2026, "vergeten kosten", "ada", LATER)
+        .unwrap()
+        .expect("there was a resultaatbestemming to reverse");
+    assert_eq!(reversal.journal, Journal::Memorial);
+    assert_eq!(balance(&database, "8000"), -1_000_000_000, "the revenue is back");
+    assert_eq!(
+        balance(&database, store::RESULT_ACCOUNT),
+        0,
+        "equity no longer holds it"
+    );
+
+    // A year that is open is not reopened again, and a reason is always required.
+    let said = store::reopen_year(connection, seller, 2026, "again", "ada", LATER)
+        .unwrap_err()
+        .to_string();
+    assert!(said.contains("not closed"), "{said}");
+    let said = store::reopen_year(connection, seller, 2026, "  ", "ada", LATER)
+        .unwrap_err()
+        .to_string();
+    assert!(said.contains("needs a reason"), "{said}");
+
+    // The month a correction belongs in is reopened on its own: a month lock is its
+    // own fact, and the year being open does not reopen twelve months.
+    let march = load_period(connection, seller, 2026, 3).unwrap().unwrap();
+    store::reopen_period(connection, march.id, "vergeten kosten", "ada", LATER).unwrap();
+    let cost = LedgerEntry::new(
+        Journal::Purchase,
+        "Invoice INK-1",
+        vec![
+            LedgerLine::debit(code("7000"), euros(100)).unwrap(),
+            LedgerLine::credit(code("1400"), euros(100)).unwrap(),
+        ],
+    )
+    .unwrap();
+    post(&database, seller, &cost, "2026-03-20", PostingSource::Manual);
+
+    let second = store::close_year(connection, seller, 2026, "ada", LATER).unwrap();
+    assert_eq!(second.result_micros, 900_000_000, "the cost is in the year now");
+    assert_eq!(second.locked, vec![3], "March was the only open month");
+    assert_eq!(balance(&database, store::RESULT_ACCOUNT), -900_000_000);
 }
 
 #[test]

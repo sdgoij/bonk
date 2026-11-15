@@ -954,6 +954,111 @@ fn a_posted_purchase_is_moved_to_another_account() {
     assert!(said.contains("closed:  2026-02 by cli"), "{said}");
 }
 
+/// A year closes from the command line: the result lands on equity in the
+/// adjustment period, the months lock, and a document nobody posted stops it.
+#[test]
+fn a_year_closes_and_reopens_from_the_command_line() {
+    let archive = Archive::new();
+    archive.run(&["ledger", "setup"]);
+    archive.run(&["ledger", "post"]);
+
+    // An issued invoice nobody posted means the year's result is not the year's
+    // result yet, and the close names it.
+    archive.sell("50.00");
+    let said = archive.run(&["ledger", "close-year", "--year", "2026", "--dry-run"]);
+    assert!(said.contains("close:    blocked"), "{said}");
+    assert!(
+        said.contains("1 document(s) dated in 2026 have not been posted: 2026-0002"),
+        "{said}"
+    );
+    let said = archive.fail(&["ledger", "close-year", "--year", "2026"]);
+    assert!(said.contains("was not closed"), "{said}");
+
+    archive.run(&["ledger", "post"]);
+    let said = archive.run(&["ledger", "close-year", "--year", "2026", "--dry-run"]);
+    assert!(said.contains("result:   150.00 EUR to 0500 Eigen vermogen"), "{said}");
+    assert!(said.contains("close:    nothing blocks it"), "{said}");
+    assert!(
+        said.contains("warn:     the btw-aangifte for 2026-02 has not been prepared"),
+        "a filing gap is reported, not enforced: {said}"
+    );
+
+    let said = archive.run(&["ledger", "close-year", "--year", "2026"]);
+    assert!(said.contains("posted:   MEM 2026-0001 resultaatbestemming"), "{said}");
+    assert!(
+        said.contains("closed:   2026; 1 month(s) locked by this close"),
+        "{said}"
+    );
+
+    // The year takes no postings now, and it cannot be closed twice.
+    let said = archive.fail(&[
+        "ledger",
+        "post-manual",
+        "--date",
+        "2026-02-20",
+        "--description",
+        "Late",
+        "--line",
+        "7100|debit|10.00",
+        "--line",
+        "1100|credit|10.00",
+    ]);
+    assert!(said.contains("fiscal year 2026 is closed"), "{said}");
+    let said = archive.fail(&["ledger", "close-year", "--year", "2026"]);
+    assert!(said.contains("already closed"), "{said}");
+
+    // Reopening reverses the resultaatbestemming; the months stay closed, so the
+    // month a correction belongs in is reopened on its own.
+    let said = archive.run(&[
+        "ledger",
+        "reopen-year",
+        "--year",
+        "2026",
+        "--reason",
+        "vergeten factuur",
+    ]);
+    assert!(said.contains("reversed MEM 2026-0002 resultaatbestemming"), "{said}");
+    assert!(said.contains("reopened: 2026 by cli: vergeten factuur"), "{said}");
+    let said = archive.run(&[
+        "ledger",
+        "profit-and-loss",
+        "--from",
+        "2026-01-01",
+        "--to",
+        "2026-12-31",
+    ]);
+    assert!(said.contains("150.00"), "the revenue is back: {said}");
+
+    archive.run(&[
+        "ledger",
+        "reopen",
+        "--year",
+        "2026",
+        "--month",
+        "2",
+        "--reason",
+        "vergeten factuur",
+    ]);
+    archive.run(&[
+        "ledger",
+        "post-manual",
+        "--date",
+        "2026-02-20",
+        "--description",
+        "Bankkosten",
+        "--line",
+        "7100|debit|10.00",
+        "--line",
+        "1100|credit|10.00",
+    ]);
+    let said = archive.run(&["ledger", "close-year", "--year", "2026", "--dry-run"]);
+    assert!(said.contains("result:   140.00 EUR"), "{said}");
+    assert!(said.contains("close:    nothing blocks it"), "{said}");
+
+    let said = archive.run(&["ledger", "close-year", "--year", "2026"]);
+    assert!(said.contains("posted:   MEM 2026-0004 resultaatbestemming"), "{said}");
+}
+
 #[test]
 fn a_memorial_entry_is_written_and_must_balance() {
     let archive = Archive::new();

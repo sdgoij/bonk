@@ -1484,9 +1484,46 @@ blocker it can fix. A period exists only once something is posted in it, and a
 close of a month that was never touched says so rather than silently creating an
 empty one.
 
-What this does not do: there is no year-end close. `period_event.kind` has carried
-an unused `closed` since migration 0011, which is where a 13th-period or
-year-end close would go; the monthly lock and its reopening are what exists.
+**Status, 2026-11-15 (a year closes, and opens again).** `bonk ledger close-year`
+posts the resultaatbestemming — every revenue and expense account zeroed, the
+difference to `0500 Eigen vermogen` — locks the twelve months and the adjustment
+period, and writes the `closed` period event that had been unused in the schema
+since 0011. Nothing about the migration changed: `period_no 13` and the third event
+kind were already there, which is why this is a store and CLI change rather than a
+schema one.
+
+The adjustment period is what makes the closing entry respectable. It carries the
+same date as 31 December, but no date maps to it — `ensure_period` reads a date as a
+month — so the entry can be written while December is already locked, and the
+monthly VAT return, which selects by `period_id`, never sees it. The date is still
+inside the year, so the trial balance, the profit and loss and the balance sheet all
+include the close.
+
+The first version had a hole the test caught: posting into `2026-05` after the close
+succeeded, because May did not exist and `ensure_period` created it open. A closed
+year is now checked where periods are created and again where entries are written —
+the second check covers a month reopened inside a closed year, which would otherwise
+accept postings while equity already holds the result. The refusal says what a
+person can do: book the correction in an open year, or reopen the year first.
+
+That sentence is why `reopen-year` exists rather than being left as a known limit.
+It reverses the closing entry into the same adjustment period and appends a
+`reopened` event; the months stay locked, because a month lock is its own fact and
+the month a correction belongs in is reopened on its own. Closing again writes a
+fresh resultaatbestemming, so the pair is the one the books already understand.
+`year_is_closed` therefore reads the *latest* event on the adjustment period rather
+than the presence of one.
+
+Blockers are the unposted documents dated in the year, the months' own `9999` rule
+named by month, and a trial balance that does not add up. Unprepared returns are
+warnings, not blockers: filing and closing are separate gates, and preparing a
+return after the books close posts nothing. The design note's older requirement that
+open items be settled was dropped — an invoice unpaid at year end is a receivable.
+
+What this does not do: the window has no year control yet, only the month one in the
+VAT section; and no opening balances are carried forward, because the balance sheet
+is cumulative and zeroing the profit and loss accounts is what makes next year's
+figures right.
 
 The window got the same two controls, because a guard that only exists in a command
 is a guard nobody meets. The VAT section shows the month's state and offers **Close

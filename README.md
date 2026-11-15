@@ -243,6 +243,9 @@ bonk ledger vat-return --year 2026 --month 3 --prepare  # store it, with its bas
 bonk ledger close --year 2026 --month 3                 # refuse postings into the month
 bonk ledger close --year 2026 --month 3 --dry-run       # what would stop it
 bonk ledger reopen --year 2026 --month 3 --reason "vergeten factuur"
+bonk ledger close-year --year 2026                     # resultaatbestemming, then lock the year
+bonk ledger close-year --year 2026 --dry-run           # what it would move, and what stops it
+bonk ledger reopen-year --year 2026 --reason "vergeten factuur"
 bonk ledger open-items                                  # what customers still owe
 bonk ledger rebuild-open-items                          # fill the subledger of an older archive
 bonk ledger tax-codes                                   # the treatments a purchase can be filed under
@@ -288,6 +291,19 @@ closeable — the VAT on that cost is right either way, while the books a filed
 return rests on are not. `close` prints both sets, refuses on the one it can fix,
 and warns on the other. Reopening stores its reason beside the lock instead of
 erasing it, so a month that was closed and opened again still says so.
+
+`ledger close-year` finishes a year: it posts the resultaatbestemming — every
+revenue and expense account zeroed, the difference to `0500 Eigen vermogen` — into
+the year's adjustment period, then locks the twelve months and that period. The
+adjustment period (13) shares 31 December with December but no date maps to it, so
+a monthly return, which reads by period, never sees the closing entry. A document
+dated in the year that nobody posted, or a month with an unplaced cost, refuses the
+close and names itself; an unprepared btw-aangifte is printed as a warning, because
+a return can be prepared after the books are locked. `reopen-year --reason` reverses
+the resultaatbestemming into the same period and records why; the months stay
+locked, so the month a correction belongs in is reopened on its own, and closing
+again writes a fresh entry. A closed year takes no postings at all, whatever state
+its months are in.
 
 A bank statement is imported once, whatever range the bank sends it in: the file
 is stored by hash and each payment by a fingerprint of what identifies it, so an

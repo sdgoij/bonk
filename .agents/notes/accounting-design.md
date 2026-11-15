@@ -158,11 +158,22 @@ change what the supplier is owed.
   only when nothing sits on `9999 Nog te rubriceren`. A month with an unplaced
   cost is therefore fileable and not closeable — the VAT on that cost is right
   either way, while the books a filed return rests on are not.
-- Reopening a period requires an explicit action, a reason, and an audit event.
-  It never deletes the lock event; it appends a `reopened` fact.
-- Closing a year requires: trial balance balances, every open item either
-  settled or explained, VAT returns prepared for every period, and no unposted
-  documents in the period range. The close report lists what blocks it.
+- Closing a year posts the resultaatbestemming — every revenue and expense account
+  zeroed, the difference to `0500 Eigen vermogen` — into the year's adjustment
+  period, then locks the twelve months and that period. The adjustment period
+  carries the same date as 31 December but no date maps to it, so a monthly
+  return, which reads by period, never sees the closing entry.
+- A year close is blocked by a document dated in it that nobody posted, by a
+  month with an unplaced cost (named by month), and by a trial balance that does
+  not add up. Open items are not a blocker — an invoice unpaid at year end is a
+  receivable, not a mistake — and an unprepared return is reported rather than
+  enforced, because a return can be prepared after the books are locked.
+- Reopening a year reverses its resultaatbestemming into the same adjustment
+  period and records the reason. The months stay locked, so the month a correction
+  belongs in is reopened on its own; closing again writes a fresh entry.
+- A closed year refuses postings whatever the state of its months: a month
+  reopened inside a closed year still takes none, because the year is the fact
+  that decides.
 
 ### 3.4 Open items and subledgers
 
