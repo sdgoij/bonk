@@ -1309,7 +1309,7 @@ account it belongs on, and either way it is a person's decision. `bank match` ta
 singles. `open-items` and `bank transactions` now print the identifier their
 commands take; the queue was unactionable without it.
 
-Still open in A4: rule-based classification, and the keyboard-first queue.
+Still open in A4: the keyboard-first queue.
 
 **Status, 2026-11-06 (a CSV is read through a stated profile).** The third format
 is in, and it is read the only way a CSV can be read honestly: through a mapping a
@@ -1342,6 +1342,32 @@ A CSV states no opening or closing balance, so `read_csv` leaves both empty and 
 disingenuous: the statement records `format = 'csv'` and no balances, the payload
 hash still makes a re-import a no-op, and the README says so. Deriving the
 balances from a `Saldo` column is the obvious follow-up and is not in this change.
+
+**Status, 2026-11-15 (a rule books what no invoice will ever match).** The first
+rung of the ladder exists. Migration 0018 adds `bank_rule`: a name, an order, a
+direction, three matchers (counterparty IBAN exactly, remittance and counterparty
+name as case-insensitive substrings), and the account the bank line is booked
+against. `store::bank_rule` holds the matching, the posting, and the undo; the CLI
+exposes `bank rule add|list|rm`, `bank classify [--dry-run]`, and `bank unclassify`.
+
+The two guards the design note argued for are the tests that matter. A line the
+reference ladder proposes an open item for is never classified — checked before any
+rule is consulted, so a broad "money out" rule cannot swallow a customer payment —
+and two rules that both fit leave the line in the queue with both names reported.
+A rule with no matcher at all is refused, and so is one whose only matcher is the
+direction, because that is a catch-all and the queue is where a catch-all belongs.
+
+Posting reuses the shapes the group matching established: one `Bank` entry sourced
+`BankTransaction(id)`, so the uniqueness that stops a payment being posted twice
+also stops a classification landing beside a settlement, and the status becomes
+`posted` — the value 0014 reserved and nothing had written. No VAT category, rate,
+or tax code goes on a rule, so a classified line contributes to no box; a bank line
+that carries VAT is a purchase invoice. `unclassify` reverses through
+`reverse_entry_in` inside one transaction with the status change, so a correction
+cannot half-apply, and a line that was *matched* is refused there with a pointer to
+`bank unmatch` instead.
+
+Schema is 18. Still open in A4: the keyboard-first queue.
 
 ---
 

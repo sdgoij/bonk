@@ -256,6 +256,10 @@ bonk ledger bank auto-match                           # where the payment names 
 bonk ledger bank propose <transaction>                # what it could settle, groups included
 bonk ledger bank match <transaction> --item <a> --item <b>   # one payment, several invoices
 bonk ledger bank transactions --status new            # the unmatched queue
+bonk ledger bank rule add --name bankkosten --remittance kosten --direction out --account 7100
+bonk ledger bank classify --dry-run                   # what the rules would book
+bonk ledger bank classify                             # book it
+bonk ledger bank unclassify <transaction> --reason "verkeerde rekening"
 ```
 
 Entry numbers are per journal and year (`VK 2026-0001`), which is why a reversal
@@ -313,6 +317,20 @@ recognisably CAMT or MT940, because the content of a file beats a default chosen
 for the account. A CSV states no opening or closing balance, so the import's "the
 statement does not add up" check cannot run for that format; the payload hash and
 the per-payment fingerprint still make a second import of the same file a no-op.
+
+Some lines will never match an invoice — bank fees, interest, a VAT payment, a
+transfer between the business's own accounts — and booking them by hand every month
+is what a rule replaces. A rule names the shape of the line (the counterparty IBAN
+exactly, a fragment of the remittance text or of the name without regard to case,
+and which way the money goes) and the one account it belongs on. `bank classify`
+books them; two guards keep that safe. A line the matcher already proposes an
+invoice for is never taken by a rule, so "any money out" cannot swallow a customer
+payment, and two rules that both fit leave the line in the queue with both names
+reported, because a coin toss about which account money belongs on is worse than a
+question. A rule carries no VAT: a bank line that does is a purchase invoice, and a
+rule guessing a rate would under-declare input tax silently. `--dry-run` shows what
+a rule would book before it books it, and `bank unclassify` reverses it — the same
+reversal-rather-than-delete rule as everywhere else in the ledger.
 
 One box needs a person to decide it. `AE` says "reverse charge" and nothing more,
 and the form asks reverse-charged goods (4b) and services (4a) separately, so a

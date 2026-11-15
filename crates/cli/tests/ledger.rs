@@ -736,6 +736,117 @@ fn removing_a_profile_leaves_the_account_saying_so() {
 }
 
 #[test]
+fn a_rule_books_a_bank_fee_without_an_invoice() {
+    let archive = Archive::new();
+    archive.run(&["ledger", "setup"]);
+    archive.run(&[
+        "ledger",
+        "bank",
+        "add",
+        "--name",
+        "Zakelijk",
+        "--iban",
+        "NL91ABNA0417164300",
+    ]);
+
+    // A fee, which no invoice will ever match, so it would sit in the queue.
+    let statement = archive.dir.path().join("feb.940");
+    std::fs::write(
+        &statement,
+        ":20:BONK-2026-02\n:60F:C260201EUR100,00\n:61:260220D12,50NTRF\n:86:Bankkosten februari\n:62F:C260228EUR87,50\n",
+    )
+    .expect("statement");
+    archive.run(&["ledger", "bank", "import", statement.to_str().expect("utf-8")]);
+
+    let said = archive.run(&[
+        "ledger",
+        "bank",
+        "rule",
+        "add",
+        "--name",
+        "bankkosten",
+        "--remittance",
+        "bankkosten",
+        "--direction",
+        "out",
+        "--account",
+        "7100",
+    ]);
+    assert!(said.contains("rule:    bankkosten"), "{said}");
+    let said = archive.run(&["ledger", "bank", "rule", "list"]);
+    assert!(said.contains("7100"), "{said}");
+    assert!(said.contains("money out"), "{said}");
+
+    // The dry run is the safe first look at a new rule.
+    let said = archive.run(&["ledger", "bank", "classify", "--dry-run"]);
+    assert!(said.contains("dry run: nothing was posted"), "{said}");
+    assert!(said.contains("7100"), "it says where it would go: {said}");
+    let said = archive.run(&["ledger", "bank", "transactions", "--status", "new"]);
+    assert!(
+        said.contains("Bankkosten februari"),
+        "the line is still waiting: {said}"
+    );
+
+    let said = archive.run(&["ledger", "bank", "classify"]);
+    assert!(said.contains("posted: 1"), "{said}");
+
+    let queue = archive.run(&["ledger", "bank", "transactions", "--status", "posted"]);
+    assert!(queue.contains("Bankkosten februari"), "{queue}");
+    assert!(
+        archive
+            .run(&["ledger", "bank", "transactions", "--status", "new"])
+            .contains("no bank transactions"),
+        "the queue is empty"
+    );
+
+    // The cost is in the books and they still balance.
+    let said = archive.run(&["ledger", "trial-balance", "--from", "2026-01-01", "--to", "2026-12-31"]);
+    assert!(said.contains("7100"), "{said}");
+    assert!(said.trim_end().ends_with("balanced"), "{said}");
+
+    // A person changes their mind: the entry is reversed and the line is back.
+    let transaction = queue
+        .lines()
+        .nth(1)
+        .and_then(|row| row.split_whitespace().next())
+        .expect("the queue prints the transaction")
+        .to_owned();
+    let said = archive.run(&[
+        "ledger",
+        "bank",
+        "unclassify",
+        &transaction,
+        "--reason",
+        "verkeerde rekening",
+    ]);
+    assert!(said.contains("the line is back in the queue"), "{said}");
+    let said = archive.run(&["ledger", "bank", "transactions", "--status", "new"]);
+    assert!(said.contains("Bankkosten februari"), "{said}");
+    let said = archive.run(&["ledger", "trial-balance", "--from", "2026-01-01", "--to", "2026-12-31"]);
+    // The account stays on the balance after a reversal — a correction is an entry,
+    // not a delete — but the cost and its reversal cancel out.
+    let row = said
+        .lines()
+        .find(|line| line.starts_with("7100"))
+        .expect("the account stays on the balance");
+    let columns: Vec<&str> = row.split_whitespace().collect();
+    assert_eq!(
+        columns[columns.len() - 2],
+        columns[columns.len() - 1],
+        "the cost and its reversal cancel: {row}"
+    );
+    assert!(said.trim_end().ends_with("balanced"), "{said}");
+
+    let said = archive.run(&["ledger", "bank", "rule", "rm", "bankkosten"]);
+    assert!(said.contains("removed rule bankkosten"), "{said}");
+    assert!(
+        archive
+            .run(&["ledger", "bank", "rule", "list"])
+            .contains("no bank rules")
+    );
+}
+
+#[test]
 fn a_memorial_entry_is_written_and_must_balance() {
     let archive = Archive::new();
     archive.run(&["ledger", "setup"]);

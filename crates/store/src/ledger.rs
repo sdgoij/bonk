@@ -888,7 +888,7 @@ pub fn reverse_entry(
 }
 
 /// The body of [`reverse_entry`], inside a transaction the caller owns.
-fn reverse_entry_in(
+pub(crate) fn reverse_entry_in(
     conn: &Connection,
     entry_id: JournalEntryId,
     reason: &str,

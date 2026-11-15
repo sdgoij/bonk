@@ -18,6 +18,7 @@ pub mod archive;
 pub mod audit;
 pub mod backup;
 pub mod bank;
+pub mod bank_rule;
 pub mod db;
 pub mod device;
 mod dto;

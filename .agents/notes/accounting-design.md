@@ -600,6 +600,107 @@ Never auto-match when two candidates tie, and never absorb a difference into an
 invoice. A short payment becomes a partial allocation plus an explicit write-off
 or fee entry.
 
+### 7.3.1 Rule-based classification
+
+Step 1 of the ladder: how a bank line that will never match an invoice gets booked
+without a person booking it by hand every month. The decisions at the end are the
+ones worth disagreeing with, because each is one line of code to change.
+
+**What a rule is.** A standing instruction from the operator about lines that will
+never match an invoice: bank fees, interest, VAT payments, payroll, transfers
+between the business's own accounts. Each of those is the same entry — the bank
+account against one other account — so a rule names one account and nothing else
+about the posting.
+
+```sql
+CREATE TABLE bank_rule (
+    id                  TEXT PRIMARY KEY,
+    seller_id           TEXT NOT NULL REFERENCES seller(id),
+    -- What the operator calls it. The audit event and the entry's description
+    -- name it, so a reader of the journal can see which instruction fired.
+    name                TEXT NOT NULL,
+    -- The order rules are listed and tried in. Lower first.
+    position            INTEGER NOT NULL,
+    enabled             INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+    -- Which way the money must go: 1 in, -1 out, NULL either.
+    direction           INTEGER CHECK (direction IN (1, -1)),
+    -- The matchers. Every one that is set has to agree; at least one must be set.
+    counterparty_iban   TEXT,
+    remittance_contains TEXT,
+    counterparty_contains TEXT,
+    -- Where the line is booked: bank against this account.
+    account_code        TEXT NOT NULL REFERENCES account(code),
+    created_at          TEXT NOT NULL,
+    updated_at          TEXT NOT NULL,
+    UNIQUE (seller_id, name),
+    CHECK (counterparty_iban IS NOT NULL OR remittance_contains IS NOT NULL
+           OR counterparty_contains IS NOT NULL)
+);
+CREATE INDEX bank_rule_order ON bank_rule (seller_id, position);
+```
+
+**Matching.** A rule matches when every matcher it sets agrees: the counterparty
+IBAN exactly (normalised the way an IBAN is stored — no spaces, upper case), the
+remittance text as a case-insensitive substring, the counterparty name as a
+case-insensitive substring, and the direction when one is given. There is no
+dimension beyond those four: no amount ranges, no regular expressions, no
+scoring. A pattern language turns a mapping into a program, and a program that
+posts money is not something to write by accident.
+
+**Two guards stop a rule swallowing a real payment.**
+
+- A line that the reference ladder already proposes an open item for is *never*
+  classified. "Money out, no reference" is the shape of a fee, but "money out for
+  121.00 with an invoice number in the text" is a payment, and a broad rule must
+  not take it. This is why classification checks `proposals` first even though the
+  ladder puts it in step 1.
+- Exactly one enabled rule must match. Two rules that both fit are a question, not
+  a coin toss, and the line stays in the queue with both names reported — the same
+  principle as two equal-amount candidates.
+
+**Posting.** One entry, `Journal::Bank`, sourced `BankTransaction(id)` — so the
+uniqueness that already stops a payment being posted twice also stops a
+classification being written beside a settlement. Money out debits the rule's
+account and credits the bank; money in does the reverse. The description is the
+rule's name and the counterparty (or the remittance when there is no counterparty),
+which is what makes a journal readable six months later. The transaction's status
+becomes `posted`, which the schema has reserved since 0014 and nothing has written
+yet. The audit event `bank_transaction_classified` names the rule, the account, the
+amount, and the entry.
+
+**No VAT.** A rule posts no category, no rate, and no tax code. Bank fees are
+typically exempt, and a line that does carry VAT is a purchase invoice, not a bank
+line; letting a rule guess a rate would under-declare input tax silently. A line
+that needs VAT goes through a received invoice or `post-manual`, where the
+reversal-plus-correction machinery already exists.
+
+**Undoing.** `bank unclassify <transaction> --reason` reverses the entry and returns
+the line to `new`. Reversal, not deletion — the same rule as everywhere else in the
+ledger. Without it a mis-fired rule could only be repaired with a hand-written
+memorial entry.
+
+**Commands.** `bank rule add|list|rm` for the instructions, `bank classify
+[--dry-run]` to run them over the queue (the dry run is the safe first look at a
+new rule), and `bank unclassify` to undo one. `bank transactions --status posted`
+shows what a rule has booked.
+
+**The decisions this rests on.** Each is one line of code to change if it turns out
+to be wrong:
+
+1. Ties are ambiguous rather than first-match-wins, so `position` only orders the
+   list. First-match-wins is the firewall model and is more familiar; ambiguity is
+   what the rest of the ledger does.
+2. Rules post immediately, with `--dry-run` and a reversal as the safety net,
+   rather than proposing for acceptance. Proposing would leave the queue a person's
+   work, which is the thing rules exist to remove.
+3. A rule carries no VAT, as argued above.
+4. The four matchers above are the whole language: no amount ranges, no regex, no
+   "unless" clauses.
+5. Classification never touches a line that already has an open-item proposal.
+6. Cost: one migration (0018), a repository module, a hook in the existing ladder,
+   four CLI verbs, and tests for each guard — roughly 1.5 days, plus the queue UI
+   work in M10/A5.
+
 ### 7.4 Allocations
 
 - One transaction can settle many open items; one open item can be settled by

@@ -500,6 +500,73 @@ enum BankCommand {
         /// The allocation identifier, as a match reports it.
         allocation: String,
     },
+    /// Manage the rules that classify lines no invoice will match.
+    ///
+    /// A rule names the shape of a line — the counterparty's IBAN, a fragment of
+    /// the remittance text, a fragment of the name, and which way the money goes —
+    /// and the one account it belongs on. Bank fees, interest, VAT payments, and
+    /// transfers between the business's own accounts are what it is for.
+    Rule {
+        #[command(subcommand)]
+        command: RuleCommand,
+    },
+    /// Post the lines the rules recognise.
+    ///
+    /// A line that the reference ladder proposes for an invoice is never taken by
+    /// a rule, and two rules that both fit leave the line where it is: a rule
+    /// decides where money is booked, so a coin toss is the wrong answer.
+    Classify {
+        /// Report what would happen, and write nothing.
+        #[arg(long)]
+        dry_run: bool,
+        /// Only this line, as `bank transactions` prints it.
+        #[arg(long)]
+        transaction: Option<String>,
+    },
+    /// Undo a rule's posting, appending its reversal.
+    ///
+    /// The line returns to the queue and the history says a rule fired and a
+    /// person took it back.
+    Unclassify {
+        /// The transaction identifier.
+        transaction: String,
+        /// Why it is being undone; it is what a reader of the journal sees.
+        #[arg(long)]
+        reason: String,
+    },
+}
+
+/// Subcommands of [`BankCommand::Rule`].
+#[derive(Debug, Subcommand)]
+enum RuleCommand {
+    /// Add a rule at the end of the list.
+    Add {
+        /// What you call it; the entry's description and the audit event use it.
+        #[arg(long)]
+        name: String,
+        /// The counterparty IBAN, matched exactly.
+        #[arg(long)]
+        iban: Option<String>,
+        /// A fragment of the remittance text, matched without regard to case.
+        #[arg(long)]
+        remittance: Option<String>,
+        /// A fragment of the counterparty's name, matched without regard to case.
+        #[arg(long)]
+        counterparty: Option<String>,
+        /// Only money `in` or `out`; omit for either.
+        #[arg(long)]
+        direction: Option<String>,
+        /// The account the bank line is booked against, e.g. `7100`.
+        #[arg(long)]
+        account: String,
+    },
+    /// List the rules in the order they are tried.
+    List,
+    /// Remove a rule by name.
+    Rm {
+        /// The rule's name.
+        name: String,
+    },
 }
 
 /// Subcommands of [`BankCommand::Profile`].
@@ -2369,6 +2436,32 @@ fn csv_profile(
     }
 }
 
+/// A rule's matchers, as one line a person can read.
+fn matchers(rule: &store::bank_rule::BankRule) -> String {
+    let mut parts = Vec::new();
+    if let Some(iban) = &rule.counterparty_iban {
+        parts.push(format!("iban {iban}"));
+    }
+    if let Some(text) = &rule.remittance_contains {
+        parts.push(format!("remittance contains {text:?}"));
+    }
+    if let Some(text) = &rule.counterparty_contains {
+        parts.push(format!("counterparty contains {text:?}"));
+    }
+    parts.push(
+        match rule.direction {
+            Some(1) => "money in",
+            Some(-1) => "money out",
+            _ => "either way",
+        }
+        .to_owned(),
+    );
+    if !rule.enabled {
+        parts.push("disabled".to_owned());
+    }
+    parts.join(", ")
+}
+
 /// Runs one bank subcommand.
 fn bank(database: &store::Database, owner: SellerId, command: BankCommand, now: &str) -> Result<(), CliError> {
     let connection = database.connection();
@@ -2559,6 +2652,117 @@ fn bank(database: &store::Database, owner: SellerId, command: BankCommand, now: 
             store::unmatch(connection, owner, &allocation, "cli", now)?;
             println!("unmatched allocation {allocation}");
             println!("the invoice is open again and the reversal is on the record");
+            Ok(())
+        }
+        BankCommand::Rule { command } => match command {
+            RuleCommand::Add {
+                name,
+                iban,
+                remittance,
+                counterparty,
+                direction,
+                account,
+            } => {
+                let direction = match direction.as_deref() {
+                    None => None,
+                    Some("in") | Some("credit") => Some(1),
+                    Some("out") | Some("debit") => Some(-1),
+                    Some(other) => {
+                        return Err(CliError::Input(format!("direction {other:?} is not `in` or `out`")));
+                    }
+                };
+                let rule = store::bank_rule::add(
+                    connection,
+                    owner,
+                    &store::bank_rule::RuleDefinition {
+                        name,
+                        direction,
+                        counterparty_iban: iban,
+                        remittance_contains: remittance,
+                        counterparty_contains: counterparty,
+                        account_code: account,
+                    },
+                    "cli",
+                    now,
+                )?;
+                println!("rule:    {}", rule.name);
+                println!("account: {}", rule.account_code);
+                println!("order:   {}", rule.position);
+                Ok(())
+            }
+            RuleCommand::List => {
+                let rules = store::bank_rule::list(connection, owner)?;
+                if rules.is_empty() {
+                    println!(
+                        "no bank rules; add one with `bonk ledger bank rule add --name <name> --account <code> --remittance <text>`"
+                    );
+                    return Ok(());
+                }
+                for rule in rules {
+                    println!("{:<24} {:<6} {}", rule.name, rule.account_code, matchers(&rule));
+                }
+                Ok(())
+            }
+            RuleCommand::Rm { name } => {
+                store::bank_rule::remove(connection, owner, &name, "cli", now)?;
+                println!("removed rule {name}");
+                println!("lines it already classified keep their entry; correct them with `bank unclassify`");
+                Ok(())
+            }
+        },
+        BankCommand::Classify { dry_run, transaction } => {
+            let outcomes = match transaction {
+                Some(id) => vec![store::bank_rule::classify_one(
+                    connection, owner, &id, dry_run, "cli", now,
+                )?],
+                None => store::bank_rule::classify(connection, owner, dry_run, "cli", now)?,
+            };
+            let mut posted = 0_usize;
+            let mut ambiguous = 0_usize;
+            let mut reserved = 0_usize;
+            let mut unmatched = 0_usize;
+            for outcome in &outcomes {
+                match outcome {
+                    store::bank_rule::Classification::Posted(classified) => {
+                        posted += 1;
+                        println!(
+                            "{:<38} {:>14} -> {:<6} {}",
+                            classified.transaction_id,
+                            amount_text(classified.amount.micros(), classified.amount.currency())?,
+                            classified.account_code,
+                            classified.rule
+                        );
+                    }
+                    store::bank_rule::Classification::Ambiguous { transaction_id, rules } => {
+                        ambiguous += 1;
+                        println!(
+                            "{:<38} ambiguous: {} (nothing posted)",
+                            transaction_id,
+                            rules.join(", ")
+                        );
+                    }
+                    store::bank_rule::Classification::Reserved { transaction_id, number } => {
+                        reserved += 1;
+                        println!("{:<38} proposed for {number}; match it instead", transaction_id);
+                    }
+                    store::bank_rule::Classification::NoRule { transaction_id } => {
+                        unmatched += 1;
+                        println!("{:<38} no rule", transaction_id);
+                    }
+                }
+            }
+            if dry_run {
+                println!("dry run: nothing was posted");
+            }
+            println!("posted: {posted}, ambiguous: {ambiguous}, reserved: {reserved}, no rule: {unmatched}");
+            Ok(())
+        }
+        BankCommand::Unclassify { transaction, reason } => {
+            let undone = store::bank_rule::unclassify(connection, owner, &transaction, &reason, "cli", now)?;
+            println!("unclassified {}", undone.transaction_id);
+            println!("reversed:  BNK {}", undone.entry_id);
+            println!("reversal:  BNK {}", undone.reversal_id);
+            println!("the line is back in the queue");
             Ok(())
         }
         BankCommand::Profile { command } => match command {
