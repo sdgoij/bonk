@@ -532,7 +532,8 @@ mod tests {
     use proptest::prelude::*;
 
     use super::*;
-    use crate::ubl::{UblInvoice, UblLine, UblPrecedingInvoice, write_invoice};
+    use crate::invoice::{Invoice, InvoiceLine, InvoiceReference};
+    use crate::ubl::write_invoice;
 
     fn endpoint_party(name: &str, endpoint: &str) -> Party {
         let mut party = Party::new(
@@ -572,7 +573,7 @@ mod tests {
 
     fn written(doc_type: DocType) -> String {
         let treatment = treatment();
-        let line = UblLine {
+        let line = InvoiceLine {
             id: 1,
             name: "Consulting",
             description: Some("Advice"),
@@ -587,7 +588,7 @@ mod tests {
         let totals = totals();
         let seller = endpoint_party("Seller BV", "0106:12345678");
         let customer = endpoint_party("Customer BV", "0106:87654321");
-        let invoice = UblInvoice {
+        let invoice = Invoice {
             number: if doc_type == DocType::Invoice {
                 "2026-0001"
             } else {
@@ -601,7 +602,7 @@ mod tests {
             buyer_reference: Some("PO-1"),
             order_reference: None,
             note: None,
-            preceding_invoice: (doc_type == DocType::CreditNote).then_some(UblPrecedingInvoice {
+            preceding_invoice: (doc_type == DocType::CreditNote).then_some(InvoiceReference {
                 number: "2026-0007",
                 issue_date: LocalDate::parse_iso("2026-09-30").expect("preceding date"),
             }),
@@ -687,7 +688,7 @@ mod tests {
     #[test]
     fn an_exemption_reason_reaches_the_line_it_belongs_to() {
         let treatment = TaxTreatment::zero(VatCategory::Exempt).with_exemption_reason("Exempt supply");
-        let line = UblLine {
+        let line = InvoiceLine {
             id: 1,
             name: "Consulting",
             description: None,
@@ -712,7 +713,7 @@ mod tests {
         };
         let seller = endpoint_party("Seller BV", "0106:12345678");
         let customer = endpoint_party("Customer BV", "0106:87654321");
-        let invoice = UblInvoice {
+        let invoice = Invoice {
             number: "2026-0001",
             issue_date: LocalDate::parse_iso("2026-10-27").expect("date"),
             due_date: None,

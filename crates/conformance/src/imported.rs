@@ -87,7 +87,7 @@ mod tests {
         Address, CountryCode, Currency, CustomerId, DocType, DraftLine, InvoiceDraft, InvoiceTotals, LineId, LocalDate,
         Money, Party, Quantity, SellerId, TaxBreakdown, TaxTreatment, UnitCode, VatCategory, VatRate, calculate_totals,
     };
-    use syntax::{UblInvoice, UblLine, write_invoice};
+    use syntax::{Invoice, InvoiceLine, write_ubl};
 
     use super::*;
     use crate::validate::validate;
@@ -110,7 +110,7 @@ mod tests {
     /// A UBL invoice that satisfies the rules, written by our own writer.
     fn written() -> String {
         let treatment = TaxTreatment::standard(VatRate::STANDARD_NL);
-        let line = UblLine {
+        let line = InvoiceLine {
             id: 1,
             name: "Consulting",
             description: None,
@@ -135,7 +135,7 @@ mod tests {
         };
         let seller = party("Seller BV");
         let customer = party("Customer BV");
-        let invoice = UblInvoice {
+        let invoice = Invoice {
             number: "2026-0001",
             issue_date: LocalDate::parse_iso("2026-10-27").expect("date"),
             due_date: Some(LocalDate::parse_iso("2026-11-26").expect("due")),
@@ -151,7 +151,7 @@ mod tests {
             lines: &lines,
             totals: &totals,
         };
-        write_invoice(&invoice).expect("the writer accepts its own view")
+        write_ubl(&invoice).expect("the writer accepts its own view")
     }
 
     fn codes(xml: &str) -> Vec<&'static str> {

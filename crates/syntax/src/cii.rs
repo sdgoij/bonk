@@ -1,15 +1,22 @@
-//! CII D16B reader: a received CrossIndustryInvoice becomes the terms we model.
+//! CII D16B: reading a received CrossIndustryInvoice, and writing one.
 //!
 //! Factur-X and ZUGFeRD carry EN 16931 in CII, and some access points send CII
 //! directly. The business terms are the same as in UBL — the BT/BG numbers do
 //! not change — so this reader maps element names onto the same
 //! [`ImportedInvoice`] the UBL reader produces, and the rest of the pipeline
 //! never learns which syntax arrived.
+//!
+//! The writer is the other direction and produces the payload a Factur-X PDF
+//! carries. Like the UBL writer it is a straight-line serialiser with a fixed
+//! element order, so the same invoice hashes the same.
 
 use crux::{
     Address, CountryCode, Currency, DocType, InvoiceTotals, LocalDate, Money, Party, Quantity, TaxBreakdown,
     TaxTreatment, UnitCode, VatCategory, VatRate,
 };
+
+use crate::invoice::{Invoice, InvoiceLine, exemption_reason};
+use crate::xml;
 
 use crate::dom::{Node, money, namespace, text};
 use crate::read::{ImportError, ImportedInvoice, ImportedLine, ImportedReference};
@@ -161,8 +168,16 @@ fn line(item: &Node, currency: Currency, index: usize) -> Result<ImportedLine, I
     let settlement = item
         .first("SpecifiedLineTradeSettlement")
         .ok_or(ImportError::Missing("ram:SpecifiedLineTradeSettlement"))?;
-    let line_net = money(settlement.first("LineTotalAmount"), currency, "ram:LineTotalAmount")?
-        .ok_or(ImportError::Missing("ram:LineTotalAmount"))?;
+    // EN 16931 puts the line total inside the line's monetary summation; a
+    // hand-written document may put it directly under the settlement, so both are
+    // read.
+    let line_total = settlement.first("LineTotalAmount").or_else(|| {
+        settlement
+            .first("SpecifiedTradeSettlementLineMonetarySummation")
+            .and_then(|summation| summation.first("LineTotalAmount"))
+    });
+    let line_net =
+        money(line_total, currency, "ram:LineTotalAmount")?.ok_or(ImportError::Missing("ram:LineTotalAmount"))?;
 
     let tax = settlement.first("ApplicableTradeTax");
     let vat_category = tax
@@ -284,6 +299,15 @@ fn party(agreement: &Node, wrapper: &str) -> Option<Party> {
     parsed.trading_name = party
         .first("SpecifiedLegalOrganization")
         .and_then(|legal| text(legal, "TradingBusinessName"));
+    if let Some(contact) = party.first("DefinedTradeContact") {
+        parsed.contact_name = text(contact, "PersonName");
+        parsed.phone = contact
+            .first("TelephoneUniversalCommunication")
+            .and_then(|phone| text(phone, "CompleteNumber"));
+        parsed.email = contact
+            .first("EmailURIUniversalCommunication")
+            .and_then(|email| text(email, "URIID"));
+    }
     parsed.vat_id = party
         .children("SpecifiedTaxRegistration")
         .find(|registration| {
@@ -348,6 +372,305 @@ fn compact_to_iso(value: &str) -> Option<String> {
 
 fn invalid(field: &'static str, detail: String) -> ImportError {
     ImportError::Invalid { field, value: detail }
+}
+
+/// The EN 16931 guideline identifier written into BT-24 (Factur-X's profile).
+pub const EN16931_GUIDELINE: &str = "urn:cen.eu:en16931:2017";
+
+/// Problems that prevent serialisation.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum CiiError {
+    /// A credit note must name the invoice it corrects (BG-3).
+    CreditNoteWithoutPrecedingInvoice,
+    /// A Peppol endpoint identifier must look like `EAS:value`.
+    MalformedEndpoint,
+}
+
+impl std::fmt::Display for CiiError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::CreditNoteWithoutPrecedingInvoice => f.write_str("a credit note needs a preceding invoice reference"),
+            Self::MalformedEndpoint => f.write_str("a Peppol endpoint identifier must be written as EAS:value"),
+        }
+    }
+}
+
+impl std::error::Error for CiiError {}
+
+/// Serialises an invoice or credit note as CII D16B.
+pub fn write_invoice(invoice: &Invoice<'_>) -> Result<String, CiiError> {
+    let credit_note = invoice.doc_type.is_credit_note();
+    if credit_note && invoice.preceding_invoice.is_none() {
+        return Err(CiiError::CreditNoteWithoutPrecedingInvoice);
+    }
+
+    let mut out = String::with_capacity(8192);
+    out.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
+    out.push_str("<rsm:CrossIndustryInvoice");
+    out.push_str(" xmlns:rsm=\"urn:un:unece:uncefact:data:standard:CrossIndustryInvoice:100\"");
+    out.push_str(" xmlns:ram=\"urn:un:unece:uncefact:data:standard:ReusableAggregateBusinessInformationEntity:100\"");
+    out.push_str(" xmlns:udt=\"urn:un:unece:uncefact:data:standard:UnqualifiedDataType:100\">\n");
+
+    xml::open(&mut out, 1, "rsm:ExchangedDocumentContext");
+    xml::open(&mut out, 2, "ram:GuidelineSpecifiedDocumentContextParameter");
+    xml::text(&mut out, 3, "ram:ID", EN16931_GUIDELINE);
+    xml::close(&mut out, 2, "ram:GuidelineSpecifiedDocumentContextParameter");
+    xml::close(&mut out, 1, "rsm:ExchangedDocumentContext");
+
+    xml::open(&mut out, 1, "rsm:ExchangedDocument");
+    xml::text(&mut out, 2, "ram:ID", invoice.number);
+    xml::text(&mut out, 2, "ram:TypeCode", invoice.doc_type.code());
+    xml::open(&mut out, 2, "ram:IssueDateTime");
+    cii_date(&mut out, 3, invoice.issue_date);
+    xml::close(&mut out, 2, "ram:IssueDateTime");
+    if let Some(note) = invoice.note {
+        xml::open(&mut out, 2, "ram:IncludedNote");
+        xml::text(&mut out, 3, "ram:Content", note);
+        xml::close(&mut out, 2, "ram:IncludedNote");
+    }
+    xml::close(&mut out, 1, "rsm:ExchangedDocument");
+
+    xml::open(&mut out, 1, "rsm:SupplyChainTradeTransaction");
+    for line in invoice.lines {
+        line_item(&mut out, line);
+    }
+    agreement(&mut out, invoice)?;
+    delivery(&mut out, invoice);
+    settlement(&mut out, invoice);
+    xml::close(&mut out, 1, "rsm:SupplyChainTradeTransaction");
+
+    out.push_str("</rsm:CrossIndustryInvoice>\n");
+    Ok(out)
+}
+
+/// One line, in the element order the CII schema declares.
+fn line_item(out: &mut String, line: &InvoiceLine<'_>) {
+    xml::open(out, 2, "ram:IncludedSupplyChainTradeLineItem");
+    xml::open(out, 3, "ram:AssociatedDocumentLineDocument");
+    xml::text(out, 4, "ram:LineID", &line.id.to_string());
+    xml::close(out, 3, "ram:AssociatedDocumentLineDocument");
+
+    xml::open(out, 3, "ram:SpecifiedTradeProduct");
+    xml::text(out, 4, "ram:Name", line.name);
+    if let Some(description) = line.description {
+        xml::text(out, 4, "ram:Description", description);
+    }
+    xml::close(out, 3, "ram:SpecifiedTradeProduct");
+
+    xml::open(out, 3, "ram:SpecifiedLineTradeAgreement");
+    xml::open(out, 4, "ram:NetPriceProductTradePrice");
+    xml::money(out, 5, "ram:ChargeAmount", line.unit_price);
+    xml::text_attrs(
+        out,
+        5,
+        "ram:BasisQuantity",
+        &[("unitCode", line.unit.as_str())],
+        &line.base_quantity.to_trimmed_string(),
+    );
+    xml::close(out, 4, "ram:NetPriceProductTradePrice");
+    xml::close(out, 3, "ram:SpecifiedLineTradeAgreement");
+
+    xml::open(out, 3, "ram:SpecifiedLineTradeDelivery");
+    xml::text_attrs(
+        out,
+        4,
+        "ram:BilledQuantity",
+        &[("unitCode", line.unit.as_str())],
+        &line.quantity.to_trimmed_string(),
+    );
+    xml::close(out, 3, "ram:SpecifiedLineTradeDelivery");
+
+    xml::open(out, 3, "ram:SpecifiedLineTradeSettlement");
+    xml::open(out, 4, "ram:ApplicableTradeTax");
+    xml::text(out, 5, "ram:TypeCode", "VAT");
+    xml::text(out, 5, "ram:CategoryCode", line.treatment.category.code());
+    if line.treatment.category != VatCategory::OutsideScope {
+        xml::text(
+            out,
+            5,
+            "ram:RateApplicablePercent",
+            &xml::rate_basis_points(line.treatment.rate.basis_points()),
+        );
+    }
+    xml::close(out, 4, "ram:ApplicableTradeTax");
+    xml::open(out, 4, "ram:SpecifiedTradeSettlementLineMonetarySummation");
+    xml::money(out, 5, "ram:LineTotalAmount", line.line_net);
+    xml::close(out, 4, "ram:SpecifiedTradeSettlementLineMonetarySummation");
+    xml::close(out, 3, "ram:SpecifiedLineTradeSettlement");
+    xml::close(out, 2, "ram:IncludedSupplyChainTradeLineItem");
+}
+
+fn agreement(out: &mut String, invoice: &Invoice<'_>) -> Result<(), CiiError> {
+    xml::open(out, 2, "ram:ApplicableHeaderTradeAgreement");
+    if let Some(reference) = invoice.buyer_reference {
+        xml::text(out, 3, "ram:BuyerReference", reference);
+    }
+    trade_party(out, "ram:SellerTradeParty", invoice.seller, true)?;
+    trade_party(out, "ram:BuyerTradeParty", invoice.customer, false)?;
+    if let Some(order) = invoice.order_reference {
+        xml::open(out, 3, "ram:SellerOrderReferencedDocument");
+        xml::text(out, 4, "ram:IssuerAssignedID", order);
+        xml::close(out, 3, "ram:SellerOrderReferencedDocument");
+    }
+    xml::close(out, 2, "ram:ApplicableHeaderTradeAgreement");
+    Ok(())
+}
+
+/// A party, in the element order `TradePartyType` declares.
+///
+/// `ram:Name` is the registered name (BT-27/BT-44), because that is what the
+/// schema means by it; a trading name is a separate term (BT-28/BT-45) and lives
+/// inside the legal organization.
+fn trade_party(out: &mut String, wrapper: &str, party: &Party, is_seller: bool) -> Result<(), CiiError> {
+    let endpoint = match &party.peppol_id {
+        Some(_) => Some(party.peppol_endpoint().ok_or(CiiError::MalformedEndpoint)?),
+        None => None,
+    };
+
+    xml::open(out, 3, wrapper);
+    // BT-29: the seller's identifier, which for a Dutch business is its KvK number.
+    if is_seller && let Some(kvk) = &party.kvk_number {
+        xml::text_attrs(out, 4, "ram:ID", &[("schemeID", "0106")], kvk);
+    }
+    xml::text(out, 4, "ram:Name", &party.legal_name);
+
+    if (is_seller && party.kvk_number.is_some()) || party.trading_name.is_some() {
+        xml::open(out, 4, "ram:SpecifiedLegalOrganization");
+        if is_seller && let Some(kvk) = &party.kvk_number {
+            xml::text_attrs(out, 5, "ram:ID", &[("schemeID", "0106")], kvk);
+        }
+        if let Some(trading) = &party.trading_name {
+            xml::text(out, 5, "ram:TradingBusinessName", trading);
+        }
+        xml::close(out, 4, "ram:SpecifiedLegalOrganization");
+    }
+
+    if party.contact_name.is_some() || party.phone.is_some() || party.email.is_some() {
+        xml::open(out, 4, "ram:DefinedTradeContact");
+        if let Some(contact) = &party.contact_name {
+            xml::text(out, 5, "ram:PersonName", contact);
+        }
+        if let Some(phone) = &party.phone {
+            xml::open(out, 5, "ram:TelephoneUniversalCommunication");
+            xml::text(out, 6, "ram:CompleteNumber", phone);
+            xml::close(out, 5, "ram:TelephoneUniversalCommunication");
+        }
+        if let Some(email) = &party.email {
+            xml::open(out, 5, "ram:EmailURIUniversalCommunication");
+            xml::text(out, 6, "ram:URIID", email);
+            xml::close(out, 5, "ram:EmailURIUniversalCommunication");
+        }
+        xml::close(out, 4, "ram:DefinedTradeContact");
+    }
+
+    xml::open(out, 4, "ram:PostalTradeAddress");
+    if let Some(postal) = &party.address.postal_code {
+        xml::text(out, 5, "ram:PostcodeCode", postal);
+    }
+    if let Some(street) = &party.address.street {
+        xml::text(out, 5, "ram:LineOne", street);
+    }
+    xml::text(out, 5, "ram:CityName", &party.address.city);
+    xml::text(out, 5, "ram:CountryID", party.address.country.as_str());
+    xml::close(out, 4, "ram:PostalTradeAddress");
+
+    if let Some((scheme, value)) = endpoint {
+        xml::open(out, 4, "ram:URIUniversalCommunication");
+        xml::text_attrs(out, 5, "ram:URIID", &[("schemeID", scheme)], value);
+        xml::close(out, 4, "ram:URIUniversalCommunication");
+    }
+    if let Some(vat_id) = &party.vat_id {
+        xml::open(out, 4, "ram:SpecifiedTaxRegistration");
+        xml::text_attrs(out, 5, "ram:ID", &[("schemeID", "VA")], vat_id);
+        xml::close(out, 4, "ram:SpecifiedTaxRegistration");
+    }
+
+    xml::close(out, 3, wrapper);
+    Ok(())
+}
+
+fn delivery(out: &mut String, invoice: &Invoice<'_>) {
+    xml::open(out, 2, "ram:ApplicableHeaderTradeDelivery");
+    if let Some(delivered) = invoice.delivery_date {
+        xml::open(out, 3, "ram:ActualDeliverySupplyChainEvent");
+        xml::open(out, 4, "ram:OccurrenceDateTime");
+        cii_date(out, 5, delivered);
+        xml::close(out, 4, "ram:OccurrenceDateTime");
+        xml::close(out, 3, "ram:ActualDeliverySupplyChainEvent");
+    }
+    xml::close(out, 2, "ram:ApplicableHeaderTradeDelivery");
+}
+
+fn settlement(out: &mut String, invoice: &Invoice<'_>) {
+    let currency = invoice.currency.as_str();
+    xml::open(out, 2, "ram:ApplicableHeaderTradeSettlement");
+    xml::text(out, 3, "ram:InvoiceCurrencyCode", currency);
+
+    for row in &invoice.totals.breakdown {
+        let exemption = exemption_reason(invoice, row);
+        xml::open(out, 3, "ram:ApplicableTradeTax");
+        xml::money(out, 4, "ram:CalculatedAmount", row.tax);
+        xml::text(out, 4, "ram:TypeCode", "VAT");
+        if let Some((_, reason)) = exemption
+            && let Some(reason) = reason
+        {
+            xml::text(out, 4, "ram:ExemptionReason", reason);
+        }
+        xml::money(out, 4, "ram:BasisAmount", row.taxable_base);
+        xml::text(out, 4, "ram:CategoryCode", row.category.code());
+        if let Some((code, _)) = exemption
+            && let Some(code) = code
+        {
+            xml::text(out, 4, "ram:ExemptionReasonCode", code);
+        }
+        if row.category != VatCategory::OutsideScope {
+            xml::text(
+                out,
+                4,
+                "ram:RateApplicablePercent",
+                &xml::rate_basis_points(row.rate_bp),
+            );
+        }
+        xml::close(out, 3, "ram:ApplicableTradeTax");
+    }
+
+    if let Some(due) = invoice.due_date {
+        xml::open(out, 3, "ram:SpecifiedTradePaymentTerms");
+        xml::open(out, 4, "ram:DueDateDateTime");
+        cii_date(out, 5, due);
+        xml::close(out, 4, "ram:DueDateDateTime");
+        xml::close(out, 3, "ram:SpecifiedTradePaymentTerms");
+    }
+
+    xml::open(out, 3, "ram:SpecifiedTradeSettlementHeaderMonetarySummation");
+    xml::money(out, 4, "ram:LineTotalAmount", invoice.totals.net);
+    xml::money(out, 4, "ram:TaxBasisTotalAmount", invoice.totals.net);
+    xml::amount(out, 4, "ram:TaxTotalAmount", currency, invoice.totals.tax);
+    xml::money(out, 4, "ram:GrandTotalAmount", invoice.totals.gross);
+    xml::money(out, 4, "ram:DuePayableAmount", invoice.totals.gross);
+    xml::close(out, 3, "ram:SpecifiedTradeSettlementHeaderMonetarySummation");
+
+    // BG-3 comes after the summation, which is where the schema puts it.
+    if let Some(preceding) = &invoice.preceding_invoice {
+        xml::open(out, 3, "ram:InvoiceReferencedDocument");
+        xml::text(out, 4, "ram:IssuerAssignedID", preceding.number);
+        xml::open(out, 4, "ram:FormattedIssueDateTime");
+        cii_date(out, 5, preceding.issue_date);
+        xml::close(out, 4, "ram:FormattedIssueDateTime");
+        xml::close(out, 3, "ram:InvoiceReferencedDocument");
+    }
+
+    xml::close(out, 2, "ram:ApplicableHeaderTradeSettlement");
+}
+
+/// A CII date: `CCYYMMDD` under `format="102"`.
+fn cii_date(out: &mut String, depth: usize, value: LocalDate) {
+    let compact: String = value
+        .to_iso_string()
+        .chars()
+        .filter(|character| *character != '-')
+        .collect();
+    xml::text_attrs(out, depth, "udt:DateTimeString", &[("format", "102")], &compact);
 }
 
 #[cfg(test)]
@@ -616,5 +939,318 @@ mod tests {
     fn a_dtd_in_cii_is_still_rejected() {
         let xml = "<?xml version=\"1.0\"?><!DOCTYPE foo [<!ENTITY x \"y\">]><rsm:CrossIndustryInvoice/>";
         assert_eq!(read_document(xml), Err(ImportError::Doctype));
+    }
+
+    /// The view the writer tests serialise: the same invoice the reader fixture
+    /// describes, so the two halves can be compared term by term.
+    fn round_trip() -> (String, ImportedInvoice) {
+        let mut seller = Party::new(
+            "Seller BV",
+            Address {
+                street: Some("Main 1".to_owned()),
+                city: "Amsterdam".to_owned(),
+                postal_code: Some("1000 AA".to_owned()),
+                country: CountryCode::NL,
+            },
+        );
+        seller.vat_id = Some("NL123456782B01".to_owned());
+        seller.kvk_number = Some("12345678".to_owned());
+        seller.peppol_id = Some("0106:12345678".to_owned());
+        let customer = Party::new(
+            "Customer BV",
+            Address {
+                street: Some("Buyer 1".to_owned()),
+                city: "Rotterdam".to_owned(),
+                postal_code: Some("3000 AA".to_owned()),
+                country: CountryCode::NL,
+            },
+        );
+
+        let treatment = TaxTreatment::standard(VatRate::STANDARD_NL);
+        let line = InvoiceLine {
+            id: 1,
+            name: "Consulting",
+            description: Some("Advice"),
+            quantity: Quantity::from_units(2).unwrap(),
+            unit: UnitCode::PIECE,
+            unit_price: Money::from_major_units(50, Currency::EUR).unwrap(),
+            base_quantity: Quantity::ONE,
+            line_net: Money::from_major_units(100, Currency::EUR).unwrap(),
+            treatment: &treatment,
+        };
+        let lines = [line];
+        let totals = InvoiceTotals {
+            net: Money::from_major_units(100, Currency::EUR).unwrap(),
+            tax: Money::from_major_units(21, Currency::EUR).unwrap(),
+            gross: Money::from_major_units(121, Currency::EUR).unwrap(),
+            breakdown: vec![TaxBreakdown {
+                category: VatCategory::Standard,
+                rate_bp: 2100,
+                taxable_base: Money::from_major_units(100, Currency::EUR).unwrap(),
+                tax: Money::from_major_units(21, Currency::EUR).unwrap(),
+            }],
+        };
+        let invoice = Invoice {
+            number: "2026-0001",
+            issue_date: LocalDate::parse_iso("2026-10-27").unwrap(),
+            due_date: Some(LocalDate::parse_iso("2026-11-26").unwrap()),
+            delivery_date: Some(LocalDate::parse_iso("2026-10-25").unwrap()),
+            doc_type: DocType::Invoice,
+            currency: Currency::EUR,
+            buyer_reference: Some("PO-1"),
+            order_reference: Some("ORDER-7"),
+            note: Some("Thank you"),
+            preceding_invoice: None,
+            seller: &seller,
+            customer: &customer,
+            lines: &lines,
+            totals: &totals,
+        };
+
+        let xml = write_invoice(&invoice).expect("the writer accepts its own view");
+        let imported = read_document(&xml).expect("the writer's output reads back").invoice;
+        (xml, imported)
+    }
+
+    #[test]
+    fn what_the_writer_emits_is_what_the_reader_reads() {
+        let (_, invoice) = round_trip();
+
+        assert_eq!(invoice.doc_type, DocType::Invoice);
+        assert_eq!(invoice.number, "2026-0001");
+        assert_eq!(invoice.issue_date, LocalDate::parse_iso("2026-10-27").unwrap());
+        assert_eq!(invoice.due_date, Some(LocalDate::parse_iso("2026-11-26").unwrap()));
+        assert_eq!(invoice.delivery_date, Some(LocalDate::parse_iso("2026-10-25").unwrap()));
+        assert_eq!(invoice.currency, Currency::EUR);
+        assert_eq!(invoice.buyer_reference.as_deref(), Some("PO-1"));
+        assert_eq!(invoice.order_reference.as_deref(), Some("ORDER-7"));
+        assert_eq!(invoice.note.as_deref(), Some("Thank you"));
+        assert_eq!(invoice.profile.as_deref(), Some(EN16931_GUIDELINE));
+
+        let seller = &invoice.seller;
+        assert_eq!(seller.legal_name, "Seller BV");
+        assert_eq!(seller.vat_id.as_deref(), Some("NL123456782B01"));
+        assert_eq!(seller.kvk_number.as_deref(), Some("12345678"));
+        assert_eq!(seller.peppol_id.as_deref(), Some("0106:12345678"));
+        assert_eq!(seller.address.street.as_deref(), Some("Main 1"));
+        assert_eq!(seller.address.city, "Amsterdam");
+        assert_eq!(seller.address.postal_code.as_deref(), Some("1000 AA"));
+        assert_eq!(seller.address.country, CountryCode::NL);
+        assert_eq!(invoice.customer.legal_name, "Customer BV");
+        assert_eq!(invoice.customer.address.city, "Rotterdam");
+
+        assert_eq!(invoice.lines.len(), 1);
+        let line = &invoice.lines[0];
+        assert_eq!(line.position, 1);
+        assert_eq!(line.name, "Consulting");
+        assert_eq!(line.description.as_deref(), Some("Advice"));
+        assert_eq!(line.quantity, Quantity::from_units(2).unwrap());
+        assert_eq!(line.unit, UnitCode::PIECE);
+        assert_eq!(line.unit_price.micros(), 50_000_000);
+        assert_eq!(line.line_net.micros(), 100_000_000);
+        assert_eq!(line.treatment.category, VatCategory::Standard);
+        assert_eq!(line.treatment.rate, VatRate::STANDARD_NL);
+
+        assert_eq!(invoice.totals.net.micros(), 100_000_000);
+        assert_eq!(invoice.totals.tax.micros(), 21_000_000);
+        assert_eq!(invoice.totals.gross.micros(), 121_000_000);
+        assert_eq!(invoice.totals.breakdown.len(), 1);
+        assert_eq!(invoice.totals.breakdown[0].rate_bp, 2100);
+    }
+
+    #[test]
+    fn the_writer_is_byte_stable() {
+        let (first, _) = round_trip();
+        let (second, _) = round_trip();
+        assert_eq!(first, second, "the same invoice must serialise to the same bytes");
+    }
+
+    #[test]
+    fn the_document_has_the_shape_en_16931_declares() {
+        let (xml, _) = round_trip();
+        assert!(xml.contains("<ram:ID>urn:cen.eu:en16931:2017</ram:ID>"), "{xml}");
+        assert!(
+            xml.contains("<ram:SpecifiedTradeSettlementLineMonetarySummation>"),
+            "the line total sits in the summation the schema declares: {xml}"
+        );
+        assert!(
+            xml.contains(r#"<ram:BilledQuantity unitCode="C62">2</ram:BilledQuantity>"#),
+            "{xml}"
+        );
+        assert!(
+            xml.contains(r#"<ram:TaxTotalAmount currencyID="EUR">21.00</ram:TaxTotalAmount>"#),
+            "{xml}"
+        );
+        assert!(
+            xml.contains(r#"<ram:ID schemeID="0106">12345678</ram:ID>"#),
+            "the KvK carries its scheme: {xml}"
+        );
+    }
+
+    #[test]
+    fn a_credit_note_needs_and_carries_its_preceding_invoice() {
+        // The writer refuses BG-3 before it writes anything.
+        let seller = Party::new("Seller BV", Address::new("Amsterdam", CountryCode::NL));
+        let customer = Party::new("Customer BV", Address::new("Rotterdam", CountryCode::NL));
+        let treatment = TaxTreatment::standard(VatRate::STANDARD_NL);
+        let line = InvoiceLine {
+            id: 1,
+            name: "Consulting",
+            description: None,
+            quantity: Quantity::ONE,
+            unit: UnitCode::PIECE,
+            unit_price: Money::from_major_units(100, Currency::EUR).unwrap(),
+            base_quantity: Quantity::ONE,
+            line_net: Money::from_major_units(100, Currency::EUR).unwrap(),
+            treatment: &treatment,
+        };
+        let lines = [line];
+        let totals = InvoiceTotals {
+            net: Money::from_major_units(100, Currency::EUR).unwrap(),
+            tax: Money::from_major_units(21, Currency::EUR).unwrap(),
+            gross: Money::from_major_units(121, Currency::EUR).unwrap(),
+            breakdown: vec![TaxBreakdown {
+                category: VatCategory::Standard,
+                rate_bp: 2100,
+                taxable_base: Money::from_major_units(100, Currency::EUR).unwrap(),
+                tax: Money::from_major_units(21, Currency::EUR).unwrap(),
+            }],
+        };
+        let mut invoice = Invoice {
+            number: "2026-0002",
+            issue_date: LocalDate::parse_iso("2026-10-27").unwrap(),
+            due_date: None,
+            delivery_date: None,
+            doc_type: DocType::CreditNote,
+            currency: Currency::EUR,
+            buyer_reference: None,
+            order_reference: None,
+            note: None,
+            preceding_invoice: None,
+            seller: &seller,
+            customer: &customer,
+            lines: &lines,
+            totals: &totals,
+        };
+        assert_eq!(
+            write_invoice(&invoice),
+            Err(CiiError::CreditNoteWithoutPrecedingInvoice)
+        );
+
+        invoice.preceding_invoice = Some(crate::InvoiceReference {
+            number: "2026-0001",
+            issue_date: LocalDate::parse_iso("2026-09-30").unwrap(),
+        });
+        let xml = write_invoice(&invoice).unwrap();
+        let read = read_document(&xml).expect("the credit note reads back").invoice;
+        assert_eq!(read.doc_type, DocType::CreditNote);
+        let preceding = read.preceding.expect("BG-3");
+        assert_eq!(preceding.number, "2026-0001");
+        assert_eq!(preceding.issue_date, Some(LocalDate::parse_iso("2026-09-30").unwrap()));
+    }
+
+    #[test]
+    fn an_exemption_reason_is_written_on_the_breakdown_row() {
+        let seller = Party::new("Seller BV", Address::new("Amsterdam", CountryCode::NL));
+        let customer = Party::new("Customer BV", Address::new("Rotterdam", CountryCode::NL));
+        let treatment = TaxTreatment::zero(VatCategory::Exempt).with_exemption_reason("Exempt supply");
+        let line = InvoiceLine {
+            id: 1,
+            name: "Consulting",
+            description: None,
+            quantity: Quantity::ONE,
+            unit: UnitCode::PIECE,
+            unit_price: Money::from_major_units(100, Currency::EUR).unwrap(),
+            base_quantity: Quantity::ONE,
+            line_net: Money::from_major_units(100, Currency::EUR).unwrap(),
+            treatment: &treatment,
+        };
+        let lines = [line];
+        let totals = InvoiceTotals {
+            net: Money::from_major_units(100, Currency::EUR).unwrap(),
+            tax: Money::zero(Currency::EUR),
+            gross: Money::from_major_units(100, Currency::EUR).unwrap(),
+            breakdown: vec![TaxBreakdown {
+                category: VatCategory::Exempt,
+                rate_bp: 0,
+                taxable_base: Money::from_major_units(100, Currency::EUR).unwrap(),
+                tax: Money::zero(Currency::EUR),
+            }],
+        };
+        let invoice = Invoice {
+            number: "2026-0003",
+            issue_date: LocalDate::parse_iso("2026-10-27").unwrap(),
+            due_date: None,
+            delivery_date: None,
+            doc_type: DocType::Invoice,
+            currency: Currency::EUR,
+            buyer_reference: None,
+            order_reference: None,
+            note: None,
+            preceding_invoice: None,
+            seller: &seller,
+            customer: &customer,
+            lines: &lines,
+            totals: &totals,
+        };
+
+        let xml = write_invoice(&invoice).unwrap();
+        assert!(
+            xml.contains("<ram:ExemptionReason>Exempt supply</ram:ExemptionReason>"),
+            "{xml}"
+        );
+        assert!(xml.contains("<ram:CategoryCode>E</ram:CategoryCode>"), "{xml}");
+        let read = read_document(&xml).expect("the exempt invoice reads back").invoice;
+        assert_eq!(read.totals.breakdown[0].category, VatCategory::Exempt);
+        assert_eq!(read.totals.tax.micros(), 0);
+    }
+
+    #[test]
+    fn an_endpoint_without_a_scheme_is_refused() {
+        let (_, _) = round_trip();
+        let mut seller = Party::new("Seller BV", Address::new("Amsterdam", CountryCode::NL));
+        seller.peppol_id = Some("12345678".to_owned());
+        let customer = Party::new("Customer BV", Address::new("Rotterdam", CountryCode::NL));
+        let treatment = TaxTreatment::standard(VatRate::STANDARD_NL);
+        let line = InvoiceLine {
+            id: 1,
+            name: "Consulting",
+            description: None,
+            quantity: Quantity::ONE,
+            unit: UnitCode::PIECE,
+            unit_price: Money::from_major_units(100, Currency::EUR).unwrap(),
+            base_quantity: Quantity::ONE,
+            line_net: Money::from_major_units(100, Currency::EUR).unwrap(),
+            treatment: &treatment,
+        };
+        let lines = [line];
+        let totals = InvoiceTotals {
+            net: Money::from_major_units(100, Currency::EUR).unwrap(),
+            tax: Money::from_major_units(21, Currency::EUR).unwrap(),
+            gross: Money::from_major_units(121, Currency::EUR).unwrap(),
+            breakdown: vec![TaxBreakdown {
+                category: VatCategory::Standard,
+                rate_bp: 2100,
+                taxable_base: Money::from_major_units(100, Currency::EUR).unwrap(),
+                tax: Money::from_major_units(21, Currency::EUR).unwrap(),
+            }],
+        };
+        let invoice = Invoice {
+            number: "2026-0004",
+            issue_date: LocalDate::parse_iso("2026-10-27").unwrap(),
+            due_date: None,
+            delivery_date: None,
+            doc_type: DocType::Invoice,
+            currency: Currency::EUR,
+            buyer_reference: None,
+            order_reference: None,
+            note: None,
+            preceding_invoice: None,
+            seller: &seller,
+            customer: &customer,
+            lines: &lines,
+            totals: &totals,
+        };
+        assert_eq!(write_invoice(&invoice), Err(CiiError::MalformedEndpoint));
     }
 }

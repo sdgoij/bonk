@@ -21,7 +21,7 @@ use crux::{
 };
 use render::{InvoiceData, Language, LineData, PartyData, PdfRenderer, Renderer};
 use sha2::{Digest, Sha256};
-use syntax::{UblInvoice, UblLine, write_invoice};
+use syntax::{Invoice, InvoiceLine, write_ubl};
 use zeroize::Zeroizing;
 
 uniffi::setup_scaffolding!();
@@ -1444,7 +1444,7 @@ fn sample_artefacts() -> Result<(String, Vec<u8>), AppError> {
     let ubl_lines = lines
         .iter()
         .map(|line| {
-            Ok(UblLine {
+            Ok(InvoiceLine {
                 id: line.position,
                 name: &line.name,
                 description: line.description.as_deref(),
@@ -1460,7 +1460,7 @@ fn sample_artefacts() -> Result<(String, Vec<u8>), AppError> {
         })
         .collect::<Result<Vec<_>, AppError>>()?;
 
-    let ubl = write_invoice(&UblInvoice {
+    let ubl = write_ubl(&Invoice {
         number: "2026-0001",
         issue_date,
         due_date: Some(due_date),

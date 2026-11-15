@@ -8,7 +8,7 @@ use conformance::{Profile, SemanticInvoice};
 use crux::{Finding, InvoiceDraft, InvoiceTotals, LocalDate, Party};
 use render::PdfRenderer;
 use store::{CustomerRecord, DocumentStatus, IssueRequest, IssueView, SellerRecord, StoreError};
-use syntax::{UblInvoice, UblLine, UblPrecedingInvoice, write_invoice};
+use syntax::{Invoice, InvoiceLine, InvoiceReference, write_ubl};
 
 use crate::dto::{DocumentSummary, DraftDto, FindingDto, IssueOutcome};
 use crate::session::Archive;
@@ -159,7 +159,7 @@ pub fn render_issue(view: &IssueView<'_>) -> Result<Vec<u8>, StoreError> {
     let mut lines = Vec::with_capacity(view.draft.lines.len());
     for line in &view.draft.lines {
         let net = line.net().map_err(|error| StoreError::Data(error.to_string()))?;
-        lines.push(UblLine {
+        lines.push(InvoiceLine {
             id: line.position,
             name: &line.name,
             description: line.description.as_deref(),
@@ -172,7 +172,7 @@ pub fn render_issue(view: &IssueView<'_>) -> Result<Vec<u8>, StoreError> {
         });
     }
 
-    let invoice = UblInvoice {
+    let invoice = Invoice {
         number: view.number,
         issue_date: view.draft.issue_date,
         due_date: view.draft.due_date,
@@ -182,21 +182,17 @@ pub fn render_issue(view: &IssueView<'_>) -> Result<Vec<u8>, StoreError> {
         buyer_reference: view.draft.buyer_reference.as_deref(),
         order_reference: view.draft.order_reference.as_deref(),
         note: view.draft.note.as_deref(),
-        preceding_invoice: view
-            .draft
-            .preceding_invoice
-            .as_ref()
-            .map(|preceding| UblPrecedingInvoice {
-                number: &preceding.number,
-                issue_date: preceding.issue_date,
-            }),
+        preceding_invoice: view.draft.preceding_invoice.as_ref().map(|preceding| InvoiceReference {
+            number: &preceding.number,
+            issue_date: preceding.issue_date,
+        }),
         seller: &view.seller.party,
         customer: &view.customer.party,
         lines: &lines,
         totals: view.totals,
     };
 
-    write_invoice(&invoice)
+    write_ubl(&invoice)
         .map(String::into_bytes)
         .map_err(|error| StoreError::Render(error.to_string()))
 }

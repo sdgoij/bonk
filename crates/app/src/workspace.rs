@@ -6798,7 +6798,7 @@ mod tests {
     /// A UBL invoice a supplier would drop into a folder.
     fn dropped_invoice(number: &str) -> String {
         let treatment = TaxTreatment::standard(VatRate::STANDARD_NL);
-        let line = syntax::UblLine {
+        let line = syntax::InvoiceLine {
             id: 1,
             name: "Consulting",
             description: None,
@@ -6841,7 +6841,7 @@ mod tests {
                 country: CountryCode::NL,
             },
         );
-        let invoice = syntax::UblInvoice {
+        let invoice = syntax::Invoice {
             number,
             issue_date: LocalDate::parse_iso("2026-10-27").unwrap(),
             due_date: None,
@@ -6857,7 +6857,7 @@ mod tests {
             lines: &lines,
             totals: &totals,
         };
-        String::from_utf8(syntax::write_invoice(&invoice).unwrap().into_bytes()).unwrap()
+        String::from_utf8(syntax::write_ubl(&invoice).unwrap().into_bytes()).unwrap()
     }
 
     /// The folder watcher is armed from the window and imports what is dropped

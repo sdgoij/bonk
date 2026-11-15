@@ -268,10 +268,10 @@ mod tests {
         use crux::{
             InvoiceTotals, LocalDate, Money, Quantity, TaxBreakdown, TaxTreatment, UnitCode, VatCategory, VatRate,
         };
-        use syntax::{UblInvoice, UblLine, write_invoice};
+        use syntax::{Invoice, InvoiceLine, write_ubl};
 
         let treatment = TaxTreatment::standard(VatRate::STANDARD_NL);
-        let line = UblLine {
+        let line = InvoiceLine {
             id: 1,
             name: "Consulting",
             description: None,
@@ -298,7 +298,7 @@ mod tests {
         let lines = [line];
         let issuer = party(seller, vat, Some("0106:99999999"));
         let recipient = party("Us BV", Some("NL123456782B01"), None);
-        let invoice = UblInvoice {
+        let invoice = Invoice {
             number,
             issue_date: LocalDate::parse_iso("2026-10-27").unwrap(),
             due_date: Some(LocalDate::parse_iso("2026-11-26").unwrap()),
@@ -314,7 +314,7 @@ mod tests {
             lines: &lines,
             totals: &totals,
         };
-        write_invoice(&invoice).unwrap().into_bytes()
+        write_ubl(&invoice).unwrap().into_bytes()
     }
 
     /// The same document in UN/CEFACT CII, as Factur-X and some access points

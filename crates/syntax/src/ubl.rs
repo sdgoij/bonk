@@ -8,69 +8,10 @@
 //! Credit notes share the writer: the root element, the type code element, the
 //! line wrapper, and the quantity element differ, and BG-3 is emitted.
 
-use crux::{Currency, DocType, InvoiceTotals, LocalDate, Money, Party, Quantity, TaxTreatment, UnitCode, VatCategory};
+use crux::{Currency, Party, VatCategory};
 
-/// A document ready to be serialised.
-pub struct UblInvoice<'a> {
-    /// Human-readable invoice number (BT-1).
-    pub number: &'a str,
-    /// Issue date (BT-2).
-    pub issue_date: LocalDate,
-    /// Due date (BT-9).
-    pub due_date: Option<LocalDate>,
-    /// Actual delivery date (BT-72).
-    pub delivery_date: Option<LocalDate>,
-    /// Document type.
-    pub doc_type: DocType,
-    /// Document currency (BT-5).
-    pub currency: Currency,
-    /// Buyer reference (BT-10).
-    pub buyer_reference: Option<&'a str>,
-    /// Purchase order reference (BT-13).
-    pub order_reference: Option<&'a str>,
-    /// Free-text note (BT-22).
-    pub note: Option<&'a str>,
-    /// The invoice this credit note corrects (BG-3).
-    pub preceding_invoice: Option<UblPrecedingInvoice<'a>>,
-    /// Seller.
-    pub seller: &'a Party,
-    /// Customer.
-    pub customer: &'a Party,
-    /// Lines.
-    pub lines: &'a [UblLine<'a>],
-    /// Totals and VAT breakdown.
-    pub totals: &'a InvoiceTotals,
-}
-
-/// The invoice a credit note corrects (BG-3).
-pub struct UblPrecedingInvoice<'a> {
-    /// Preceding invoice number (BT-25).
-    pub number: &'a str,
-    /// Preceding invoice issue date (BT-26).
-    pub issue_date: LocalDate,
-}
-
-/// One invoice line.
-pub struct UblLine<'a> {
-    /// 1-based position.
-    pub id: u32,
-    /// Item name (BT-153).
-    pub name: &'a str,
-    /// Item description (BT-154).
-    pub description: Option<&'a str>,
-    /// Quantity (BT-129).
-    pub quantity: Quantity,
-    /// Unit (BT-130).
-    pub unit: UnitCode,
-    /// Unit price (BT-146).
-    pub unit_price: Money,
-    /// Price base quantity (BT-149).
-    pub base_quantity: Quantity,
-    /// Line net amount (BT-131), already rounded.
-    pub line_net: Money,
-    /// VAT treatment.
-    pub treatment: &'a TaxTreatment,
-}
+use crate::invoice::{Invoice, InvoiceLine, exemption_reason};
+use crate::xml::{amount, close, open, rate_basis_points, text, text_attrs};
 
 /// Problems that prevent serialisation.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -93,7 +34,7 @@ impl std::fmt::Display for UblError {
 impl std::error::Error for UblError {}
 
 /// Serialises an invoice or credit note as UBL 2.1.
-pub fn write_invoice(invoice: &UblInvoice<'_>) -> Result<String, UblError> {
+pub fn write_invoice(invoice: &Invoice<'_>) -> Result<String, UblError> {
     let credit_note = invoice.doc_type.is_credit_note();
     if credit_note && invoice.preceding_invoice.is_none() {
         return Err(UblError::CreditNoteWithoutPrecedingInvoice);
@@ -253,7 +194,7 @@ fn party(out: &mut String, wrapper: &str, party: &Party, is_seller: bool) -> Res
     Ok(())
 }
 
-fn delivery(out: &mut String, invoice: &UblInvoice<'_>) {
+fn delivery(out: &mut String, invoice: &Invoice<'_>) {
     open(out, 1, "cac:Delivery");
     if let Some(date) = invoice.delivery_date {
         text(out, 2, "cbc:ActualDeliveryDate", &date.to_iso_string());
@@ -273,7 +214,7 @@ fn delivery(out: &mut String, invoice: &UblInvoice<'_>) {
     close(out, 1, "cac:Delivery");
 }
 
-fn tax_total(out: &mut String, invoice: &UblInvoice<'_>) {
+fn tax_total(out: &mut String, invoice: &Invoice<'_>) {
     let currency = invoice.currency.as_str();
     open(out, 1, "cac:TaxTotal");
     amount(out, 2, "cbc:TaxAmount", currency, invoice.totals.tax);
@@ -305,43 +246,7 @@ fn tax_total(out: &mut String, invoice: &UblInvoice<'_>) {
     close(out, 1, "cac:TaxTotal");
 }
 
-fn exemption_reason<'a>(
-    invoice: &UblInvoice<'a>,
-    row: &crux::TaxBreakdown,
-) -> Option<(Option<&'a str>, Option<&'a str>)> {
-    invoice
-        .lines
-        .iter()
-        .find(|line| {
-            line.treatment.category == row.category
-                && (row.category != VatCategory::Standard || line.treatment.rate.basis_points() == row.rate_bp)
-                && (line
-                    .treatment
-                    .exemption_reason_code
-                    .as_deref()
-                    .is_some_and(|value| !value.trim().is_empty())
-                    || line
-                        .treatment
-                        .exemption_reason
-                        .as_deref()
-                        .is_some_and(|value| !value.trim().is_empty()))
-        })
-        .map(|line| {
-            let code = line
-                .treatment
-                .exemption_reason_code
-                .as_deref()
-                .filter(|value| !value.trim().is_empty());
-            let reason = line
-                .treatment
-                .exemption_reason
-                .as_deref()
-                .filter(|value| !value.trim().is_empty());
-            (code, reason)
-        })
-}
-
-fn legal_total(out: &mut String, invoice: &UblInvoice<'_>) {
+fn legal_total(out: &mut String, invoice: &Invoice<'_>) {
     let currency = invoice.currency.as_str();
     open(out, 1, "cac:LegalMonetaryTotal");
     amount(out, 2, "cbc:LineExtensionAmount", currency, invoice.totals.net);
@@ -351,7 +256,7 @@ fn legal_total(out: &mut String, invoice: &UblInvoice<'_>) {
     close(out, 1, "cac:LegalMonetaryTotal");
 }
 
-fn document_line(out: &mut String, currency: Currency, line: &UblLine<'_>, credit_note: bool) {
+fn document_line(out: &mut String, currency: Currency, line: &InvoiceLine<'_>, credit_note: bool) {
     let code = currency.as_str();
     let (wrapper, quantity) = if credit_note {
         ("cac:CreditNoteLine", "cbc:CreditedQuantity")
@@ -409,89 +314,14 @@ fn document_line(out: &mut String, currency: Currency, line: &UblLine<'_>, credi
     close(out, 1, wrapper);
 }
 
-fn rate_basis_points(basis_points: u16) -> String {
-    let whole = basis_points / 100;
-    let fraction = basis_points % 100;
-    if fraction == 0 {
-        whole.to_string()
-    } else if fraction.is_multiple_of(10) {
-        format!("{whole}.{}", fraction / 10)
-    } else {
-        format!("{whole}.{fraction:02}")
-    }
-}
-
-fn open(out: &mut String, depth: usize, tag: &str) {
-    indent(out, depth);
-    out.push('<');
-    out.push_str(tag);
-    out.push_str(">\n");
-}
-
-fn close(out: &mut String, depth: usize, tag: &str) {
-    indent(out, depth);
-    out.push_str("</");
-    out.push_str(tag);
-    out.push_str(">\n");
-}
-
-fn text(out: &mut String, depth: usize, tag: &str, value: &str) {
-    indent(out, depth);
-    out.push('<');
-    out.push_str(tag);
-    out.push('>');
-    escape(out, value);
-    out.push_str("</");
-    out.push_str(tag);
-    out.push_str(">\n");
-}
-
-fn text_attrs(out: &mut String, depth: usize, tag: &str, attrs: &[(&str, &str)], value: &str) {
-    indent(out, depth);
-    out.push('<');
-    out.push_str(tag);
-    for (name, attribute) in attrs {
-        out.push(' ');
-        out.push_str(name);
-        out.push_str("=\"");
-        escape(out, attribute);
-        out.push('"');
-    }
-    out.push('>');
-    escape(out, value);
-    out.push_str("</");
-    out.push_str(tag);
-    out.push_str(">\n");
-}
-
-fn amount(out: &mut String, depth: usize, tag: &str, currency: &str, value: Money) {
-    let rendered = value.to_fixed_string(2).unwrap_or_else(|_| "0.00".to_owned());
-    text_attrs(out, depth, tag, &[("currencyID", currency)], &rendered);
-}
-
-fn indent(out: &mut String, depth: usize) {
-    for _ in 0..depth {
-        out.push_str("  ");
-    }
-}
-
-fn escape(out: &mut String, value: &str) {
-    for character in value.chars() {
-        match character {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '"' => out.push_str("&quot;"),
-            '\'' => out.push_str("&apos;"),
-            _ => out.push(character),
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crux::{Address, CountryCode, Money, Quantity, TaxBreakdown, TaxTreatment, VatCategory, VatRate};
+    use crate::InvoiceReference;
+    use crux::{
+        Address, CountryCode, DocType, InvoiceTotals, LocalDate, Money, Quantity, TaxBreakdown, TaxTreatment, UnitCode,
+        VatCategory, VatRate,
+    };
 
     fn seller() -> Party {
         let mut party = Party::new(
@@ -532,10 +362,10 @@ mod tests {
     fn minimal_invoice<'a>(
         seller: &'a Party,
         customer: &'a Party,
-        lines: &'a [UblLine<'a>],
+        lines: &'a [InvoiceLine<'a>],
         totals: &'a InvoiceTotals,
-    ) -> UblInvoice<'a> {
-        UblInvoice {
+    ) -> Invoice<'a> {
+        Invoice {
             number: "2026-0001",
             issue_date: LocalDate::parse_iso("2026-10-27").unwrap(),
             due_date: Some(LocalDate::parse_iso("2026-11-26").unwrap()),
@@ -556,7 +386,7 @@ mod tests {
     #[test]
     fn writes_the_expected_document() {
         let treatment = TaxTreatment::standard(VatRate::STANDARD_NL);
-        let line = UblLine {
+        let line = InvoiceLine {
             id: 1,
             name: "Consulting",
             description: Some("Advice"),
@@ -677,7 +507,7 @@ mod tests {
     #[test]
     fn output_is_deterministic() {
         let treatment = TaxTreatment::standard(VatRate::STANDARD_NL);
-        let line = UblLine {
+        let line = InvoiceLine {
             id: 1,
             name: "Consulting",
             description: None,
@@ -701,7 +531,7 @@ mod tests {
         let mut seller = seller();
         seller.legal_name = "A & B <C> \"D\" 'E'".to_owned();
         let treatment = TaxTreatment::standard(VatRate::STANDARD_NL);
-        let line = UblLine {
+        let line = InvoiceLine {
             id: 1,
             name: "x",
             description: None,
@@ -739,7 +569,7 @@ mod tests {
     #[test]
     fn exemption_reasons_are_written_at_the_tax_subtotal() {
         let treatment = TaxTreatment::zero(VatCategory::Exempt).with_exemption_reason("Exempt supply");
-        let line = UblLine {
+        let line = InvoiceLine {
             id: 1,
             name: "Consulting",
             description: None,
@@ -768,7 +598,7 @@ mod tests {
     fn exemption_reason_codes_are_written_and_outside_scope_omits_the_rate() {
         let mut treatment = TaxTreatment::zero(VatCategory::OutsideScope);
         treatment.exemption_reason_code = Some("VATEX-EU-O".to_owned());
-        let line = UblLine {
+        let line = InvoiceLine {
             id: 1,
             name: "Outside scope",
             description: None,
@@ -796,7 +626,7 @@ mod tests {
     #[test]
     fn intra_community_writes_delivery_date_and_country() {
         let treatment = TaxTreatment::zero(VatCategory::IntraCommunity).with_exemption_reason("Intra-community supply");
-        let line = UblLine {
+        let line = InvoiceLine {
             id: 1,
             name: "Intra-community supply",
             description: None,
@@ -829,7 +659,7 @@ mod tests {
     #[test]
     fn a_dutch_legal_registration_carries_scheme_0106() {
         let treatment = TaxTreatment::standard(VatRate::STANDARD_NL);
-        let line = UblLine {
+        let line = InvoiceLine {
             id: 1,
             name: "Consulting",
             description: None,
@@ -858,7 +688,7 @@ mod tests {
     #[test]
     fn credit_notes_use_the_credit_note_binding() {
         let treatment = TaxTreatment::standard(VatRate::STANDARD_NL);
-        let line = UblLine {
+        let line = InvoiceLine {
             id: 1,
             name: "Correction",
             description: None,
@@ -875,7 +705,7 @@ mod tests {
         let customer = customer();
         let mut invoice = minimal_invoice(&seller, &customer, &lines, &totals);
         invoice.doc_type = DocType::CreditNote;
-        invoice.preceding_invoice = Some(UblPrecedingInvoice {
+        invoice.preceding_invoice = Some(InvoiceReference {
             number: "2026-0007",
             issue_date: LocalDate::parse_iso("2026-09-30").unwrap(),
         });
@@ -905,7 +735,7 @@ mod tests {
     #[test]
     fn a_malformed_endpoint_identifier_is_rejected() {
         let treatment = TaxTreatment::standard(VatRate::STANDARD_NL);
-        let line = UblLine {
+        let line = InvoiceLine {
             id: 1,
             name: "Consulting",
             description: None,
@@ -929,7 +759,7 @@ mod tests {
     #[test]
     fn a_credit_note_without_a_preceding_invoice_is_rejected() {
         let treatment = TaxTreatment::standard(VatRate::STANDARD_NL);
-        let line = UblLine {
+        let line = InvoiceLine {
             id: 1,
             name: "x",
             description: None,
