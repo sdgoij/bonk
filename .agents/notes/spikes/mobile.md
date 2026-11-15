@@ -158,11 +158,12 @@ strip step cannot handle `libbonkc.so`.
 1. **Vendored OpenSSL is viable.** No switch to a prebuilt SQLCipher, and no
    application-level encryption, is needed. The existing `sqlcipher` feature is
    enough.
-2. **The libtomcrypt provider is not reachable through `libsqlite3-sys`
-   0.39.1.** `sqlcipher-src` 419.0.6 ships libtomcrypt, but `libsqlite3-sys`
-   does not compile those sources; without vendored OpenSSL it still links
-   `crypto`. Do not plan on the no-OpenSSL path without upgrading or patching
-   that crate.
+2. **The libtomcrypt provider is not reachable through `libsqlite3-sys`.**
+   `sqlcipher-src` ships libtomcrypt, but `libsqlite3-sys` does not compile those
+   sources; without vendored OpenSSL it still links `crypto`. Do not plan on the
+   no-OpenSSL path without patching that crate. Re-checked on 2026-11-15 against
+   0.40.0 (`sqlcipher-src` 420.0.0): `build.rs` names `SQLCIPHER_CRYPTO_CC` and
+   nothing else, so the finding stands after the bump.
 3. **16 KB pages are already handled by NDK r30.** The proposal's suggested
    `-Wl,-z,max-page-size=16384` is not needed by default. Keep the CI `readelf`
    check and add the flag only if a toolchain change regresses it.

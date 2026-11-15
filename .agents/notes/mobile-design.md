@@ -590,8 +590,11 @@ Plan:
 **Result (2026-11-07):** the vendored build works for both Android ABIs; see
 `spikes/mobile.md`. Windows hosts need Cygwin Perl plus pure-Perl modules staged
 from Strawberry and `MSYS_NO_PATHCONV=1`; Linux is the recommended CI host.
-`libsqlite3-sys` 0.39.1 does not wire `sqlcipher-src`'s libtomcrypt provider, so
-the no-OpenSSL path is not available without an upgrade or patch.
+`libsqlite3-sys` does not wire `sqlcipher-src`'s libtomcrypt provider, so the
+no-OpenSSL path is not available without patching it. Re-checked on 2026-11-15
+against 0.40.0 (`sqlcipher-src` 420.0.0, the bump past the SQLite 3.54.1
+advisory): `build.rs` still compiles only the OpenSSL provider
+(`SQLCIPHER_CRYPTO_CC`), so vendored OpenSSL stays part of the Android build.
 
 Other SQLCipher notes:
 
