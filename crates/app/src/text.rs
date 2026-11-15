@@ -425,6 +425,69 @@ pub mod ledger {
         )
     }
 
+    /// The button that closes the year.
+    pub fn close_year_action(language: Language) -> &'static str {
+        sentence!(language, "Close year", "Jaar afsluiten")
+    }
+
+    /// The button that reopens it.
+    pub fn reopen_year_action(language: Language) -> &'static str {
+        sentence!(language, "Reopen year", "Jaar heropenen")
+    }
+
+    /// The field that records why a year is reopened.
+    pub fn year_reopen_reason_hint(language: Language) -> &'static str {
+        sentence!(language, "Why the year is reopened", "Waarom het jaar weer opengaat")
+    }
+
+    /// That there is no year to close yet.
+    pub fn no_year(language: Language) -> &'static str {
+        sentence!(
+            language,
+            "Nothing was posted in this year, so there is nothing to close.",
+            "In dit jaar is niets geboekt, dus er valt niets af te sluiten."
+        )
+    }
+
+    /// What stands between a year and a close.
+    pub fn year_cannot_close(language: Language) -> &'static str {
+        sentence!(
+            language,
+            "A year with a document nobody posted, or a cost nobody placed, cannot close:",
+            "Een jaar met een ongeboekt document of een ongeplaatste kost kan niet dicht:"
+        )
+    }
+
+    /// How many returns of the year have not been prepared.
+    ///
+    /// A count rather than a list: a year with twelve open months would fill the
+    /// section with the same sentence twelve times. The list is the hover text.
+    pub fn returns_unprepared(language: Language, count: usize) -> String {
+        sentence!(
+            language,
+            format!("{count} return(s) not prepared"),
+            format!("{count} aangifte(s) niet opgemaakt")
+        )
+    }
+
+    /// What a year close did.
+    pub fn year_closed(language: Language, year: i32) -> String {
+        sentence!(
+            language,
+            format!("{year} is closed; its months are locked and the result is in equity."),
+            format!("{year} is afgesloten; de maanden zijn dicht en het resultaat staat in het vermogen.")
+        )
+    }
+
+    /// What a year reopening did.
+    pub fn year_reopened(language: Language, year: i32) -> String {
+        sentence!(
+            language,
+            format!("{year} is open again; the resultaatbestemming is reversed."),
+            format!("{year} is weer open; de resultaatbestemming is teruggedraaid.")
+        )
+    }
+
     /// What a close did.
     pub fn month_closed(language: Language, year: i32, month: u8) -> String {
         sentence!(

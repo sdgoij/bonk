@@ -639,7 +639,7 @@ pub fn close_year(
 ///
 /// A year that was closed and reopened has both events, and the later one decides —
 /// the same way a month's `status` column follows its lock and reopening.
-fn year_is_closed(conn: &Connection, seller_id: SellerId, year: i32) -> Result<bool, StoreError> {
+pub fn year_is_closed(conn: &Connection, seller_id: SellerId, year: i32) -> Result<bool, StoreError> {
     let kind: Option<String> = conn
         .query_row(
             "SELECT e.kind FROM period_event e JOIN fiscal_period p ON p.id = e.period_id

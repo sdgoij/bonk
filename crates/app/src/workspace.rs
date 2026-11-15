@@ -346,11 +346,27 @@ enum LedgerData {
         period: Option<store::FiscalPeriod>,
         /// What stops the month from closing; empty when it can close.
         blockers: Vec<String>,
+        /// The year the month is in, and what closing it would do.
+        year: Box<YearState>,
         readiness: Box<store::Readiness>,
         prepared: Option<store::PreparedReturn>,
     },
     OpenItems(Box<OpenItemsData>),
     Bank(Vec<BankLine>),
+}
+
+/// The year the VAT section is looking at, and what closing it would do.
+struct YearState {
+    year: i32,
+    closed: bool,
+    /// Months of the year that exist, which is what a close would lock.
+    months: usize,
+    /// What stops the year from closing, in the store's reading order.
+    blockers: Vec<String>,
+    /// Returns that could be prepared and have not been.
+    warnings: Vec<String>,
+    /// The result that would move to equity.
+    result: Money,
 }
 
 /// What the month's open/closed control last said.
@@ -365,12 +381,15 @@ enum PeriodNotice {
 
 /// What the month control was asked to do.
 ///
-/// The action carries the whole period rather than its identifier, because the
-/// notice names the month it was about and the panel is the only place that knows
-/// which month is on screen.
+/// The month actions carry the whole period rather than its identifier, because
+/// the notice names the month it was about and the panel is the only place that
+/// knows which month is on screen. The year actions need only the year for the
+/// same reason: its result and its months are re-read after the write.
 enum PeriodAction {
     Close(store::FiscalPeriod),
     Reopen(store::FiscalPeriod, String),
+    CloseYear { year: i32 },
+    ReopenYear { year: i32, reason: String },
 }
 
 /// One line of the unmatched queue.
@@ -410,7 +429,9 @@ struct LedgerView {
     notice: Option<String>,
     /// The reason typed for reopening the month.
     reopen_reason: String,
-    /// What the month's open/closed control last did.
+    /// The reason typed for reopening the year.
+    reopen_year_reason: String,
+    /// What the month's open/closed control last said.
     period_notice: Option<PeriodNotice>,
 }
 
@@ -433,6 +454,7 @@ impl Default for LedgerView {
             queue: queue::Queue::default(),
             notice: None,
             reopen_reason: String::new(),
+            reopen_year_reason: String::new(),
             period_notice: None,
         }
     }
@@ -1926,6 +1948,7 @@ impl Workspace {
                 LedgerData::Vat {
                     period,
                     blockers,
+                    year,
                     readiness,
                     prepared,
                 } => {
@@ -1935,9 +1958,11 @@ impl Workspace {
                         VatState {
                             period: period.as_ref(),
                             blockers,
+                            year,
                             readiness,
                             prepared,
                             reason: &mut self.ledger.reopen_reason,
+                            year_reason: &mut self.ledger.reopen_year_reason,
                             notice: self.ledger.period_notice.as_ref(),
                         },
                     );
@@ -1960,7 +1985,7 @@ impl Workspace {
         }
         self.ledger.data = Some(data);
         if let Some(action) = period_action {
-            self.apply_period_action(session, action);
+            self.apply_period_action(session, seller, action);
         }
         if reload {
             // The line an offer settled has left the queue, so the next frame
@@ -1969,12 +1994,12 @@ impl Workspace {
         }
     }
 
-    /// Closes or reopens the month the VAT section shows.
+    /// Closes or reopens a month or a year.
     ///
     /// Both are events rather than edits, so a success only has to say what
-    /// happened and forget the loaded report: the month's state and its blockers
-    /// both changed, and the same request now has a different answer.
-    fn apply_period_action(&mut self, session: &Session, action: PeriodAction) {
+    /// happened and forget the loaded report: the state it showed has changed
+    /// under the same request.
+    fn apply_period_action(&mut self, session: &Session, seller: SellerId, action: PeriodAction) {
         let now = store::now_rfc3339();
         let connection = session.database().connection();
         let language = self.language;
@@ -1987,10 +2012,19 @@ impl Workspace {
                 store::reopen_period(connection, period.id, &reason, ACTOR, &now),
                 text::ledger::month_reopened(language, period.year, period.period_no),
             ),
+            PeriodAction::CloseYear { year } => (
+                store::close_year(connection, seller, year, ACTOR, &now).map(|_| ()),
+                text::ledger::year_closed(language, year),
+            ),
+            PeriodAction::ReopenYear { year, reason } => (
+                store::reopen_year(connection, seller, year, &reason, ACTOR, &now).map(|_| ()),
+                text::ledger::year_reopened(language, year),
+            ),
         };
         match result {
             Ok(()) => {
                 self.ledger.reopen_reason.clear();
+                self.ledger.reopen_year_reason.clear();
                 self.ledger.period_notice = Some(PeriodNotice::Done(said));
                 self.ledger.loaded = None;
             }
@@ -4407,13 +4441,26 @@ fn ledger_data(
         }
         LedgerRequest::Vat { year, period } => {
             let month = store::load_period(connection, seller, year, period)?;
-            let blockers = match &month {
+            let month_blockers = match &month {
                 Some(month) => store::close_blockers(connection, month.id)?,
                 None => Vec::new(),
             };
+            let months = store::list_periods(connection, seller, year)?
+                .iter()
+                .filter(|period| period.period_no <= 12)
+                .count();
+            let state = YearState {
+                year,
+                closed: store::year_is_closed(connection, seller, year)?,
+                months,
+                blockers: store::year_close_blockers(connection, seller, year)?,
+                warnings: store::year_close_warnings(connection, seller, year)?,
+                result: store::year_result(connection, seller, year)?,
+            };
             LedgerData::Vat {
                 period: month,
-                blockers,
+                blockers: month_blockers,
+                year: Box::new(state),
                 readiness: Box::new(store::readiness(connection, seller, year, period)?),
                 prepared: store::vat::prepared(connection, seller, year, period)?,
             }
@@ -4694,13 +4741,15 @@ fn sheet_table(table: &mut Table, ui: &mut egui::Ui, language: Language, report:
     });
 }
 
-/// What the VAT section draws, and the two fields it owns between frames.
+/// What the VAT section draws, and the fields it owns between frames.
 struct VatState<'a> {
     period: Option<&'a store::FiscalPeriod>,
     blockers: &'a [String],
+    year: &'a YearState,
     readiness: &'a store::Readiness,
     prepared: &'a Option<store::PreparedReturn>,
     reason: &'a mut String,
+    year_reason: &'a mut String,
     notice: Option<&'a PeriodNotice>,
 }
 
@@ -4708,9 +4757,11 @@ fn vat_panel(ui: &mut egui::Ui, language: Language, state: VatState<'_>) -> Opti
     let VatState {
         period,
         blockers,
+        year,
         readiness,
         prepared,
         reason,
+        year_reason,
         notice,
     } = state;
     let tokens = *theme::palette(ui.ctx());
@@ -4722,8 +4773,76 @@ fn vat_panel(ui: &mut egui::Ui, language: Language, state: VatState<'_>) -> Opti
     ];
     let mut action = None;
 
-    // The month and the one control in this tab that writes. It sits outside the
-    // scroll area because it is about the whole month, not about a row of it.
+    // The year first: closing it locks the months below, so it reads as the bigger
+    // act of the two. It sits outside the scroll area because both controls are
+    // about the whole period, not about a row of a report.
+    ui.horizontal(|ui| {
+        ui.label(text::ledger::year_label(language));
+        if year.months == 0 {
+            ui.weak(text::ledger::no_year(language));
+            return;
+        }
+        let state = if year.closed {
+            text::ledger::period_closed(language)
+        } else {
+            text::ledger::period_open(language)
+        };
+        ui.label(format!("{} · {state}", year.year));
+        if year.closed {
+            ui.add(
+                egui::TextEdit::singleline(year_reason)
+                    .hint_text(text::ledger::year_reopen_reason_hint(language))
+                    .desired_width(220.0),
+            );
+            if ui
+                .add_enabled(
+                    !year_reason.trim().is_empty(),
+                    egui::Button::new(text::ledger::reopen_year_action(language)),
+                )
+                .clicked()
+            {
+                action = Some(PeriodAction::ReopenYear {
+                    year: year.year,
+                    reason: year_reason.trim().to_owned(),
+                });
+            }
+        } else {
+            // What the close would move, so the button is not the first time a
+            // person sees the figure it is about.
+            ui.weak(format!(
+                "{} {}",
+                text::ledger::result_label(language),
+                money_text(year.result)
+            ));
+            let button = ui.add_enabled(
+                year.blockers.is_empty(),
+                egui::Button::new(text::ledger::close_year_action(language)),
+            );
+            if button.clicked() {
+                action = Some(PeriodAction::CloseYear { year: year.year });
+            }
+            if !year.blockers.is_empty() {
+                button.on_disabled_hover_text(text::ledger::year_cannot_close(language));
+            }
+        }
+    });
+    if !year.closed && !year.blockers.is_empty() {
+        ui.weak(text::ledger::year_cannot_close(language));
+        for blocker in &year.blockers {
+            ui.colored_label(tokens.error, blocker);
+        }
+    }
+    // Returns are a warning rather than a blocker — filing and closing are separate
+    // gates — and a count with the list on hover keeps a year of open months from
+    // filling the section with the same sentence.
+    if !year.closed && !year.warnings.is_empty() {
+        ui.weak(text::ledger::returns_unprepared(language, year.warnings.len()))
+            .on_hover_text(year.warnings.join("\n"));
+    }
+
+    // The month and its own control. Both are drawn even when the year is closed:
+    // pressing Reopen is then refused by the store, and the refusal arrives in the
+    // notice line below with the year named as the thing to open.
     ui.horizontal(|ui| {
         ui.label(text::ledger::month_label(language));
         let Some(period) = period else {
@@ -7910,6 +8029,7 @@ mod tests {
                 prepared,
                 period,
                 blockers,
+                year,
             }) => {
                 assert!(
                     readiness.report.line(store::Rubriek::HighRate).is_some(),
@@ -7919,6 +8039,10 @@ mod tests {
                 let period = period.as_ref().expect("the posting created the month");
                 assert!(period.is_open(), "nothing has closed it");
                 assert!(blockers.is_empty(), "nothing is unplaced: {blockers:?}");
+                assert_eq!(year.months, 1, "the posting created one month of the year");
+                assert!(!year.closed, "the year has not been closed");
+                assert!(year.blockers.is_empty(), "nothing stops the year: {:?}", year.blockers);
+                assert_eq!(year.result.micros(), 100_000_000, "the sale is the year's result");
             }
             _ => panic!("the VAT return did not load: {:?}", workspace.ledger.error),
         }
@@ -7943,7 +8067,7 @@ mod tests {
         };
         assert!(period.is_open(), "nothing has closed it yet");
 
-        workspace.apply_period_action(&session, PeriodAction::Close(period.clone()));
+        workspace.apply_period_action(&session, seller.id, PeriodAction::Close(period.clone()));
         assert!(
             matches!(workspace.ledger.period_notice, Some(PeriodNotice::Done(_))),
             "the tab says what it did: {:?}",
@@ -7962,6 +8086,7 @@ mod tests {
         workspace.ledger.reopen_reason = "vergeten factuur".to_owned();
         workspace.apply_period_action(
             &session,
+            seller.id,
             PeriodAction::Reopen(period.clone(), workspace.ledger.reopen_reason.trim().to_owned()),
         );
         assert!(
@@ -7986,6 +8111,99 @@ mod tests {
                 "a month with nothing posted is not a period: {:?}",
                 workspace.ledger.error
             ),
+        }
+    }
+
+    /// The year control: closing locks the months and moves the result, reopening
+    /// reverses the pair, and the state the section shows follows both.
+    #[test]
+    fn a_year_is_closed_and_reopened_from_the_ledger_tab() {
+        let (_dir, session, seller) = posted_session();
+        let mut workspace = Workspace::new(&session).unwrap();
+        workspace.tab = Tab::Ledger;
+        workspace.ledger.section = LedgerSection::Vat;
+        workspace.load_ledger(&session, seller.id);
+
+        let year = match workspace.ledger.data.as_ref() {
+            Some(LedgerData::Vat { year, .. }) => year.year,
+            _ => panic!("the year did not load: {:?}", workspace.ledger.error),
+        };
+
+        workspace.apply_period_action(&session, seller.id, PeriodAction::CloseYear { year });
+        assert!(
+            matches!(workspace.ledger.period_notice, Some(PeriodNotice::Done(_))),
+            "the tab says what it did: {:?}",
+            workspace.ledger.period_notice
+        );
+
+        workspace.load_ledger(&session, seller.id);
+        match workspace.ledger.data.as_ref() {
+            Some(LedgerData::Vat { year, period, .. }) => {
+                assert!(year.closed, "the year says it is closed");
+                assert_eq!(year.months, 1, "the posting created one month");
+                assert!(
+                    period.as_ref().is_some_and(|period| !period.is_open()),
+                    "the close locked the month with it"
+                );
+            }
+            _ => panic!("the year did not reload: {:?}", workspace.ledger.error),
+        }
+
+        // Reopening needs a typed reason, and the field is cleared once it is on the
+        // record; the year then says it is open and the result is back.
+        workspace.ledger.reopen_year_reason = "vergeten factuur".to_owned();
+        let reason = workspace.ledger.reopen_year_reason.trim().to_owned();
+        workspace.apply_period_action(&session, seller.id, PeriodAction::ReopenYear { year, reason });
+        assert!(
+            workspace.ledger.reopen_year_reason.is_empty(),
+            "the field is cleared once the reason is on the record"
+        );
+        workspace.load_ledger(&session, seller.id);
+        match workspace.ledger.data.as_ref() {
+            Some(LedgerData::Vat { year, .. }) => {
+                assert!(!year.closed, "the year is open again");
+                assert_eq!(year.result.micros(), 100_000_000, "the result is back");
+            }
+            _ => panic!("the year did not reload: {:?}", workspace.ledger.error),
+        }
+    }
+
+    /// The month control stays on screen inside a closed year, because a button that
+    /// disappears is a rule nobody can read: pressing it gets the store's sentence,
+    /// which names the year and the command.
+    #[test]
+    fn a_month_inside_a_closed_year_says_which_thing_to_open() {
+        let (_dir, session, seller) = posted_session();
+        let mut workspace = Workspace::new(&session).unwrap();
+        workspace.tab = Tab::Ledger;
+        workspace.ledger.section = LedgerSection::Vat;
+        workspace.load_ledger(&session, seller.id);
+
+        let (year, period) = match workspace.ledger.data.as_ref() {
+            Some(LedgerData::Vat {
+                year,
+                period: Some(period),
+                ..
+            }) => (year.year, period.clone()),
+            _ => panic!("the VAT section did not load: {:?}", workspace.ledger.error),
+        };
+        workspace.apply_period_action(&session, seller.id, PeriodAction::CloseYear { year });
+        workspace.load_ledger(&session, seller.id);
+
+        workspace.apply_period_action(&session, seller.id, PeriodAction::Reopen(period, "vergeten".to_owned()));
+        match workspace.ledger.period_notice.as_ref() {
+            Some(PeriodNotice::Refused(said)) => {
+                assert!(said.contains("reopen the year"), "{said}");
+                assert!(said.contains("reopen-year"), "the remedy is a command: {said}");
+            }
+            other => panic!("the month reopening should have been refused: {other:?}"),
+        }
+        workspace.load_ledger(&session, seller.id);
+        match workspace.ledger.data.as_ref() {
+            Some(LedgerData::Vat {
+                period: Some(period), ..
+            }) => assert!(!period.is_open(), "a refused reopening changes nothing"),
+            _ => panic!("the month did not reload: {:?}", workspace.ledger.error),
         }
     }
 
@@ -8032,7 +8250,7 @@ mod tests {
         assert_eq!(blockers.len(), 1, "the guard account is named once: {blockers:?}");
         assert!(blockers[0].contains(store::UNCLASSIFIED_ACCOUNT), "{}", blockers[0]);
 
-        workspace.apply_period_action(&session, PeriodAction::Close(period));
+        workspace.apply_period_action(&session, seller.id, PeriodAction::Close(period));
         match workspace.ledger.period_notice.as_ref() {
             Some(PeriodNotice::Refused(said)) => {
                 assert!(

@@ -1527,15 +1527,17 @@ VAT section; and no opening balances are carried forward, because the balance sh
 is cumulative and zeroing the profit and loss accounts is what makes next year's
 figures right.
 
-The window got the same two controls, because a guard that only exists in a command
-is a guard nobody meets. The VAT section shows the month's state and offers **Close
-month** — disabled, with the blockers listed, when something is unplaced — and a
-reason field with **Reopen month** once it is closed. The reason is required there
-too: the button stays dead until something is typed, so the store's refusal is a
-backstop rather than the user interface. A success says what happened and forgets
-the loaded report, since the month's state and its blockers both changed; a refusal
-shows the store's own sentence, which names `9999` and the amount it holds. The note
-above the sections lost its flat "read-only" promise to say so.
+The window got the same controls, because a guard that only exists in a command is
+a guard nobody meets. The VAT section draws the year first: **Close year** with the
+result it would move written beside it, the blockers listed when there are any,
+and no button at all in a year nothing was posted in; once closed it carries a
+reason field and **Reopen year**. The month row keeps its own control beneath it,
+and pressing Reopen there inside a closed year shows the store's sentence — which
+names the year and the command — rather than a button that looks like it worked.
+Both reason fields are required, so the store's refusals are backstops rather than
+the user interface. A success says what happened and forgets the loaded report,
+since the state it showed changed; a refusal shows the store's own sentence.
+The note above the sections lost its flat "read-only" promise to say so.
 
 ---
 

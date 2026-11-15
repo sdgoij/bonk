@@ -64,7 +64,7 @@ pub use ledger::{
     content_hash, ensure_period, entry_for_document, find_entry, insert_account, list_accounts, list_periods,
     load_account, load_entry, load_period, lock_period, post_entry, post_manual_entry, post_opening_balances,
     reclassify, reclassify_account, reopen_period, reopen_year, reversal_of, reverse_entry, seed_starter_chart,
-    starter_chart, update_account, year_close_blockers, year_close_warnings, year_result,
+    update_account, year_close_blockers, year_close_warnings, year_is_closed, year_result,
 };
 pub use open_items::{
     Aging, OpenItem, OpenItemKind, RebuildReport, aging, list as open_items, rebuild as rebuild_open_items,

@@ -465,15 +465,20 @@ PDF and the UBL again.
 Ledger is read-only except for two controls: the chart, the trial balance, profit
 and loss, the balance sheet, the Dutch VAT form with its readiness checks, the
 open receivables and payables with their aging, the bank transactions nothing has
-settled yet — and, in the VAT section, the month's own state. That section shows
-whether the month is open or closed, offers **Close month** when nothing is
-unplaced, and lists what stands in the way when something is; its button is
-disabled rather than pretending the close would work. Once a month is closed the
-same row carries a reason field and **Reopen month**, and the reason is required,
-because it is what goes on the record beside the lock rather than replacing it.
+settled yet — and, in the VAT section, the year and the month. That section draws
+the year first: it offers **Close year** with the result that would move to equity
+written beside it, lists what stands in the way when something does, and replaces
+the button with a reason field and **Reopen year** once it is closed. The month
+row below it shows whether the month is open or closed and offers **Close month**
+when nothing is unplaced, disabled rather than pretending the close would work.
+Once a month is closed the same row carries a reason field and **Reopen month**,
+and the reason is required, because it is what goes on the record beside the lock
+rather than replacing it. The month control stays on screen when the year is
+closed — a button that disappears is a rule nobody can read — and pressing it
+there shows the store's sentence, which names the year as the thing to open.
 Filing and closing stay separate gates: the readiness checks sit next to the
-close control without stopping it, which is what a month with an unplaced cost
-looks like. Each report is keyed on
+close controls without stopping them, and unprepared returns of the year are a
+count with the list on hover. Each report is keyed on
 the window (a date range, a date, or a return period) and re-queried only when
 that key changes, so scrolling a report does not re-scan the journal. A report
 whose two sides disagree says so and by how much; nothing is rounded into
