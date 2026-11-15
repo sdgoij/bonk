@@ -214,7 +214,7 @@ fn only_an_expense_account_that_takes_postings_can_be_chosen() {
     };
     assert!(refused("8000").contains("revenue"), "{}", refused("8000"));
     assert!(refused("1300").contains("subledger"), "{}", refused("1300"));
-    assert!(refused("9999").contains("clear the choice"), "{}", refused("9999"));
+    assert!(refused("9999").contains("nobody has decided"), "{}", refused("9999"));
     assert!(refused("1234").contains("1234"), "the account is named");
 
     // An expense account is the whole point, though.
@@ -414,6 +414,151 @@ fn reopening_an_open_period_or_without_a_reason_is_refused() {
         store::PeriodStatus::Locked,
         "a refused reopening wrote nothing"
     );
+}
+
+#[test]
+fn a_posted_purchase_moves_to_another_account_as_a_reversal_pair() {
+    let books = Books::open();
+    let connection = books.database.connection();
+    let document = books.buy(1_000, "2026-10-10", "L-1");
+    store::post_document(connection, document, "ada", NOW).unwrap();
+    let entry = store::entry_for_document(connection, document).unwrap().unwrap();
+    assert_eq!(books.balance("9999"), 1_000_000_000, "it landed unclassified");
+
+    let moved = store::reclassify_account(
+        connection,
+        entry,
+        "7100",
+        "verkeerde rekening",
+        date("2026-10-31"),
+        "ada",
+        LATER,
+    )
+    .unwrap();
+
+    assert_eq!(moved.original, "2026-0001");
+    assert_eq!(books.balance("9999"), 0, "the guard account is empty again");
+    assert_eq!(books.balance("7100"), 1_000_000_000);
+    assert_eq!(books.balance("1500"), 210_000_000, "the deductible VAT did not move");
+    assert_eq!(books.balance("1400"), -1_210_000_000, "nor did the creditor");
+    assert_eq!(
+        moved.corrected.journal,
+        crux::Journal::Purchase,
+        "the correction stays in the purchase journal, which is where it is read"
+    );
+    assert_eq!(
+        store::expense::chosen(connection, document).unwrap(),
+        Some(AccountCode::parse("7100").unwrap()),
+        "the document names where its cost now is"
+    );
+}
+
+#[test]
+fn moving_a_cost_refuses_what_it_cannot_move() {
+    let books = Books::open();
+    let connection = books.database.connection();
+    let document = books.buy(1_000, "2026-10-10", "L-1");
+    store::post_document(connection, document, "ada", NOW).unwrap();
+    let entry = store::entry_for_document(connection, document).unwrap().unwrap();
+
+    let refused = |code: &str| {
+        store::reclassify_account(connection, entry, code, "because", date("2026-10-31"), "ada", LATER)
+            .map(|_| ())
+            .unwrap_err()
+            .to_string()
+    };
+    assert!(refused("9999").contains("nobody has decided"), "{}", refused("9999"));
+    assert!(refused("8000").contains("revenue"), "{}", refused("8000"));
+    assert!(refused("1300").contains("subledger"), "{}", refused("1300"));
+
+    let said = store::reclassify_account(connection, entry, "7100", "  ", date("2026-10-31"), "ada", LATER)
+        .unwrap_err()
+        .to_string();
+    assert!(said.contains("needs a reason"), "{said}");
+
+    store::reclassify_account(connection, entry, "7100", "first", date("2026-10-31"), "ada", LATER).unwrap();
+    let said = store::reclassify_account(connection, entry, "7000", "again", date("2026-10-31"), "ada", LATER)
+        .unwrap_err()
+        .to_string();
+    assert!(said.contains("already reversed"), "{said}");
+}
+
+/// A correction is read from the entry's own lines, so it can be corrected again —
+/// and a cost somebody already split is left alone.
+#[test]
+fn a_correction_can_be_corrected_but_a_split_is_left_for_a_person() {
+    let books = Books::open();
+    let connection = books.database.connection();
+    let document = books.buy(1_000, "2026-10-10", "L-1");
+    store::post_document(connection, document, "ada", NOW).unwrap();
+    let entry = store::entry_for_document(connection, document).unwrap().unwrap();
+    let first =
+        store::reclassify_account(connection, entry, "7100", "first", date("2026-10-31"), "ada", LATER).unwrap();
+
+    store::reclassify_account(
+        connection,
+        first.corrected.id,
+        "7000",
+        "second",
+        date("2026-10-31"),
+        "ada",
+        LATER,
+    )
+    .expect("the corrected entry carries its own cost account");
+    assert_eq!(books.balance("7100"), 0);
+    assert_eq!(books.balance("7000"), 1_000_000_000);
+
+    let split = store::post_manual_entry(
+        connection,
+        books.seller,
+        date("2026-10-05"),
+        "Twee soorten kosten",
+        vec![
+            crux::LedgerLine::debit(AccountCode::parse("7100").unwrap(), euros(10)).unwrap(),
+            crux::LedgerLine::debit(AccountCode::parse("7000").unwrap(), euros(10)).unwrap(),
+            crux::LedgerLine::credit(AccountCode::parse("1100").unwrap(), euros(20)).unwrap(),
+        ],
+        "ada",
+        LATER,
+    )
+    .unwrap();
+    let said = store::reclassify_account(
+        connection,
+        split.id,
+        "7100",
+        "collapse",
+        date("2026-10-31"),
+        "ada",
+        LATER,
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(said.contains("would lose that split"), "{said}");
+    assert!(
+        said.contains("7100") && said.contains("7000"),
+        "both accounts are named: {said}"
+    );
+}
+
+#[test]
+fn a_correction_dated_outside_the_month_leaves_the_close_blocked() {
+    let books = Books::open();
+    let connection = books.database.connection();
+    let document = books.buy(1_000, "2026-10-10", "L-1");
+    store::post_document(connection, document, "ada", NOW).unwrap();
+    let entry = store::entry_for_document(connection, document).unwrap().unwrap();
+
+    // Booked in November, the October balance it was meant to fix is untouched: the
+    // reversal sits in its own month, which is why the remedy names a date.
+    let late = store::reclassify_account(connection, entry, "7100", "late", date("2026-11-05"), "ada", LATER).unwrap();
+    let said = store::close_blockers(connection, books.period(10))
+        .unwrap()
+        .first()
+        .cloned()
+        .expect("October still holds the cost");
+    assert!(said.contains("9999"), "{said}");
+    assert_eq!(books.balance("9999"), 0, "but the year is right");
+    assert_ne!(late.corrected.id, entry);
 }
 
 #[test]

@@ -49,33 +49,10 @@ pub fn assign(
     actor: &str,
     now: &str,
 ) -> Result<AccountCode, StoreError> {
-    let account = AccountCode::parse(code).map_err(|error| StoreError::Rejected(error.to_string()))?;
+    // The fundamental rule first: there is a moment to decide, and it has passed
+    // once the entry exists. Where the cost may go is the second question.
     crate::posting::unposted_inbound(conn, document_id, "account")?;
-
-    let stored = crate::ledger::load_account(conn, &account)?
-        .ok_or_else(|| StoreError::NotFound(format!("account {account}")))?;
-    if stored.archived {
-        return Err(StoreError::Rejected(format!(
-            "account {account} is archived and takes no postings"
-        )));
-    }
-    if stored.is_control {
-        return Err(StoreError::Rejected(format!(
-            "account {account} holds a subledger; a purchase's cost goes to an expense account"
-        )));
-    }
-    if stored.kind != AccountKind::Expense {
-        return Err(StoreError::Rejected(format!(
-            "account {account} is {}, not an expense; a purchase's cost landed on {} until somebody decides where it belongs",
-            kind_label(stored.kind),
-            crate::ledger::UNCLASSIFIED_ACCOUNT
-        )));
-    }
-    if account.as_str() == crate::ledger::UNCLASSIFIED_ACCOUNT {
-        return Err(StoreError::Rejected(format!(
-            "account {account} is where a purchase lands when nothing is decided; clear the choice instead"
-        )));
-    }
+    let account = cost_account(conn, code)?;
 
     let transaction = conn.unchecked_transaction()?;
     transaction.execute(
@@ -97,6 +74,41 @@ pub fn assign(
         serde_json::json!({ "account": account.as_str() }),
     )?;
     transaction.commit()?;
+    Ok(account)
+}
+
+/// The account a purchase's cost may be put on.
+///
+/// One rule for both moments a cost account is decided: choosing it before the
+/// posting, and moving it afterwards. It has to be an expense account that takes
+/// postings, and it cannot be `9999`, which is the absence of a decision rather
+/// than one.
+pub(crate) fn cost_account(conn: &Connection, code: &str) -> Result<AccountCode, StoreError> {
+    let account = AccountCode::parse(code).map_err(|error| StoreError::Rejected(error.to_string()))?;
+    let stored = crate::ledger::load_account(conn, &account)?
+        .ok_or_else(|| StoreError::NotFound(format!("account {account}")))?;
+    if stored.archived {
+        return Err(StoreError::Rejected(format!(
+            "account {account} is archived and takes no postings"
+        )));
+    }
+    if stored.is_control {
+        return Err(StoreError::Rejected(format!(
+            "account {account} holds a subledger; a purchase's cost goes to an expense account"
+        )));
+    }
+    if stored.kind != AccountKind::Expense {
+        return Err(StoreError::Rejected(format!(
+            "account {account} is {}, not an expense; a purchase's cost landed on {} until somebody decides where it belongs",
+            kind_label(stored.kind),
+            crate::ledger::UNCLASSIFIED_ACCOUNT
+        )));
+    }
+    if account.as_str() == crate::ledger::UNCLASSIFIED_ACCOUNT {
+        return Err(StoreError::Rejected(format!(
+            "account {account} is where a purchase lands when nobody has decided where its cost belongs, not somewhere to put one on purpose"
+        )));
+    }
     Ok(account)
 }
 

@@ -885,6 +885,75 @@ fn a_purchase_is_put_on_an_expense_account_before_it_is_posted() {
     assert!(said.contains("already posted"), "{said}");
 }
 
+/// A purchase posted before anybody decided where its cost goes can still be put
+/// on an account afterwards: the refusal names the remedy, so the remedy has to
+/// exist in the interface too.
+#[test]
+fn a_posted_purchase_is_moved_to_another_account() {
+    let archive = Archive::new();
+    archive.run(&["ledger", "setup"]);
+
+    // The archive's own invoice, imported back under a supplier's number and posted
+    // with no account chosen, so its base sits on 9999.
+    let issued = std::fs::read_to_string(format!("{}/2026-0001.xml", archive.out)).expect("the issued UBL");
+    let received = archive.dir.path().join("inkoop.xml");
+    std::fs::write(&received, issued.replacen("2026-0001", "INK-1", 1)).expect("the inbound UBL");
+    archive.run(&["import", received.to_str().expect("utf-8")]);
+    archive.run(&["ledger", "post"]);
+
+    // Dated in the month it corrects: a correction booked elsewhere leaves the
+    // balance it was meant to fix exactly where it was.
+    let said = archive.run(&[
+        "ledger",
+        "reclassify",
+        "IK:2026-0001",
+        "--account",
+        "7100",
+        "--reason",
+        "verkeerde rekening",
+        "--date",
+        "2026-02-28",
+    ]);
+    assert!(said.contains("reversed 2026-0001 as IK 2026-0002"), "{said}");
+    assert!(said.contains("moved    IK 2026-0003 to 7100"), "{said}");
+    assert!(said.contains("dated 2026-02-28"), "{said}");
+
+    let said = archive.run(&["ledger", "trial-balance", "--from", "2026-01-01", "--to", "2026-12-31"]);
+    let cost = said
+        .lines()
+        .find(|line| line.starts_with("7100"))
+        .expect("the cost is on 7100");
+    assert!(cost.contains("100.00"), "the invoice's net is on 7100 now: {cost}");
+    let guard = said
+        .lines()
+        .find(|line| line.starts_with("9999"))
+        .expect("the guard account keeps its history");
+    let mut amounts = guard.split_whitespace().filter(|token| token.contains('.'));
+    let debit = amounts.next().expect("a debit is printed");
+    let credit = amounts.next().expect("a credit is printed");
+    assert_eq!(debit, credit, "the guard's two sides cancel: {guard}");
+    assert_eq!(amounts.next(), None, "so it has no balance left: {guard}");
+    assert!(said.trim_end().ends_with("balanced"), "{said}");
+
+    // The entry is append-only, so the same correction cannot be written twice.
+    let said = archive.fail(&[
+        "ledger",
+        "reclassify",
+        "IK:2026-0001",
+        "--account",
+        "7000",
+        "--reason",
+        "again",
+        "--date",
+        "2026-02-28",
+    ]);
+    assert!(said.contains("already reversed"), "{said}");
+
+    // And the month it was posted in can close now.
+    let said = archive.run(&["ledger", "close", "--year", "2026", "--month", "2"]);
+    assert!(said.contains("closed:  2026-02 by cli"), "{said}");
+}
+
 #[test]
 fn a_memorial_entry_is_written_and_must_balance() {
     let archive = Archive::new();

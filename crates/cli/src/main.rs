@@ -811,22 +811,29 @@ enum LedgerCommand {
         #[arg(long, default_value = "cli")]
         actor: String,
     },
-    /// File a posted purchase under a different treatment.
+    /// File a posted purchase under a different treatment or account.
     ///
-    /// Reverses the entry and posts the same amounts again with the code that
-    /// names the right box, in one transaction, so a correction never leaves the
-    /// supply counted twice or missing. Use it when a purchase was posted before
-    /// its treatment was known; afterwards `bonk ledger tax-code` is refused.
+    /// Reverses the entry and posts the same amounts again — under the code that
+    /// names the right box, or with the cost on the account that should have had
+    /// it — in one transaction, so a correction never leaves the supply counted
+    /// twice or missing. Use it when a purchase was posted before its treatment or
+    /// account was known; afterwards `bonk ledger tax-code` and `bonk ledger
+    /// account` are refused, because the posting snapshotted both.
     #[command(name = "reclassify")]
     Reclassify {
         /// The entry, as `IK:2026-0001` or by identifier.
         entry: String,
         /// The code that names where it belongs, e.g. NL-AE-GOODS.
-        code: String,
+        #[arg(required_unless_present = "account", conflicts_with = "account")]
+        code: Option<String>,
+        /// The expense account its cost belongs on, e.g. 7100.
+        #[arg(long)]
+        account: Option<String>,
         /// Why it is being corrected; it travels in both descriptions.
         #[arg(long)]
         reason: String,
-        /// The date the correction is booked; defaults to today.
+        /// The date the correction is booked; defaults to today. Book it in the
+        /// month whose balance it corrects, or that balance stays as it was.
         #[arg(long)]
         date: Option<String>,
         #[arg(long, default_value = "cli")]
@@ -2351,24 +2358,48 @@ fn ledger(access: &Access, database: &Path, keystore: &Path, command: LedgerComm
         LedgerCommand::Reclassify {
             entry,
             code,
+            account,
             reason,
             date,
             actor,
         } => {
             let id = resolve_entry(session.database(), &entry)?;
             let date = parse_date_or(date, LocalDate::today_utc())?;
-            let corrected = store::reclassify(connection, id, &code, &reason, date, &actor, &now)?;
-            println!(
-                "reversed {} as {} {}",
-                corrected.original,
-                corrected.reversal.journal.code(),
-                corrected.reversal.number
-            );
-            println!(
-                "refiled  {} {} under {code}",
-                corrected.corrected.journal.code(),
-                corrected.corrected.number
-            );
+            match (code, account) {
+                (Some(code), None) => {
+                    let corrected = store::reclassify(connection, id, &code, &reason, date, &actor, &now)?;
+                    println!(
+                        "reversed {} as {} {}",
+                        corrected.original,
+                        corrected.reversal.journal.code(),
+                        corrected.reversal.number
+                    );
+                    println!(
+                        "refiled  {} {} under {code}",
+                        corrected.corrected.journal.code(),
+                        corrected.corrected.number
+                    );
+                }
+                (None, Some(account)) => {
+                    let corrected = store::reclassify_account(connection, id, &account, &reason, date, &actor, &now)?;
+                    println!(
+                        "reversed {} as {} {}",
+                        corrected.original,
+                        corrected.reversal.journal.code(),
+                        corrected.reversal.number
+                    );
+                    println!(
+                        "moved    {} {} to {account}",
+                        corrected.corrected.journal.code(),
+                        corrected.corrected.number
+                    );
+                }
+                _ => {
+                    return Err(CliError::Input(
+                        "name one of a tax code or `--account`, not both".to_owned(),
+                    ));
+                }
+            }
             println!("dated {date}");
             Ok(())
         }

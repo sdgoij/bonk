@@ -135,6 +135,12 @@ return. The decision is per document, not per line; splitting a mixed purchase
 still needs a memorial entry, which is where per-line classification belongs once
 an item catalogue exists.
 
+A cost that was placed before anybody knew better is moved with the same pair the
+books use for everything else — the reversal, then the same lines with the cost on
+the right account — dated in the month whose balance is being corrected. The
+subledger item is untouched: moving a cost within the profit and loss does not
+change what the supplier is owed.
+
 ### 3.3 Periods
 
 - A fiscal year is configured per seller (start month, typically January).

@@ -1141,6 +1141,169 @@ pub fn reclassify(
     })
 }
 
+/// Moves a posted purchase's cost to a different account.
+///
+/// The account is part of the entry that was written, and entries are append-only,
+/// so — exactly like a treatment — the correction is the pair the books already
+/// understand: the reversal, then the same lines with the cost somewhere else. The
+/// VAT lines and the creditors line do not move, because nothing about them was
+/// wrong.
+///
+/// Which lines move is read from the entry rather than from the document: every
+/// line on an expense account is cost. That is what lets a correction be corrected
+/// again, where the corrected entry has no document behind it.
+pub fn reclassify_account(
+    conn: &Connection,
+    entry_id: JournalEntryId,
+    code: &str,
+    reason: &str,
+    entry_date: LocalDate,
+    actor: &str,
+    now: &str,
+) -> Result<Reclassified, StoreError> {
+    if reason.trim().is_empty() {
+        return Err(StoreError::Rejected("a reclassification needs a reason".to_owned()));
+    }
+    let target = crate::expense::cost_account(conn, code)?;
+    let stored = load_entry(conn, entry_id)?.ok_or_else(|| StoreError::NotFound(format!("entry {entry_id}")))?;
+    if let Some(existing) = reversal_of(conn, entry_id)? {
+        return Err(StoreError::Rejected(format!(
+            "entry {} is already reversed by {existing}; the correction is its own entry",
+            stored.number
+        )));
+    }
+
+    // Where the cost is now. More than one account means a person split it already,
+    // and collapsing that into one account would undo work rather than correct it.
+    let mut current: Vec<AccountCode> = Vec::new();
+    for line in stored.entry.lines() {
+        let account = load_account(conn, line.account())?
+            .ok_or_else(|| StoreError::Data(format!("account {} is not in the chart", line.account())))?;
+        if account.kind == AccountKind::Expense && !current.contains(line.account()) {
+            current.push(line.account().clone());
+        }
+    }
+    let from = match current.as_slice() {
+        [] => {
+            return Err(StoreError::Rejected(format!(
+                "{} has no line on an expense account, so there is no cost to move",
+                stored.number
+            )));
+        }
+        [only] => only.clone(),
+        many => {
+            let names: Vec<&str> = many.iter().map(AccountCode::as_str).collect();
+            return Err(StoreError::Rejected(format!(
+                "{} has its cost on {}; moving all of it into one account would lose that split, so the correction is a memorial entry",
+                stored.number,
+                names.join(" and ")
+            )));
+        }
+    };
+    if from == target {
+        return Err(StoreError::Rejected(format!(
+            "{} already has its cost on {target}",
+            stored.number
+        )));
+    }
+
+    let mut lines = Vec::with_capacity(stored.entry.lines().len());
+    for line in stored.entry.lines() {
+        let account = if *line.account() == from {
+            target.clone()
+        } else {
+            line.account().clone()
+        };
+        let mut rebuilt = LedgerLine::new(account, line.side(), line.amount())
+            .map_err(|error| StoreError::Data(error.to_string()))?;
+        if let Some(vat) = line.vat() {
+            let rate = VatRate::from_basis_points(vat.rate_bp).map_err(|error| StoreError::Data(error.to_string()))?;
+            rebuilt = rebuilt.tagged(vat.category, rate);
+        }
+        if let Some(existing) = line.tax_code() {
+            rebuilt = rebuilt.coded(existing.clone());
+        }
+        lines.push(rebuilt);
+    }
+
+    let description = format!("Herindeling rekening {} ({})", stored.number, reason.trim());
+    let corrected =
+        LedgerEntry::new(stored.journal, description, lines).map_err(|error| StoreError::Data(error.to_string()))?;
+
+    let transaction = conn.unchecked_transaction()?;
+    let seller_id = seller_of(&transaction, entry_id)?;
+    let reversal = reverse_entry_in(&transaction, entry_id, reason, entry_date, actor, now)?;
+    let corrected = post_entry_in(
+        &transaction,
+        PostingRequest {
+            entry: &corrected,
+            seller_id,
+            entry_date,
+            source: PostingSource::Manual,
+            actor,
+            now,
+            posting_profile_id: stored.posting_profile_id.as_str(),
+            rule_version: stored.rule_version.as_str(),
+            reverses: None,
+            open_item: None,
+        },
+    )?;
+    audit::append(
+        &transaction,
+        now,
+        actor,
+        "entry_account_changed",
+        "journal_entry",
+        &entry_id.to_string(),
+        json!({
+            "reversal": reversal.id.to_string(),
+            "corrected": corrected.id.to_string(),
+            "from": from.as_str(),
+            "to": target.as_str(),
+            "reason": reason.trim(),
+        }),
+    )?;
+    // When a document is behind the entry, keep its own record of where the cost
+    // sits in step. The document is what the window opens, and a stored account
+    // that named the old one would be a false statement about a live posting; the
+    // audit chain keeps both the choice and this correction.
+    if let Some(document) = inbound_document_of(&transaction, entry_id)? {
+        transaction.execute(
+            "INSERT INTO document_account (document_id, account_code, decided_by, decided_at)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(document_id) DO UPDATE SET
+                 account_code = excluded.account_code,
+                 decided_by = excluded.decided_by,
+                 decided_at = excluded.decided_at",
+            params![document.to_string(), target.as_str(), actor, now],
+        )?;
+    }
+    transaction.commit()?;
+
+    Ok(Reclassified {
+        original: stored.number,
+        reversal,
+        corrected,
+    })
+}
+
+/// The received document an entry was posted for, when one is behind it.
+fn inbound_document_of(conn: &Connection, entry_id: JournalEntryId) -> Result<Option<DocumentId>, StoreError> {
+    let id: Option<String> = conn
+        .query_row(
+            "SELECT source_id FROM journal_entry WHERE id = ?1 AND source_kind = 'inbound_document'",
+            [entry_id.to_string()],
+            |row| row.get(0),
+        )
+        .optional()?;
+    match id {
+        Some(id) => Ok(Some(
+            DocumentId::parse_str(&id).map_err(|error| StoreError::Data(error.to_string()))?,
+        )),
+        None => Ok(None),
+    }
+}
+
 /// The entry a document was posted as, if it has been.
 ///
 /// A document and its posting are one to one, so the source key decides it; the

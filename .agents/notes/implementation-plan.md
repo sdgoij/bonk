@@ -1440,12 +1440,29 @@ after posting — so the refusal names the only remedy that exists: a memorial e
 dated in the period. Two tests walk it: the close refuses, the memorial pair zeroes
 the account, the close succeeds.
 
-What this does not do: a posted purchase cannot have its account changed in place.
-The entry is append-only and there is no reverse-and-repost for it the way there is
-for a tax code (`reclassify`). The remedy is the memorial entry, which is honest but
-coarser — the document's own entry keeps saying `9999` while the pair moves the
-cost. A `reclassify --account` is the obvious follow-up, and it is not free: it has
-to leave the subledger item alone while replacing the entry.
+**Status, 2026-11-15 (a posted purchase's cost can be moved).** `reclassify
+--account <code>` is the same reversal pair the treatment correction uses: the
+entry is append-only, so the cost moves by reversing it and posting the same amounts
+with the expense lines on the account that should have had them, in one transaction.
+The VAT lines and the creditors line do not move, because nothing about them was
+wrong. Which lines move is read from the entry — every line on an expense account is
+cost — rather than from the document, which is what lets a correction be corrected
+again: the corrected entry has no document behind it. Two refusals keep it honest: a
+cost already split over two accounts is left for a person to write, because
+collapsing it would undo work rather than correct it, and an entry that is already
+reversed points at the correction instead.
+
+The date matters and the help says so: the pair is booked where it is dated, so a
+correction dated outside the month it corrects leaves that month's `9999` balance
+exactly where it was. A test asserts both halves of that.
+
+When the entry came from a document, the document's stored account is rewritten to
+match. It is the record the window opens, and leaving the old account there would be
+a false statement about a live posting; the audit chain keeps the original choice and
+this correction both.
+
+The shared validation moved to `expense::cost_account`, so choosing an account before
+the posting and moving one afterwards cannot disagree about what a cost account is.
 
 **Status, 2026-11-15 (a month can be closed, and opened again on the record).**
 `bonk ledger close --year Y --month M` prints the period, its window, whether it is

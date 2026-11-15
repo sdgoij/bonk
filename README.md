@@ -251,6 +251,7 @@ bonk ledger tax-code 2026-0042 NL-AE-GOODS              # put its reverse-charge
 bonk ledger account 2026-0042 7100                     # where its cost lands, before it is posted
 bonk ledger post-manual --date 2026-03-01 --description "Bankkosten" --line "7100|debit|12.50" --line "1100|credit|12.50"
 bonk ledger reclassify IK:2026-0001 NL-AE-GOODS --reason "verkeerde rubriek"
+bonk ledger reclassify IK:2026-0001 --account 7100 --reason "verkeerde rekening" --date 2026-03-31
 bonk ledger open-items --kind payable --aging --as-of 2026-03-31
 bonk ledger bank add --name "Zakelijk" --iban NL91ABNA0417164300
 bonk ledger bank profile put rabo --file rabo.toml    # how to read this bank's CSV
