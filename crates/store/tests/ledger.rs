@@ -99,7 +99,10 @@ fn balance(database: &Database, account: &str) -> i64 {
 #[test]
 fn the_starter_chart_seeds_once_and_never_undoes_a_rename() {
     let (_dir, database, _seller) = database();
-    let expected = starter_chart().unwrap().len();
+    // 0021 seeds the exchange-difference account, so a fresh archive already has
+    // that one row; the rest are what this call adds.
+    let chart = starter_chart().unwrap().len();
+    let expected = chart - 1;
 
     assert_eq!(seed_starter_chart(database.connection(), NOW).unwrap(), expected);
     assert_eq!(
@@ -119,7 +122,7 @@ fn the_starter_chart_seeds_once_and_never_undoes_a_rename() {
     let renamed = load_account(database.connection(), &bank).unwrap().unwrap();
     assert_eq!(renamed.name, "Betaalrekening ING", "a reseed must not undo the rename");
     assert_eq!(renamed.rgs_code.as_deref(), Some("BEd1"));
-    assert_eq!(list_accounts(database.connection()).unwrap().len(), expected);
+    assert_eq!(list_accounts(database.connection()).unwrap().len(), chart);
 }
 
 #[test]

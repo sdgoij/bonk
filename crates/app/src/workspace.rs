@@ -8176,7 +8176,7 @@ mod tests {
         workspace.ledger.section = LedgerSection::Chart;
         workspace.load_ledger(&session, seller.id);
         match workspace.ledger.data.as_ref() {
-            Some(LedgerData::Chart(accounts)) => assert_eq!(accounts.len(), 18, "the shipped starter chart"),
+            Some(LedgerData::Chart(accounts)) => assert_eq!(accounts.len(), 19, "the shipped starter chart"),
             _ => panic!("the chart did not load: {:?}", workspace.ledger.error),
         }
 

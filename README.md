@@ -319,9 +319,18 @@ before the document's issue date, or the rate chosen for that document, and
 records it on every journal line with the converted amount beside it. Import the
 ECB's `eurofxref-hist.csv` once, or set a rate for a day; without one, posting
 refuses and names the command. The subledger keeps both the document amount and
-its carrying value. Settling a foreign-currency invoice — releasing the carrying
-value and posting the realised difference — is the remaining FX step: a match on
-an item posted at a rate is refused rather than guessed.
+its carrying value.
+
+A payment settles a foreign invoice at the rate for the day the bank booked it.
+The settlement entry is in the reporting currency: it releases the item's
+carrying value and posts the difference to `7900 Koersverschillen`, so a currency
+movement is its own result rather than a change to the sale or cost it relates
+to. A payment that does not use the whole item's value leaves the rest in the
+queue. Cross-currency matching is manual (`bank match` names the items); the
+proposals stay same-currency because an exact amount in one currency is not an
+exact amount in another. This version cannot unmatch a settlement that was made
+at a rate: the payment entry carries the realised difference, and undoing the
+allocation alone would reopen the item while the ledger still shows it cleared.
 
 A month is closed with `ledger close` and opened again with `ledger reopen --reason`,
 and the two gates are deliberately separate. Filing is refused while a document

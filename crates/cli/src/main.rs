@@ -2089,7 +2089,10 @@ fn ledger(access: &Access, database: &Path, keystore: &Path, command: LedgerComm
             Ok(())
         }
         LedgerCommand::Post { documents, actor } => {
-            if store::list_accounts(connection)?.is_empty() {
+            let debit = AccountCode::parse(store::DEBTORS)?;
+            let credit = AccountCode::parse(store::CREDITORS)?;
+            if store::load_account(connection, &debit)?.is_none() || store::load_account(connection, &credit)?.is_none()
+            {
                 return Err(CliError::Input(
                     "no chart of accounts yet; run `bonk ledger setup` first".to_owned(),
                 ));
@@ -2691,7 +2694,10 @@ fn ledger(access: &Access, database: &Path, keystore: &Path, command: LedgerComm
             line,
             actor,
         } => {
-            if store::list_accounts(connection)?.is_empty() {
+            let debit = AccountCode::parse(store::DEBTORS)?;
+            let credit = AccountCode::parse(store::CREDITORS)?;
+            if store::load_account(connection, &debit)?.is_none() || store::load_account(connection, &credit)?.is_none()
+            {
                 return Err(CliError::Input(
                     "no chart of accounts yet; run `bonk ledger setup` first".to_owned(),
                 ));
@@ -3167,6 +3173,12 @@ fn bank(database: &store::Database, owner: SellerId, command: BankCommand, now: 
                     "settled:    {}",
                     amount_text(report.settled.micros(), report.settled.currency())?
                 );
+                if !report.fx_difference.is_zero() {
+                    println!(
+                        "difference: {}",
+                        amount_text(report.fx_difference.micros(), report.fx_difference.currency())?
+                    );
+                }
                 println!("entry:      BNK {}", report.entry_id);
                 println!("allocation: {}", report.allocation_id);
             }

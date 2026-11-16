@@ -77,9 +77,9 @@ pub use open_items::{
     totals as open_item_totals,
 };
 pub use posting::{
-    DEBTORS, PROFILE_ID, PendingPosting, RULE_VERSION, SELF_ASSESSED_RATE_BP, UNCLASSIFIED_EXPENSE, VAT_RECEIVABLE,
-    output_vat_account, pending, post_document, post_inbound_document, post_outbound_document, preview_outbound_entry,
-    revenue_account,
+    CREDITORS, DEBTORS, PROFILE_ID, PendingPosting, RULE_VERSION, SELF_ASSESSED_RATE_BP, UNCLASSIFIED_EXPENSE,
+    VAT_RECEIVABLE, output_vat_account, pending, post_document, post_inbound_document, post_outbound_document,
+    preview_outbound_entry, revenue_account,
 };
 pub use reconcile::{Check, Readiness, readiness};
 pub use repo::{

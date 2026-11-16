@@ -1755,14 +1755,32 @@ append-only. The control-account check now sums carrying values. The CLI has
 names the command that fixes it, and `demo-seed` writes labelled demonstration
 rates so its dollar and pound documents still post.
 
-Still open is settlement. `allocation.amount_micros` is the amount in the item's
-currency and `base_amount_micros` its carrying value, but a payment that settles a
-foreign item has to decide how much of the document currency it clears, release
-the carrying value, and post the realised difference to a dedicated account; the
-same question applies to re-matching after an unmatch, where the payment entry is
-reused. Until that is designed, `bank match` refuses an item posted at a rate
-rather than guessing, and `allocation.fx_difference_micros` stays zero. Unrealised
-revaluation at a period end remains out of scope, as the design's cut line says.
+**Status, 2026-11-16 (a foreign item settles, and the difference has a home).**
+Migration 0021 adds `allocation.transaction_amount_micros` — the same settlement in
+the payment's currency — and seeds `7900 Koersverschillen` into existing charts.
+The settlement maths is now pinned in `bank::allocate_group`: the payment is worth
+a reporting amount at its booking-date rate; an item is worth its outstanding
+document amount at that same date; a payment consumes the lesser of the two, so a
+full settlement takes the whole item and a partial one leaves the rest open. The
+document amount settled is derived from the cash applied, the carrying value is
+released at the item's historical rate, and the difference is the realised result:
+cash minus carrying for a receivable, carrying minus cash for a payable. The entry
+is in the reporting currency — bank, control, and one line on `7900`, credited for
+a gain and debited for a loss — so it balances in the currency the reports are in.
+Every allocation now carries four signed quantities: document amount, payment
+amount, carrying value and realised difference, and `unmatch` reverses all four.
+The queue's "left" and the matched/full test read the payment-currency column, so
+a dollar payment against a pound item still caps correctly.
+
+What this deliberately does not do: cross-currency proposals. `bank propose` and
+`auto-match` stay same-currency, because an exact amount in one currency is not an
+exact amount in another; a cross-currency match is made by hand with `bank match`.
+A settlement at a rate cannot be unmatched in this version: the payment entry is
+keyed by the transaction and carries the realised difference, so appending the
+opposite allocation would reopen the item while the ledger still shows it cleared.
+The refusal is explicit rather than a half-undo. The two remaining FX questions are
+an allocation correction that reverses the entry with it, and period-end
+unrealised revaluation, which stays out of scope as the design's cut line says.
 
 ---
 

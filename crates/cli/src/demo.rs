@@ -599,6 +599,10 @@ fn open_items(
     let mut items: Vec<store::OpenItem> = store::open_items::list(session.database().connection(), owner, kind)?
         .into_iter()
         .filter(store::OpenItem::is_open)
+        // The demo's bank account is in euros, and its generated payments carry the
+        // item's own amount; a foreign invoice needs a rate and a person's choice,
+        // which is not what a demo statement should pretend to make.
+        .filter(|item| item.outstanding.currency() == Currency::EUR)
         .collect();
     items.sort_by(|left, right| {
         right

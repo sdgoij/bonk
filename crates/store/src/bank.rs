@@ -310,7 +310,7 @@ pub fn fingerprint(line: &ParsedTransaction) -> String {
 /// undone, so the sum nets to what is still applied.
 pub fn allocated_micros(conn: &Connection, transaction_id: &str) -> Result<i64, StoreError> {
     let total: i64 = conn.query_row(
-        "SELECT COALESCE(sum(amount_micros), 0) FROM allocation WHERE transaction_id = ?1",
+        "SELECT COALESCE(sum(transaction_amount_micros), 0) FROM allocation WHERE transaction_id = ?1",
         [transaction_id],
         |row| row.get(0),
     )?;
@@ -438,12 +438,43 @@ pub struct MatchReport {
     pub open_item_id: String,
     /// The document number, for a list.
     pub number: String,
-    /// How much was settled.
+    /// How much of the payment was applied, in the payment's currency.
     pub settled: Money,
+    /// The carrying value released, in the reporting currency.
+    pub settled_base: Money,
+    /// The realised exchange difference; positive is a gain.
+    pub fx_difference: Money,
     /// The journal entry posted for it.
     pub entry_id: crux::JournalEntryId,
     /// The allocation written.
     pub allocation_id: String,
+}
+
+/// One item's share of a settlement, in every currency that matters.
+struct Share<'a> {
+    item: &'a crate::open_items::OpenItem,
+    /// Positive document-currency amount settled.
+    document_micros: i64,
+    /// Positive payment-currency amount applied.
+    payment_micros: i64,
+    /// Positive reporting-currency value of what the payment applied.
+    cash_micros: i64,
+    /// Positive carrying value released in the reporting currency.
+    base_micros: i64,
+    /// Realised gain, positive for a gain.
+    fx_gain_micros: i64,
+}
+
+/// The allocation fields an unmatch needs to judge and reverse.
+struct UndoRow {
+    transaction_id: String,
+    open_item_id: Option<String>,
+    amount_micros: i64,
+    transaction_amount_micros: i64,
+    base_amount_micros: i64,
+    fx_difference_micros: i64,
+    item_currency: Option<String>,
+    item_rate: Option<i64>,
 }
 
 /// Candidate open items for one transaction, best first.
@@ -647,12 +678,25 @@ pub fn allocate_group(
     }
 
     let transaction = load_transaction(conn, seller_id, transaction_id)?;
+    let base = crate::report::reporting_currency(conn, seller_id)?;
     let items = crate::open_items::list(conn, seller_id, transaction.kind())?;
+    // A payment is posted once, keyed by the transaction. A later match reuses that
+    // entry, which is sound while every item is in the entry's currency; a match at
+    // a rate is fixed by the entry it wrote and cannot be recomputed.
+    let already_posted: bool = conn.query_row(
+        "SELECT count(*) FROM journal_entry WHERE source_kind = 'bank' AND source_id = ?1",
+        [transaction_id],
+        |row| row.get::<_, i64>(0),
+    )? > 0;
 
-    // Each item takes what is still open on it, capped by what is left of the
-    // payment, so a group can never settle more than arrived.
-    let mut remaining = transaction.amount_micros.abs();
-    let mut shares: Vec<(&crate::open_items::OpenItem, i64)> = Vec::with_capacity(open_item_ids.len());
+    let rate_payment = reporting_rate(conn, seller_id, transaction.currency, transaction.booking_date, base)?;
+    let mut payment_left = transaction.amount_micros.abs();
+    let mut base_left = rate_payment
+        .convert(Money::from_micros(payment_left, transaction.currency), base)
+        .map_err(domain)?
+        .micros();
+    let mut shares: Vec<Share<'_>> = Vec::with_capacity(open_item_ids.len());
+
     for id in open_item_ids {
         let item = items
             .iter()
@@ -661,59 +705,134 @@ pub fn allocate_group(
         if !item.is_open() {
             return Err(StoreError::Rejected(format!("{} is already settled", item.number)));
         }
-        if item.outstanding.currency() != transaction.currency {
+        let item_currency = item.outstanding.currency();
+        let foreign_item = item_currency != base;
+        if foreign_item && item.fx_rate_micros.is_none() {
             return Err(StoreError::Rejected(format!(
-                "{} is in {} and the payment is in {}; a currency difference is a separate entry",
-                item.number,
-                item.outstanding.currency(),
-                transaction.currency
-            )));
-        }
-        if item.fx_rate_micros.is_some() {
-            return Err(StoreError::Rejected(format!(
-                "{} was posted at a rate; settling it must release its carrying value and post the realised difference, which this version does not do yet",
+                "{} was posted before exchange rates existed, so its carrying value is not in {base} and it cannot be settled at a rate",
                 item.number
             )));
         }
-        let share = remaining.min(item.outstanding.micros().abs());
-        if share == 0 {
+        let cross_currency = transaction.currency != item_currency || item.fx_rate_micros.is_some();
+        if already_posted && cross_currency {
+            return Err(StoreError::Rejected(format!(
+                "transaction {transaction_id} was already matched at a rate; its payment entry carries the realised difference, so a second match would disagree with it"
+            )));
+        }
+
+        let rate_item = reporting_rate(conn, seller_id, item_currency, transaction.booking_date, base)?;
+        let rate_history = match item.fx_rate_micros {
+            Some(micros) => crux::ExchangeRate::from_per_unit_micros(micros).map_err(domain)?,
+            None => crux::ExchangeRate::ONE,
+        };
+        let outstanding = item.outstanding.micros().abs();
+        let value_now = rate_item
+            .convert(Money::from_micros(outstanding, item_currency), base)
+            .map_err(domain)?
+            .micros();
+        if value_now <= 0 || base_left <= 0 {
             return Err(StoreError::Rejected(format!(
                 "nothing left of the payment to settle {}",
                 item.number
             )));
         }
-        remaining -= share;
-        shares.push((item, share));
+
+        // Cash is capped by what the item is worth now, not by what it was worth
+        // when it was posted: the difference between those two is the realised
+        // result. A full settlement takes the item's whole outstanding amount.
+        let mut cash_used = base_left.min(value_now);
+        let document = if cash_used >= value_now {
+            outstanding
+        } else {
+            back_to(Money::from_micros(cash_used, base), item_currency, rate_item)?
+                .micros()
+                .min(outstanding)
+        };
+        if document == 0 {
+            return Err(StoreError::Rejected(format!(
+                "nothing left of the payment to settle {}",
+                item.number
+            )));
+        }
+        let payment_used = if transaction.currency == base {
+            cash_used
+        } else {
+            back_to(Money::from_micros(cash_used, base), transaction.currency, rate_payment)?
+                .micros()
+                .min(payment_left)
+                .max(1)
+        };
+        // Rounding on the way back through the payment currency can move a
+        // micro-unit; the cash side is the one the entry carries, so re-derive it
+        // from the payment amount that is actually consumed.
+        if transaction.currency != base {
+            cash_used = rate_payment
+                .convert(Money::from_micros(payment_used, transaction.currency), base)
+                .map_err(domain)?
+                .micros()
+                .min(base_left);
+        }
+        let carrying = rate_history
+            .convert(Money::from_micros(document, item_currency), base)
+            .map_err(domain)?
+            .micros();
+        let gain = match transaction.kind() {
+            crate::open_items::OpenItemKind::Receivable => cash_used - carrying,
+            crate::open_items::OpenItemKind::Payable => carrying - cash_used,
+        };
+
+        payment_left -= payment_used;
+        base_left -= cash_used;
+        shares.push(Share {
+            item,
+            document_micros: document,
+            payment_micros: payment_used,
+            cash_micros: cash_used,
+            base_micros: carrying,
+            fx_gain_micros: gain,
+        });
+        if payment_left == 0 {
+            break;
+        }
     }
 
-    let total: i64 = shares.iter().map(|(_, share)| *share).sum();
-    let currency = transaction.currency;
-    let names: Vec<&str> = shares.iter().map(|(item, _)| item.number.as_str()).collect();
+    let total_payment: i64 = shares.iter().map(|share| share.payment_micros).sum();
+    let total_cash: i64 = shares.iter().map(|share| share.cash_micros).sum();
+    let total_carrying: i64 = shares.iter().map(|share| share.base_micros).sum();
+    let total_gain: i64 = shares.iter().map(|share| share.fx_gain_micros).sum();
+    let names: Vec<&str> = shares.iter().map(|share| share.item.number.as_str()).collect();
 
     let database = conn.unchecked_transaction()?;
     let posted = post_settlement(
         &database,
         &transaction,
         &names,
-        Money::from_micros(total, currency),
+        Money::from_micros(total_cash, base),
+        Money::from_micros(total_carrying, base),
+        Money::from_micros(total_gain, base),
+        base,
         actor,
         now,
     )?;
 
     let mut reports = Vec::with_capacity(shares.len());
-    for (item, share) in &shares {
+    for share in &shares {
         let allocation_id = crux::DocumentId::new().to_string();
         database.execute(
             "INSERT INTO allocation
-                 (id, transaction_id, open_item_id, entry_id, amount_micros, base_amount_micros,
-                  fx_difference_micros, matched_at, matched_by, match_method, reversed)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?5, 0, ?6, ?7, ?8, 0)",
+                 (id, transaction_id, open_item_id, entry_id, amount_micros,
+                  transaction_amount_micros, base_amount_micros, fx_difference_micros,
+                  matched_at, matched_by, match_method, reversed)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 0)",
             params![
                 allocation_id,
                 transaction_id,
-                item.id,
+                share.item.id,
                 posted.id.to_string(),
-                -share,
+                -share.document_micros,
+                -share.payment_micros,
+                -share.base_micros,
+                share.fx_gain_micros,
                 now,
                 actor,
                 method.as_str(),
@@ -721,9 +840,11 @@ pub fn allocate_group(
         )?;
         reports.push(MatchReport {
             transaction_id: transaction_id.to_owned(),
-            open_item_id: item.id.clone(),
-            number: item.number.clone(),
-            settled: Money::from_micros(-share, currency),
+            open_item_id: share.item.id.clone(),
+            number: share.item.number.clone(),
+            settled: Money::from_micros(-share.payment_micros, transaction.currency),
+            settled_base: Money::from_micros(-share.base_micros, base),
+            fx_difference: Money::from_micros(share.fx_gain_micros, base),
             entry_id: posted.id,
             allocation_id,
         });
@@ -737,7 +858,7 @@ pub fn allocate_group(
         .filter(|candidate| open_item_ids.contains(&candidate.id))
         .any(|candidate| candidate.is_open());
     let allocated: i64 = database.query_row(
-        "SELECT COALESCE(sum(amount_micros), 0) FROM allocation WHERE transaction_id = ?1",
+        "SELECT COALESCE(sum(transaction_amount_micros), 0) FROM allocation WHERE transaction_id = ?1",
         [transaction_id],
         |row| row.get(0),
     )?;
@@ -764,7 +885,11 @@ pub fn allocate_group(
         serde_json::json!({
             "open_items": open_item_ids,
             "numbers": names,
-            "settled_micros": -total,
+            "currency": transaction.currency.as_str(),
+            "base_currency": base.as_str(),
+            "settled_micros": -total_payment,
+            "carrying_micros": -total_carrying,
+            "fx_difference_micros": total_gain,
             "method": method.as_str(),
             "entry": posted.id.to_string(),
         }),
@@ -804,7 +929,10 @@ pub fn allocate(
 /// Undoes a match by appending its opposite.
 ///
 /// Nothing is deleted: the history says a person matched it and then matched it
-/// away, which is what an auditor needs and what a delete cannot say.
+/// away, which is what an auditor needs and what a delete cannot say. A settlement
+/// at a rate is refused: its carrying value and realised difference are in the
+/// payment entry, and appending the opposite allocation alone would reopen the item
+/// while the ledger still shows it cleared.
 pub fn unmatch(
     conn: &Connection,
     seller_id: SellerId,
@@ -812,19 +940,57 @@ pub fn unmatch(
     actor: &str,
     now: &str,
 ) -> Result<(), StoreError> {
-    let (transaction_id, open_item_id, amount_micros, base_amount_micros): (String, String, i64, i64) = conn
+    let row: UndoRow = conn
         .query_row(
-            "SELECT transaction_id, open_item_id, amount_micros, base_amount_micros
-             FROM allocation WHERE id = ?1",
+            "SELECT a.transaction_id, a.open_item_id, a.amount_micros, a.transaction_amount_micros,
+                    a.base_amount_micros, a.fx_difference_micros, o.currency, o.fx_rate_micros
+             FROM allocation a LEFT JOIN open_item o ON o.id = a.open_item_id
+             WHERE a.id = ?1",
             [allocation_id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            |row| {
+                Ok(UndoRow {
+                    transaction_id: row.get(0)?,
+                    open_item_id: row.get(1)?,
+                    amount_micros: row.get(2)?,
+                    transaction_amount_micros: row.get(3)?,
+                    base_amount_micros: row.get(4)?,
+                    fx_difference_micros: row.get(5)?,
+                    item_currency: row.get(6)?,
+                    item_rate: row.get(7)?,
+                })
+            },
         )
         .map_err(|_| StoreError::NotFound(format!("allocation {allocation_id}")))?;
+
+    let Some(open_item_id) = row.open_item_id else {
+        return Err(StoreError::Rejected(format!(
+            "allocation {allocation_id} is not a settlement against an open item"
+        )));
+    };
+    let base = crate::report::reporting_currency(conn, seller_id)?;
+    let foreign = match row.item_currency.as_deref() {
+        Some(raw) => Currency::parse(raw).map_err(|error| StoreError::Data(error.to_string()))? != base,
+        None => false,
+    };
+    // A settlement at a rate released a carrying value and wrote a difference into
+    // the payment entry. Appending the opposite allocation would open the item
+    // again while the ledger still shows it cleared, so this version refuses rather
+    // than half-undo the match. The item, the rate and the difference stay as the
+    // entry recorded them.
+    if foreign
+        || row.fx_difference_micros != 0
+        || row.transaction_amount_micros != row.amount_micros
+        || row.item_rate.is_some()
+    {
+        return Err(StoreError::Rejected(format!(
+            "allocation {allocation_id} settled an item at a rate; its realised difference is part of the payment entry, which this version cannot undo"
+        )));
+    }
 
     let undone: i64 = conn.query_row(
         "SELECT count(*) FROM allocation
          WHERE transaction_id = ?1 AND open_item_id = ?2 AND amount_micros = ?3",
-        params![transaction_id, open_item_id, -amount_micros],
+        params![row.transaction_id, open_item_id, -row.amount_micros],
         |row| row.get(0),
     )?;
     if undone > 0 {
@@ -835,22 +1001,25 @@ pub fn unmatch(
 
     conn.execute(
         "INSERT INTO allocation
-             (id, transaction_id, open_item_id, entry_id, amount_micros, base_amount_micros,
-              fx_difference_micros, matched_at, matched_by, match_method, reversed)
-         VALUES (?1, ?2, ?3, NULL, ?4, ?5, 0, ?6, ?7, 'manual', 1)",
+             (id, transaction_id, open_item_id, entry_id, amount_micros,
+              transaction_amount_micros, base_amount_micros, fx_difference_micros,
+              matched_at, matched_by, match_method, reversed)
+         VALUES (?1, ?2, ?3, NULL, ?4, ?5, ?6, ?7, ?8, ?9, 'manual', 1)",
         params![
             crux::DocumentId::new().to_string(),
-            transaction_id,
+            row.transaction_id,
             open_item_id,
-            -amount_micros,
-            -base_amount_micros,
+            -row.amount_micros,
+            -row.transaction_amount_micros,
+            -row.base_amount_micros,
+            -row.fx_difference_micros,
             now,
             actor,
         ],
     )?;
     conn.execute(
         "UPDATE bank_transaction SET status = 'new' WHERE id = ?1",
-        [&transaction_id],
+        [&row.transaction_id],
     )?;
     audit::append(
         conn,
@@ -858,45 +1027,89 @@ pub fn unmatch(
         actor,
         "bank_transaction_unmatched",
         "bank_transaction",
-        &transaction_id,
+        &row.transaction_id,
         serde_json::json!({
             "allocation": allocation_id,
             "open_item": open_item_id,
-            "amount_micros": -amount_micros,
+            "amount_micros": -row.amount_micros,
         }),
     )?;
-    let _ = seller_id;
     Ok(())
+}
+
+/// The rate from `currency` into the reporting currency at a date, or a refusal
+/// naming the commands that provide one.
+fn reporting_rate(
+    conn: &Connection,
+    seller_id: SellerId,
+    currency: Currency,
+    date: LocalDate,
+    base: Currency,
+) -> Result<crux::ExchangeRate, StoreError> {
+    if currency == base {
+        return Ok(crux::ExchangeRate::ONE);
+    }
+    crate::fx::rate_on(conn, seller_id, currency, date)?.ok_or_else(|| {
+        StoreError::Rejected(format!(
+            "there is no {base} rate for {currency} on or before {date}; import a rate file (`bonk ledger fx import <file>`) or set one (`bonk ledger fx set --currency {currency} --date {date} --rate <{base} per {currency}>`)"
+        ))
+    })
+}
+
+/// Converts a reporting-currency amount back into `target` at `rate`.
+fn back_to(amount: Money, target: Currency, rate: crux::ExchangeRate) -> Result<Money, StoreError> {
+    let micros = amount
+        .mul_div_round(i128::from(crux::MICROS_PER_UNIT), i128::from(rate.per_unit_micros()))
+        .map_err(domain)?
+        .micros();
+    Ok(Money::from_micros(micros, target))
 }
 
 /// Posts the payment: money in moves bank up and debtors down, and the reverse
 /// for money out.
 ///
-/// It runs inside the caller's transaction, so an allocation that fails takes the
-/// payment with it. The description names the invoices the payment settles,
-/// because on the bank statement the entry is one line and a reader has to be
-/// able to see why.
+/// The entry is in the reporting currency. The bank line is what the payment was
+/// worth, the control line releases the item's carrying value, and a realised
+/// difference goes to its own account rather than into the sale or the cost it
+/// relates to. It runs inside the caller's transaction, so an allocation that
+/// fails takes the payment with it.
+#[allow(clippy::too_many_arguments)]
 fn post_settlement(
     conn: &Connection,
     transaction: &LoadedTransaction,
     numbers: &[&str],
-    amount: Money,
+    cash: Money,
+    carrying: Money,
+    gain: Money,
+    base: Currency,
     actor: &str,
     now: &str,
 ) -> Result<crate::ledger::PostedEntry, StoreError> {
-    let magnitude = Money::from_micros(amount.micros().abs(), amount.currency());
     let bank_account = account(&transaction.ledger_account_code)?;
-    let lines = if transaction.kind() == crate::open_items::OpenItemKind::Receivable {
+    let mut lines = if transaction.kind() == crate::open_items::OpenItemKind::Receivable {
         vec![
-            crux::LedgerLine::debit(bank_account, magnitude).map_err(domain)?,
-            crux::LedgerLine::credit(account(crate::posting::DEBTORS)?, magnitude).map_err(domain)?,
+            crux::LedgerLine::debit(bank_account, cash).map_err(domain)?,
+            crux::LedgerLine::credit(account(crate::posting::DEBTORS)?, carrying).map_err(domain)?,
         ]
     } else {
         vec![
-            crux::LedgerLine::debit(account(crate::posting::CREDITORS)?, magnitude).map_err(domain)?,
-            crux::LedgerLine::credit(bank_account, magnitude).map_err(domain)?,
+            crux::LedgerLine::debit(account(crate::posting::CREDITORS)?, carrying).map_err(domain)?,
+            crux::LedgerLine::credit(bank_account, cash).map_err(domain)?,
         ]
     };
+    if gain.is_positive() {
+        lines.push(crux::LedgerLine::credit(account(crate::ledger::FX_DIFFERENCE_ACCOUNT)?, gain).map_err(domain)?);
+    } else if gain.is_negative() {
+        lines.push(
+            crux::LedgerLine::debit(
+                account(crate::ledger::FX_DIFFERENCE_ACCOUNT)?,
+                gain.checked_neg().map_err(domain)?,
+            )
+            .map_err(domain)?,
+        );
+    }
+    debug_assert_eq!(cash.currency(), base);
+    debug_assert_eq!(carrying.currency(), base);
 
     let description = format!("Betaling {}", numbers.join(", "));
     let entry = crux::LedgerEntry::new(crux::Journal::Bank, description, lines).map_err(domain)?;

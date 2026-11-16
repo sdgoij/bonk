@@ -750,6 +750,13 @@ fn year_bounds(year: i32) -> Result<(LocalDate, LocalDate), StoreError> {
 /// account is to be emptied, not to be lived in.
 pub const UNCLASSIFIED_ACCOUNT: &str = "9999";
 
+/// Where a realised exchange difference lands.
+///
+/// One account, credited for a gain and debited for a loss, so the result of a
+/// foreign settlement is visible as its own figure rather than folded into the
+/// revenue or cost it relates to.
+pub const FX_DIFFERENCE_ACCOUNT: &str = "7900";
+
 /// The starter chart: what a Dutch small business needs to post a quarter.
 ///
 /// Codes follow the conventional Dutch numbering, and the ones the posting rules
@@ -763,7 +770,7 @@ pub const UNCLASSIFIED_ACCOUNT: &str = "9999";
 pub fn starter_chart() -> Result<Vec<Account>, StoreError> {
     // Read as a table: code, name, kind, control account. Ordering is the order
     // the interface shows, grouped the way a chart of accounts is presented.
-    const CHART: [(&str, &str, AccountKind, bool); 18] = [
+    const CHART: [(&str, &str, AccountKind, bool); 19] = [
         ("1000", "Kas", AccountKind::Asset, false),
         ("1100", "Bank", AccountKind::Asset, false),
         ("1300", "Handelsdebiteuren", AccountKind::Asset, true),
@@ -781,6 +788,7 @@ pub fn starter_chart() -> Result<Vec<Account>, StoreError> {
         ("8050", "Omzet vrijgesteld", AccountKind::Revenue, false),
         ("7000", "Algemene kosten", AccountKind::Expense, false),
         ("7100", "Bankkosten", AccountKind::Expense, false),
+        (FX_DIFFERENCE_ACCOUNT, "Koersverschillen", AccountKind::Expense, false),
         (UNCLASSIFIED_ACCOUNT, "Nog te rubriceren", AccountKind::Expense, false),
     ];
 
