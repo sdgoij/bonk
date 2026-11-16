@@ -15,6 +15,7 @@
 mod facturx;
 pub mod layout;
 pub mod pdf;
+mod preflight;
 pub mod template;
 mod text;
 
@@ -22,6 +23,7 @@ use serde::Serialize;
 use thiserror::Error;
 
 pub use layout::{Colour, Document, Op, Page, Point};
+pub use preflight::Preflight;
 pub use template::Template;
 
 /// The renderer name and version, recorded on every artefact.
@@ -262,6 +264,15 @@ impl Renderer {
     /// The template this renderer draws.
     pub fn template(&self) -> &Template {
         &self.template
+    }
+
+    /// What this document will look wrong about unless it is changed.
+    ///
+    /// A preflight does not refuse anything: it is the renderer saying what it
+    /// cannot draw well — a character the bundled font has no glyph for, an amount
+    /// too wide for the page — with the field that carries it.
+    pub fn preflight(&self, data: &InvoiceData) -> Vec<Preflight> {
+        preflight::check(&self.template, data)
     }
 }
 

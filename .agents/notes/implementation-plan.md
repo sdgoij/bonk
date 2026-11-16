@@ -654,8 +654,9 @@ the `facturx` artefact, imports it into a second archive, and checks the number
 and supplier arrive intact. That round trip is the strongest evidence here that
 the attachment is the invoice and not a copy of it.
 
-What is still not done: M4.7's preflight diagnostics; a render failure is still a
-string. The veraPDF gate is in — see below — as is the profile ladder.
+The three notes that follow record what landed after that first slice: the external
+PDF/A gate (M4.6), the profile ladder (M4.3), the inbound page, and the page
+check (M4.7).
 
 **Status, 2026-11-16 (M4.6, the gate that found a bug).** `just verapdf` runs
 `tools/verapdf.sh`: it downloads veraPDF into the ignored `target/validator/`,
@@ -683,8 +684,21 @@ instead of shipping a container that only lenient readers accept. A unit test
 walks the table the way a strict reader does and fails if an entry does not point
 at its object; another shifts a valid file and proves the check notices.
 
-What is still not done: M4.7's preflight diagnostics; a render failure is still a
-string.
+**Status, 2026-11-16 (M4.7, the page check).** `render::preflight` looks at what the
+template and the data will do together before anything is drawn, and `application`
+turns its warnings into findings the front ends already know how to show. Two checks
+earned their place: a character the bundled font has no glyph for, and an amount
+wider than the sheet. The composer shows them under the conformance findings,
+read-only — a preflight warning is not a draft finding, so there is nothing to
+suppress and nothing to accept — and `bonk issue` prints them on stderr.
+
+The glyph check is not cosmetic. Trying it by hand showed that PDF/A refuses a
+`.notdef` outright: krilla's archival validator rejects the document, so a name with
+a character the font lacks issues with a UBL and a plain PDF and **no hybrid**. That
+is a better failure than a blank box inside a conformant-looking file, but it is only
+legible because the warning names the value and the code point. The check respects
+the template: a layout that does not draw the lines is not checked for the names of
+the lines it leaves out.
 
 **Status, 2026-11-16 (the profile ladder).** M4.3 is done: `crux::FacturXProfile`
 names the five levels and owns what each may carry, because the same claim is

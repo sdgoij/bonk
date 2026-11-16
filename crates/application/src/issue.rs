@@ -171,6 +171,32 @@ fn stopped(findings: Vec<Finding>) -> IssueOutcome {
     }
 }
 
+/// What the renderer can tell is wrong with the document before it is issued.
+///
+/// Warnings, never blocking: issuing is the legal act, and a page that will show a
+/// blank box is a reason to fix the text rather than a reason to refuse the
+/// invoice. The findings carry the field that holds the value, so a front end can
+/// put the cursor on it.
+pub fn preflight(
+    view: &IssueView<'_>,
+    language: render::Language,
+    template: Option<&render::Template>,
+) -> Vec<Finding> {
+    let data = pdf_data(
+        view.number,
+        view.draft,
+        view.seller,
+        view.customer,
+        view.totals,
+        language,
+    );
+    renderer_for(template)
+        .preflight(&data)
+        .into_iter()
+        .map(|warning| Finding::warning(warning.code, None, warning.field, warning.message))
+        .collect()
+}
+
 /// Renders a document to UBL for the issue transaction.
 ///
 /// Shared by the GUI and the CLI so both produce byte-identical artefacts. UBL is

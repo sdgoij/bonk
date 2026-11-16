@@ -1193,6 +1193,51 @@ mod tests {
     }
 
     #[test]
+    fn preflight_names_the_field_the_page_cannot_draw() {
+        // The renderer knows the font it will draw with, so it can say which value
+        // holds a character that has no glyph — before the PDF is written, and
+        // without refusing to write it.
+        let (_directory, archive) = archive();
+        let (seller, customer) = seed(&archive);
+        let domain = draft(&seller, &customer, "Consulting 中")
+            .into_draft()
+            .expect("the fixture is a valid draft");
+        let seller = store::load_seller(archive.database().connection(), domain.seller_id).unwrap();
+        let customer = store::load_customer(archive.database().connection(), domain.customer_id).unwrap();
+        let totals = crux::calculate_totals(&domain.lines).unwrap();
+        let view = store::IssueView {
+            id: domain.id,
+            number: "2026-9001",
+            draft: &domain,
+            seller: &seller,
+            customer: &customer,
+            totals: &totals,
+        };
+
+        let warnings = crate::preflight(&view, crate::DocumentLanguage::English, None);
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert_eq!(warnings[0].code, "M4-001");
+        assert_eq!(warnings[0].field, "lines[0].name");
+        assert_eq!(warnings[0].severity, crux::Severity::Warning, "a page is not a refusal");
+        assert!(warnings[0].message.contains("U+4E2D"), "{}", warnings[0].message);
+
+        // A document the font can draw produces nothing at all.
+        let plain = draft(&seller.id.to_string(), &customer.id.to_string(), "Consultancy")
+            .into_draft()
+            .expect("the fixture is a valid draft");
+        let totals = crux::calculate_totals(&plain.lines).unwrap();
+        let view = store::IssueView {
+            id: plain.id,
+            number: "2026-9002",
+            draft: &plain,
+            seller: &seller,
+            customer: &customer,
+            totals: &totals,
+        };
+        assert!(crate::preflight(&view, crate::DocumentLanguage::English, None).is_empty());
+    }
+
+    #[test]
     fn a_lower_level_files_a_hybrid_that_states_it() {
         let (_directory, mut archive) = archive();
         let (seller, customer) = seed(&archive);

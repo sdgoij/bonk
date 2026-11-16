@@ -2103,6 +2103,11 @@ pub mod editor {
         sentence!(language, "Factur-X level", "Factur-X-niveau")
     }
 
+    /// What the page cannot draw as it stands.
+    pub fn preflight_heading(language: Language) -> &'static str {
+        sentence!(language, "Page check", "Paginacontrole")
+    }
+
     /// No particular layout, so the archive's default draws.
     pub fn layout_default(language: Language) -> &'static str {
         sentence!(language, "Archive default", "Standaard van het archief")

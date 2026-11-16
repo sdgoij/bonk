@@ -3955,6 +3955,28 @@ impl Workspace {
                             if suppressed > 0 {
                                 ui.label(text::editor::suppressed_warnings(language, suppressed));
                             }
+
+                            // What the page itself cannot do: a character the
+                            // bundled font has no glyph for, an amount wider than
+                            // the sheet. They do not block issuing, so they are
+                            // shown beside the findings rather than among them.
+                            if let Ok(totals) = calculate_totals(&draft.lines) {
+                                let number = text::editor::preview_number(language);
+                                let view = IssueView {
+                                    id: draft.id,
+                                    number,
+                                    draft: &draft,
+                                    seller: &seller,
+                                    customer,
+                                    totals: &totals,
+                                };
+                                let warnings = crate::preflight(
+                                    &view,
+                                    editor.document_language,
+                                    self.layout(editor.template.as_deref()).map(|layout| &layout.template),
+                                );
+                                show_preflight(ui, language, &warnings);
+                            }
                         }
                         None => {
                             ui.colored_label(tokens.error, text::editor::select_customer_to_validate(language));
@@ -6283,6 +6305,26 @@ fn fact(ui: &mut egui::Ui, language: Language, fact: Fact, value: &str) {
     ui.end_row();
 }
 
+/// Draws what the renderer says will look wrong with the page.
+///
+/// Read-only on purpose: a preflight warning is not a draft finding, so there is
+/// nothing to suppress and nothing to accept. The message names the field, which is
+/// what a person needs to find the text.
+fn show_preflight(ui: &mut egui::Ui, language: Language, warnings: &[Finding]) {
+    if warnings.is_empty() {
+        return;
+    }
+    let tokens = *theme::palette(ui.ctx());
+    ui.add_space(6.0);
+    ui.strong(text::editor::preflight_heading(language));
+    for warning in warnings.iter().take(8) {
+        ui.colored_label(
+            tokens.warning,
+            format!("{} {}: {}", warning.code, warning.field, warning.message),
+        );
+    }
+}
+
 fn show_findings(ui: &mut egui::Ui, language: Language, findings: &[Finding]) -> Option<FindingAction> {
     let tokens = *theme::palette(ui.ctx());
     let mut action = None;
@@ -6702,6 +6744,13 @@ mod tests {
         std::fs::create_dir_all(&drop_folder).unwrap();
         workspace.watch.folder = Some(drop_folder);
         workspace.start_watch_with(Duration::ZERO, Duration::ZERO);
+
+        // The composer draws its page check too, and a name the embedded font
+        // cannot draw is the case that has no other way to reach that code.
+        let mut form = editor();
+        form.customer = Some(customer.id);
+        form.lines[0].name = "Consulting 中".to_owned();
+        workspace.editor = Some(form);
 
         for tab in [Tab::Search, Tab::Customers, Tab::Ledger, Tab::Settings] {
             workspace.tab = tab;

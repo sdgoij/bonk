@@ -735,6 +735,15 @@ draws. `templates/compact.json` in this repository is a second one to copy from 
 tighter margins, smaller type, no footer — and the PDF/A gate issues at it as well
 as at the built-in, so both are known to stay conformant.
 
+The composer checks the page before issuing it. Anything the embedded font has no
+glyph for — a CJK name typed into a line item, a stray symbol — is named with the
+field that holds it and the code point, because the alternative is discovering it
+as a blank box in a PDF nobody re-reads, and PDF/A will not accept a `.notdef`
+at all: such a document still issues and still files its UBL and plain PDF, but no
+hybrid is written. An amount too wide for the sheet is reported the same way. The
+check is read-only and never blocks: it says what to fix, and issuing is still the
+user's call.
+
 Factur-X is the same page in a PDF/A-3 container: krilla writes it at that
 conformance level, the CII invoice is attached as `factur-x.xml` with
 `/AFRelationship /Alternative`, and the XMP packet names the file and the level it

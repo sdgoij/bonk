@@ -1919,18 +1919,26 @@ fn run(cli: Cli) -> Result<(), CliError> {
                 }
             }
 
+            // What the renderer can already tell will look wrong: characters the
+            // embedded font cannot draw, a line too wide for the page. The
+            // document is issued either way, so these are warnings with the field
+            // that carries the value.
+            let view = IssueView {
+                id: issued.id,
+                number: &issued.number,
+                draft: &loaded,
+                seller: &seller,
+                customer: &customer,
+                totals: &issued.totals,
+            };
+            for warning in application::preflight(&view, language, template.map(|template| &template.template)) {
+                eprintln!("preflight: {} {}: {}", warning.code, warning.field, warning.message);
+            }
+
             // The hybrid: the same page with the CII attached, which is what a
             // counterparty that asks for Factur-X receives. It is filed as its own
             // artefact, with the profile stated on the row.
             if let Some(cii) = cii {
-                let view = IssueView {
-                    id: issued.id,
-                    number: &issued.number,
-                    draft: &loaded,
-                    seller: &seller,
-                    customer: &customer,
-                    totals: &issued.totals,
-                };
                 match application::facturx_from_cii(
                     &view,
                     &cii,
