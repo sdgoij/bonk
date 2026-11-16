@@ -1772,11 +1772,13 @@ amount, carrying value and realised difference, and `unmatch` reverses all four.
 The queue's "left" and the matched/full test read the payment-currency column, so
 a dollar payment against a pound item still caps correctly.
 
-**Status, 2026-11-16 (a settlement at a rate can be undone and matched again).**
-`bank unmatch --reason` undoes a rate settlement whole: it reverses the payment
-entry and appends the opposite allocation for every item the payment settled, in
-one transaction, so the invoice reopens and the ledger stops showing it cleared.
-The reversal is dated on the payment's booking date and named in the
+**Status, 2026-11-16 (a settlement can be undone and matched again).**
+`bank unmatch --reason` undoes a settlement whole: it reverses the payment entry
+and appends the opposite allocation for every item the payment settled, in one
+transaction, so the invoice reopens and the ledger stops showing it cleared. This
+is the same path for a same-currency settlement and one made at a rate, and the
+control account no longer disagrees with its subledger after an undo. The reversal
+is dated on the payment's booking date and named in the
 `bank_transaction_unmatched` audit event. A payment that settled several items is
 undone as a unit, because its one entry cannot be split across allocations that
 stay behind. The `(source_kind, source_id)` uniqueness that stops a payment

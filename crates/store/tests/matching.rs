@@ -357,6 +357,23 @@ fn unmatching_puts_the_item_back_and_keeps_the_history() {
         1
     );
 
+    // The payment entry is reversed too: the control account and the subledger
+    // agree again, and the bank no longer shows a payment that settles nothing.
+    assert!(
+        store::reversal_of(books.database.connection(), matched[0].entry_id)
+            .unwrap()
+            .is_some(),
+        "the settlement entry is reversed"
+    );
+    assert_eq!(books.balance("1100"), 0, "the payment is unbooked");
+    assert_eq!(books.balance("1300"), 1_210_000_000, "the invoice is owed again");
+    let ready = store::readiness(books.database.connection(), books.seller, 2026, 2).unwrap();
+    assert!(
+        matches!(ready.control_accounts, store::Check::Passed),
+        "{:?}",
+        ready.control_accounts
+    );
+
     // Undoing the same allocation twice is refused.
     let again = unmatch(
         books.database.connection(),
@@ -368,6 +385,37 @@ fn unmatching_puts_the_item_back_and_keeps_the_history() {
     )
     .unwrap_err();
     assert!(again.to_string().contains("already been undone"), "{again}");
+}
+
+#[test]
+fn a_settlement_can_be_matched_again_after_an_unmatch() {
+    let mut books = Books::open();
+    books.sell(1_000, "2026-02-10");
+    books.receive_payment(1_210_000_000, "factuur 2026-0001", "feb");
+    let first = auto_match(books.database.connection(), books.seller, "ada", NOW).unwrap();
+
+    unmatch(
+        books.database.connection(),
+        books.seller,
+        &first[0].allocation_id,
+        "the wrong invoice",
+        "ada",
+        NOW,
+    )
+    .unwrap();
+
+    let second = auto_match(books.database.connection(), books.seller, "ada", NOW).unwrap();
+    assert_eq!(second.len(), 1);
+    assert_ne!(
+        second[0].entry_id, first[0].entry_id,
+        "a fresh entry, not the reversed one"
+    );
+    assert_eq!(books.outstanding(OpenItemKind::Receivable), 0);
+    assert_eq!(books.balance("1100"), 1_210_000_000, "the payment is booked again");
+    assert_eq!(books.balance("1300"), 0, "debtors are cleared again");
+
+    let ready = store::readiness(books.database.connection(), books.seller, 2026, 2).unwrap();
+    assert!(ready.is_ready(), "{:?}", ready.blockers());
 }
 
 #[test]

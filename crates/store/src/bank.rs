@@ -465,28 +465,22 @@ struct Share<'a> {
     fx_gain_micros: i64,
 }
 
-/// The allocation fields an unmatch needs to judge and reverse.
+/// The allocation fields an unmatch needs before it reverses the payment.
 struct UndoRow {
     transaction_id: String,
     open_item_id: Option<String>,
-    amount_micros: i64,
-    transaction_amount_micros: i64,
-    base_amount_micros: i64,
-    fx_difference_micros: i64,
     entry_id: Option<String>,
-    reversed: i64,
 }
 
-/// An allocation still in force, as a rate-settlement undo needs it.
+/// An allocation still in force, as an undo needs it.
 struct ActiveAllocation {
+    allocation_id: String,
     open_item_id: String,
     amount_micros: i64,
     transaction_amount_micros: i64,
     base_amount_micros: i64,
     fx_difference_micros: i64,
     entry_id: Option<String>,
-    item_currency: Option<String>,
-    item_rate: Option<i64>,
 }
 
 /// Candidate open items for one transaction, best first.
@@ -938,16 +932,15 @@ pub fn allocate(
         .ok_or_else(|| StoreError::Rejected("the match wrote no allocation".to_owned()))
 }
 
-/// Undoes a match by appending its opposite.
+/// Undoes a match by appending its opposite and reversing the payment entry.
 ///
 /// Nothing is deleted: the history says a person matched it and then matched it
-/// away, which is what an auditor needs and what a delete cannot say.
-///
-/// A settlement made at a rate also released a carrying value and wrote a realised
-/// difference into the payment entry, so undoing it means undoing the entry as
-/// well. The reversal and the opposite allocation are written together. A payment
-/// that settled several items is undone whole, because its one entry cannot be
-/// split across allocations that stay behind.
+/// away, which is what an auditor needs and what a delete cannot say. The payment
+/// entry is reversed in the same transaction as the opposite allocations, because
+/// reopening the item while the ledger still shows it cleared would leave the
+/// control account disagreeing with its own subledger. A payment that settled
+/// several items is undone whole: its one entry cannot be split across allocations
+/// that stay behind.
 pub fn unmatch(
     conn: &Connection,
     seller_id: SellerId,
@@ -961,119 +954,36 @@ pub fn unmatch(
     }
     let row: UndoRow = conn
         .query_row(
-            "SELECT a.transaction_id, a.open_item_id, a.amount_micros, a.transaction_amount_micros,
-                    a.base_amount_micros, a.fx_difference_micros, a.entry_id, a.reversed
-             FROM allocation a
-             WHERE a.id = ?1",
+            "SELECT transaction_id, open_item_id, entry_id FROM allocation WHERE id = ?1",
             [allocation_id],
             |row| {
                 Ok(UndoRow {
                     transaction_id: row.get(0)?,
                     open_item_id: row.get(1)?,
-                    amount_micros: row.get(2)?,
-                    transaction_amount_micros: row.get(3)?,
-                    base_amount_micros: row.get(4)?,
-                    fx_difference_micros: row.get(5)?,
-                    entry_id: row.get(6)?,
-                    reversed: row.get(7)?,
+                    entry_id: row.get(2)?,
                 })
             },
         )
         .map_err(|_| StoreError::NotFound(format!("allocation {allocation_id}")))?;
 
-    let Some(open_item_id) = row.open_item_id.clone() else {
+    if row.open_item_id.is_none() {
         return Err(StoreError::Rejected(format!(
             "allocation {allocation_id} is not a settlement against an open item"
         )));
-    };
-    if row.reversed != 0 {
-        return Err(StoreError::Rejected(format!(
-            "allocation {allocation_id} has already been undone"
-        )));
     }
-
-    // Whether the payment entry carries a rate settlement is a property of the
-    // whole transaction, not of the one allocation named: a euro item in a group
-    // that also settled a pound item has no rate of its own, but its payment entry
-    // still carries the realised difference of the group.
-    let base = crate::report::reporting_currency(conn, seller_id)?;
     let shares = active_allocations(conn, &row.transaction_id)?;
-    let mut at_a_rate = false;
-    for share in &shares {
-        let foreign = match share.item_currency.as_deref() {
-            Some(raw) => Currency::parse(raw).map_err(|error| StoreError::Data(error.to_string()))? != base,
-            None => false,
-        };
-        at_a_rate |= foreign
-            || share.fx_difference_micros != 0
-            || share.transaction_amount_micros != share.amount_micros
-            || share.item_rate.is_some();
-    }
-    if at_a_rate {
-        return unmatch_at_a_rate(conn, seller_id, &row, &shares, allocation_id, reason, actor, now);
-    }
-
-    let undone: i64 = conn.query_row(
-        "SELECT count(*) FROM allocation
-         WHERE transaction_id = ?1 AND open_item_id = ?2 AND amount_micros = ?3 AND reversed = 1",
-        params![row.transaction_id, open_item_id, -row.amount_micros],
-        |row| row.get(0),
-    )?;
-    if undone > 0 {
+    if !shares.iter().any(|share| share.allocation_id == allocation_id) {
         return Err(StoreError::Rejected(format!(
             "allocation {allocation_id} has already been undone"
         )));
     }
-
-    conn.execute(
-        "INSERT INTO allocation
-             (id, transaction_id, open_item_id, entry_id, amount_micros,
-              transaction_amount_micros, base_amount_micros, fx_difference_micros,
-              matched_at, matched_by, match_method, reversed)
-         VALUES (?1, ?2, ?3, NULL, ?4, ?5, ?6, ?7, ?8, ?9, 'manual', 1)",
-        params![
-            crux::DocumentId::new().to_string(),
-            row.transaction_id,
-            open_item_id,
-            -row.amount_micros,
-            -row.transaction_amount_micros,
-            -row.base_amount_micros,
-            -row.fx_difference_micros,
-            now,
-            actor,
-        ],
-    )?;
-    conn.execute(
-        "UPDATE bank_transaction SET status = 'new' WHERE id = ?1",
-        [&row.transaction_id],
-    )?;
-    audit::append(
-        conn,
-        now,
-        actor,
-        "bank_transaction_unmatched",
-        "bank_transaction",
-        &row.transaction_id,
-        serde_json::json!({
-            "allocation": allocation_id,
-            "open_item": open_item_id,
-            "amount_micros": -row.amount_micros,
-            "reason": reason,
-        }),
-    )?;
-    Ok(())
+    undo_settlement(conn, seller_id, &row, &shares, allocation_id, reason, actor, now)
 }
 
-/// Undoes a settlement that was posted at a rate.
-///
-/// The payment entry carries the carrying value it released and the difference it
-/// realised, so the item cannot reopen while the entry stands. The reversal and
-/// the opposite allocations are written in one transaction, so the item and the
-/// ledger change together. A payment posts one entry, and undoing part of it would
-/// leave the other allocations describing a payment the ledger no longer shows, so
-/// the whole transaction is undone rather than the one allocation named.
+/// Reverses the payment entry and appends an opposite allocation for every item it
+/// settled, inside one database transaction.
 #[allow(clippy::too_many_arguments)]
-fn unmatch_at_a_rate(
+fn undo_settlement(
     conn: &Connection,
     seller_id: SellerId,
     row: &UndoRow,
@@ -1083,14 +993,9 @@ fn unmatch_at_a_rate(
     actor: &str,
     now: &str,
 ) -> Result<(), StoreError> {
-    if shares.is_empty() {
-        return Err(StoreError::Rejected(format!(
-            "allocation {allocation_id} has already been undone"
-        )));
-    }
     let Some(entry_raw) = row.entry_id.as_deref() else {
         return Err(StoreError::Rejected(format!(
-            "allocation {allocation_id} settled an item at a rate but names no entry to reverse"
+            "allocation {allocation_id} is not tied to a payment entry"
         )));
     };
     let entry_id = crux::JournalEntryId::parse_str(entry_raw).map_err(|error| StoreError::Data(error.to_string()))?;
@@ -1157,36 +1062,41 @@ fn unmatch_at_a_rate(
 
 /// The allocations still in force for a transaction.
 ///
-/// An allocation is in force while the entry it was posted with stands. A rate
-/// settlement is undone by reversing that entry, which leaves every allocation it
-/// named behind the reversal rather than pointing at a payment that is gone.
+/// Rows are append-only, so an undo is recognised by pairing it with the earliest
+/// match of the same size on the same item. A match whose entry has been reversed
+/// is left out entirely, and a match undone by an older version, which left the
+/// entry standing, is removed by that pairing.
 fn active_allocations(conn: &Connection, transaction_id: &str) -> Result<Vec<ActiveAllocation>, StoreError> {
     let mut statement = conn.prepare(
-        "SELECT a.open_item_id, a.amount_micros, a.transaction_amount_micros,
-                a.base_amount_micros, a.fx_difference_micros, a.entry_id, o.currency, o.fx_rate_micros
+        "SELECT a.id, a.open_item_id, a.amount_micros, a.transaction_amount_micros,
+                a.base_amount_micros, a.fx_difference_micros, a.entry_id, a.reversed
          FROM allocation a
-         JOIN open_item o ON o.id = a.open_item_id
          WHERE a.transaction_id = ?1
-           AND a.reversed = 0
-           AND a.entry_id IS NOT NULL
+           AND a.open_item_id IS NOT NULL
            AND NOT EXISTS (SELECT 1 FROM journal_entry r WHERE r.reverses_entry_id = a.entry_id)
-         ORDER BY a.matched_at, a.id",
+         ORDER BY a.rowid",
     )?;
     let mut rows = statement.query([transaction_id])?;
-    let mut shares = Vec::new();
+    let mut pending: Vec<ActiveAllocation> = Vec::new();
     while let Some(row) = rows.next()? {
-        shares.push(ActiveAllocation {
-            open_item_id: row.get(0)?,
-            amount_micros: row.get(1)?,
-            transaction_amount_micros: row.get(2)?,
-            base_amount_micros: row.get(3)?,
-            fx_difference_micros: row.get(4)?,
-            entry_id: row.get(5)?,
-            item_currency: row.get(6)?,
-            item_rate: row.get(7)?,
-        });
+        let allocation = ActiveAllocation {
+            allocation_id: row.get(0)?,
+            open_item_id: row.get(1)?,
+            amount_micros: row.get(2)?,
+            transaction_amount_micros: row.get(3)?,
+            base_amount_micros: row.get(4)?,
+            fx_difference_micros: row.get(5)?,
+            entry_id: row.get(6)?,
+        };
+        if row.get::<_, i64>(7)? == 0 {
+            pending.push(allocation);
+        } else if let Some(index) = pending.iter().position(|matched| {
+            matched.open_item_id == allocation.open_item_id && matched.amount_micros == -allocation.amount_micros
+        }) {
+            pending.remove(index);
+        }
     }
-    Ok(shares)
+    Ok(pending)
 }
 
 /// The rate from `currency` into the reporting currency at a date, or a refusal

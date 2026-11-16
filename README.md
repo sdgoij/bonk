@@ -328,11 +328,11 @@ movement is its own result rather than a change to the sale or cost it relates
 to. A payment that does not use the whole item's value leaves the rest in the
 queue. Cross-currency matching is manual (`bank match` names the items); the
 proposals stay same-currency because an exact amount in one currency is not an
-exact amount in another. Unmatching a settlement at a rate reverses the payment
-entry and appends the opposite allocations in one transaction, so the invoice
-reopens and the ledger stops showing it cleared. A payment that settled several
-invoices is undone whole, because its one entry cannot be split across
-allocations that stay behind, and a fresh match then posts a new entry.
+exact amount in another. Unmatching reverses the payment entry and appends the
+opposite allocations in one transaction, so the invoice reopens and the ledger
+stops showing it cleared. A payment that settled several invoices is undone whole,
+because its one entry cannot be split across allocations that stay behind, and a
+fresh match then posts a new entry.
 
 A month is closed with `ledger close` and opened again with `ledger reopen --reason`,
 and the two gates are deliberately separate. Filing is refused while a document
@@ -362,8 +362,8 @@ is stored by hash and each payment by a fingerprint of what identifies it, so an
 overlapping statement adds only what is new. Matching settles an open item and
 posts the payment in one step — the only match that happens without asking is one
 where the remittance names the invoice *and* the amount agrees; anything else is a
-proposal for a person. Unmatching appends its reversal rather than deleting, and
-a settlement made at a rate is undone by reversing its payment entry too.
+proposal for a person. Unmatching reverses the payment entry and appends the
+opposite allocations rather than deleting anything.
 
 Both statement formats a European bank hands out are read: CAMT.053 (ISO 20022)
 and MT940 (the flat `:NN:` export behind most online banking screens). The

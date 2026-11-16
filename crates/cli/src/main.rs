@@ -507,7 +507,7 @@ enum BankCommand {
         #[arg(long = "item", required = true)]
         item: Vec<String>,
     },
-    /// Undo a match, appending its reversal.
+    /// Undo a match by reversing its payment entry.
     Unmatch {
         /// The allocation identifier, as a match reports it.
         allocation: String,
