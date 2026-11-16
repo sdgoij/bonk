@@ -423,6 +423,23 @@ mod tests {
     use super::*;
 
     #[test]
+    fn the_checked_in_compact_template_is_one_this_binary_understands() {
+        // The file is a starting point for users and a second layout for the PDF/A
+        // gate, so it has to keep parsing here rather than drift away from the
+        // schema in a CI job that only says "template ignored".
+        let template = Template::parse(include_str!("../../../templates/compact.json")).unwrap();
+        template.validate().unwrap();
+        assert_eq!(template.name, "Compact");
+        assert_eq!(template.sections.len(), 5);
+        assert!(
+            !template.sections.contains(&Section::Footer),
+            "the example has no footer"
+        );
+        assert!(template.text.size_pt < Template::default().text.size_pt);
+        assert!(template.page.margin_left_pt < Template::default().page.margin_left_pt);
+    }
+
+    #[test]
     fn the_default_template_matches_the_schema() {
         let template = Template::default();
         assert_eq!(template.version, SCHEMA_VERSION);

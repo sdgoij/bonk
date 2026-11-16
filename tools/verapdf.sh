@@ -97,7 +97,10 @@ field() {
 }
 
 rm -rf "$WORK"
-mkdir -p "$OUT"
+mkdir -p "$OUT" "$WORK/templates"
+# The repo ships one alternate layout; the archive finds it beside the database, so
+# the gate covers every level against two templates rather than one.
+cp templates/compact.json "$WORK/templates/compact.json"
 
 "$BONK_BIN" init --db "$DB" --keystore "$KEY" --passphrase "$PASS" >/dev/null
 seller=$(
@@ -116,24 +119,40 @@ customer=$(
         field customer
 )
 
-# One invoice per level, so a level that stops conforming fails on its own name
-# rather than somewhere inside a corpus.
-for level in minimum basic-wl basic en16931 extended; do
-    draft=$(
-        "$BONK_BIN" draft-new \
-            --db "$DB" --keystore "$KEY" --passphrase "$PASS" \
-            --seller "$seller" --customer "$customer" \
-            --date 2026-10-27 --due 2026-11-26 --buyer-ref "PO-$level" \
-            --line "Consulting|2|50.00|21" --note "Level $level" |
-            field draft
-    )
+# One invoice per level per template, so a level that stops conforming fails on
+# its own name rather than somewhere inside a corpus.
+issue_level() {
+    level=$1
+    template=$2
+    set -- draft-new \
+        --db "$DB" --keystore "$KEY" --passphrase "$PASS" \
+        --seller "$seller" --customer "$customer" \
+        --date 2026-10-27 --due 2026-11-26 --buyer-ref "PO-$level-$template" \
+        --line "Consulting|2|50.00|21" \
+        --note "Level $level, template ${template:-default}"
+    [ -z "$template" ] || set -- "$@" --template "$template"
+    draft=$("$BONK_BIN" "$@" | field draft)
     if [ -z "$draft" ]; then
         echo "error: could not create the $level draft" >&2
         exit 1
     fi
+    out=$OUT/$level-${template:-default}
+    mkdir -p "$out"
     "$BONK_BIN" issue "$draft" \
         --db "$DB" --keystore "$KEY" --passphrase "$PASS" \
-        --profile "$level" --out "$OUT" >/dev/null
+        --profile "$level" --out "$out" >"$out/issue.log"
+    # A layout that was not found falls back to the built-in one, and the gate would
+    # then be checking one template twice. The CLI names the layout it really drew.
+    if [ -n "$template" ] && ! grep -q "^layout: Compact " "$out/issue.log"; then
+        echo "error: $level/$template was not drawn with the compact template" >&2
+        cat "$out/issue.log" >&2
+        exit 1
+    fi
+}
+
+for level in minimum basic-wl basic en16931 extended; do
+    issue_level "$level" ""
+    issue_level "$level" compact
 done
 
 # A credit note carries BG-3 and a different document type, and a three-line
@@ -150,7 +169,7 @@ if [ -z "$credit" ]; then
 fi
 "$BONK_BIN" issue "$credit" \
     --db "$DB" --keystore "$KEY" --passphrase "$PASS" \
-    --out "$OUT" >/dev/null
+    --out "$OUT/other" >/dev/null
 
 mixed=$(
     "$BONK_BIN" draft-new \
@@ -163,12 +182,12 @@ mixed=$(
 )
 "$BONK_BIN" issue "$mixed" \
     --db "$DB" --keystore "$KEY" --passphrase "$PASS" \
-    --out "$OUT" >/dev/null
+    --out "$OUT/other" >/dev/null
 
 total=0
-for pdf in "$OUT"/*.factur-x.pdf; do
+for pdf in "$OUT"/*/*.factur-x.pdf; do
     total=$((total + 1))
-    report=$WORK/$(basename "$pdf").verapdf.log
+    report=$WORK/$(basename "$(dirname "$pdf")")-$(basename "$pdf").verapdf.log
     if "$JAVA_BIN" -jar "$CLI" --format text "$pdf" >"$report" 2>&1 && grep -q '^PASS .* 3b$' "$report"; then
         echo "PASS $(basename "$pdf") PDF/A-3B"
     else
@@ -178,9 +197,9 @@ for pdf in "$OUT"/*.factur-x.pdf; do
     fi
 done
 
-if [ "$total" -ne 7 ]; then
-    echo "error: expected 7 hybrids, validated $total" >&2
+if [ "$total" -ne 12 ]; then
+    echo "error: expected 12 hybrids, validated $total" >&2
     exit 1
 fi
 
-echo "veraPDF: $total hybrids valid as PDF/A-3B (5 levels, 1 credit note, 1 mixed-rate invoice)"
+echo "veraPDF: $total hybrids valid as PDF/A-3B (5 levels × 2 templates, 1 credit note, 1 mixed-rate invoice)"

@@ -729,6 +729,12 @@ template can make an invoice look wrong but never make it *be* wrong. If a
 document fails to render, issuing still succeeds and prints a warning; the UBL
 artefact is unaffected.
 
+A template is a file in `<archive>/templates`, named by its stem, and a draft
+records which one drew it. When nothing is there the built-in classic layout
+draws. `templates/compact.json` in this repository is a second one to copy from —
+tighter margins, smaller type, no footer — and the PDF/A gate issues at it as well
+as at the built-in, so both are known to stay conformant.
+
 Factur-X is the same page in a PDF/A-3 container: krilla writes it at that
 conformance level, the CII invoice is attached as `factur-x.xml` with
 `/AFRelationship /Alternative`, and the XMP packet names the file and the level it
@@ -775,9 +781,9 @@ sh tools/verapdf.sh
 ```
 
 It downloads veraPDF into `target/validator/verapdf/` on the first run, issues one
-document at each of the five Factur-X levels plus a credit note and a mixed-rate
-invoice, and validates every hybrid. Last result: **7/7 valid as PDF/A-3B**
-(veraPDF 1.30.4).
+document at each of the five Factur-X levels with the built-in layout and with
+`templates/compact.json`, plus a credit note and a mixed-rate invoice, and
+validates every hybrid. Last result: **12/12 valid as PDF/A-3B** (veraPDF 1.30.4).
 
 For VAT-category or exemption-reason changes, also run the category matrix:
 

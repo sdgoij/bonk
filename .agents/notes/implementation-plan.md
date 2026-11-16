@@ -659,9 +659,12 @@ string. The veraPDF gate is in — see below — as is the profile ladder.
 
 **Status, 2026-11-16 (M4.6, the gate that found a bug).** `just verapdf` runs
 `tools/verapdf.sh`: it downloads veraPDF into the ignored `target/validator/`,
-issues a document at each of the five levels plus a credit note and a mixed-rate
-invoice, and refuses the run unless every hybrid comes back `PASS … 3b`. CI runs
-the same script against the shipped Linux binary, and `release` waits for it.
+issues a document at each of the five levels with the built-in layout and with
+`templates/compact.json`, plus a credit note and a mixed-rate invoice, and refuses
+the run unless every hybrid comes back `PASS … 3b`. CI runs the same script
+against the shipped Linux binary, and `release` waits for it. The gate asserts the
+layout it asked for is the one the CLI reported drawing, so a template that quietly
+fell back to the built-in cannot pass as coverage of two.
 
 The gate was not ceremony. The first run said the hybrid *was not a valid PDF*:
 splicing the Factur-X statements into the XMP packet had moved every byte after

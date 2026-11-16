@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "name": "Compact",
+  "page": {
+    "margin_top_pt": 36.0,
+    "margin_right_pt": 36.0,
+    "margin_bottom_pt": 36.0,
+    "margin_left_pt": 36.0
+  },
+  "text": {
+    "size_pt": 8.5,
+    "title_size_pt": 15.0
+  },
+  "rules": {
+    "colour": "#777777",
+    "width_pt": 0.4
+  },
+  "sections": ["header", "parties", "lines", "totals", "note"],
+  "lines": {
+    "columns": [
+      { "field": "item", "width": "1fr" },
+      { "field": "qty", "width": "40pt", "align": "right" },
+      { "field": "unit_price", "width": "60pt", "align": "right" },
+      { "field": "vat", "width": "40pt", "align": "right" },
+      { "field": "total", "width": "70pt", "align": "right" }
+    ]
+  }
+}
