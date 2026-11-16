@@ -620,6 +620,47 @@ Exit criteria:
 - Byte-identical output across two runs on two machines (fonts embedded, no
   timestamps).
 
+**Status, 2026-11-15.** The EN 16931 level ships, and it is the only level that
+does. `syntax::write_cii` turns the same `syntax::Invoice` view into CII D16B
+that `write_ubl` turns into UBL, so the payload inside the container and the
+payload a Peppol access point receives are two serialisations of one invoice
+rather than two implementations that have to be kept in agreement. `render`
+draws the page through the layout that already existed and hands it to
+`pdf::write_with` with the CII attached as `factur-x.xml`, `/AFRelationship
+/Alternative`, uncompressed, so a reader can find the invoice without unpacking
+anything.
+
+The PDF/A-3B claim comes from krilla's archival configuration, which also writes
+the extension schema PDF/A wants for a format it does not know. Factur-X needs a
+second statement beside that one — which file is attached, at which level — and
+krilla has no hook for a format-specific schema, so `facturx::declare` splices
+two XMP fragments in at fixed anchors in the uncompressed packet. A packet
+without those anchors is a render error rather than a shipped file: a container
+that claims Factur-X in its name and not in its metadata is worse than one that
+failed to render. That splice is the one place this feature is tied to krilla's
+output shape, so an upgrade has to re-run the anchor tests.
+
+Issuing now files three artefacts — `ubl`, `pdf`, `facturx` — and each carries
+the profile that says what it is. `verify` hashes all three, `bonk issue` writes
+all three files and prints their paths, and the window gained **Save Factur-X…**
+beside the other two, which writes the archived bytes rather than re-rendering.
+A hybrid is only written when the document passed the same profile gate the UBL
+did. A render failure lands in the outcome as a warning, the way the PDF always
+has: the UBL artefact and the issue itself are unaffected, because a customer
+who asked for XML should not lose it to a layout bug.
+
+The import path reads these containers back (ADR-019), and a test issues, takes
+the `facturx` artefact, imports it into a second archive, and checks the number
+and supplier arrive intact. That round trip is the strongest evidence here that
+the attachment is the invoice and not a copy of it.
+
+What is not done: M4.6, the veraPDF gate, so the conformance claim rests on
+structural assertions and this project's own reader, not on an external
+validator — the README says so plainly. M4.3 is one fifth done: MINIMUM,
+BASIC WL, BASIC, and EXTENDED are not written, and neither is the profile
+argument that would choose between them. M4.7's preflight diagnostics are not
+in either; a render failure is still a string.
+
 ---
 
 ### M5 — Search, templates, polish (2 weeks)

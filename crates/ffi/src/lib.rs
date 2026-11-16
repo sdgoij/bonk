@@ -477,6 +477,10 @@ pub struct IssueRecord {
     pub pdf_sha256: Option<String>,
     /// Why the PDF was not filed, when the document was issued anyway.
     pub pdf_error: Option<String>,
+    /// SHA-256 of the stored Factur-X artefact, when one was rendered and filed.
+    pub facturx_sha256: Option<String>,
+    /// Why Factur-X was not filed, when the document was issued anyway.
+    pub facturx_error: Option<String>,
 }
 
 impl From<IssueOutcome> for IssueRecord {
@@ -487,6 +491,8 @@ impl From<IssueOutcome> for IssueRecord {
             ubl_sha256: outcome.ubl_sha256,
             pdf_sha256: outcome.pdf_sha256,
             pdf_error: outcome.pdf_error,
+            facturx_sha256: outcome.facturx_sha256,
+            facturx_error: outcome.facturx_error,
         }
     }
 }
@@ -2135,7 +2141,11 @@ mod tests {
         let detail = archive.document(summary.id.clone()).expect("a detail");
         assert_eq!(detail.buyer, "Buyer BV");
         assert_eq!(detail.lines.len(), 1);
-        assert_eq!(detail.artefacts.len(), 2);
+        assert_eq!(detail.artefacts.len(), 3, "UBL, PDF, and the Factur-X copy");
+        assert!(
+            detail.artefacts.iter().any(|artefact| artefact.kind == "facturx"),
+            "the hybrid crosses the FFI like the other artefacts"
+        );
 
         let pdf = archive
             .document_artefact(summary.id.clone(), "pdf".to_owned())

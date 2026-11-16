@@ -2246,6 +2246,34 @@ pub fn attach_artefact(
     template_digest: Option<&str>,
     now: &str,
 ) -> Result<String, StoreError> {
+    attach_artefact_with_profile(
+        conn,
+        document_id,
+        kind,
+        None,
+        bytes,
+        renderer_version,
+        template_digest,
+        now,
+    )
+}
+
+/// Attaches an artefact that states the profile it was written to.
+///
+/// A Factur-X artefact is a PDF that also claims a syntax and a level; the claim
+/// belongs on the row, where a reader of the archive can see it without opening
+/// the bytes.
+#[allow(clippy::too_many_arguments)]
+pub fn attach_artefact_with_profile(
+    conn: &Connection,
+    document_id: DocumentId,
+    kind: &str,
+    syntax_profile: Option<&str>,
+    bytes: &[u8],
+    renderer_version: &str,
+    template_digest: Option<&str>,
+    now: &str,
+) -> Result<String, StoreError> {
     let hash = audit::sha256_hex(bytes);
     let blob_id = DocumentId::new().to_string();
     let transaction = conn.unchecked_transaction()?;
@@ -2258,11 +2286,12 @@ pub fn attach_artefact(
         "INSERT INTO artefact
              (id, document_id, kind, syntax_profile, bytes_hash,
               size_bytes, blob_id, rendered_at, renderer_version, template_digest)
-         VALUES (?1, ?2, ?3, NULL, ?4, ?5, ?6, ?7, ?8, ?9)",
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
         params![
             DocumentId::new().to_string(),
             document_id.to_string(),
             kind,
+            syntax_profile,
             hash,
             bytes.len() as i64,
             blob_id,

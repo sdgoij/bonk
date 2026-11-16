@@ -625,7 +625,8 @@ fn full_slice_through_the_cli() {
         "{xml}"
     );
 
-    // Typst is linked into the binary, so the PDF is written wherever this runs.
+    // The layout engine and its fonts are linked into the binary, so the PDF is
+    // written wherever this runs.
     let pdf_path = output_dir.join("2026-0001.pdf");
     let pdf = std::fs::read(&pdf_path).expect("pdf file");
     assert!(pdf.starts_with(b"%PDF-"), "not a PDF");
@@ -633,6 +634,17 @@ fn full_slice_through_the_cli() {
     assert!(
         issued_output.contains("layout: Compact ("),
         "the draft's own layout drew the PDF: {issued_output}"
+    );
+
+    // The hybrid is written beside them: the same page with the CII inside.
+    let facturx = std::fs::read(output_dir.join("2026-0001.factur-x.pdf")).expect("factur-x file");
+    assert!(facturx.starts_with(b"%PDF-"), "the hybrid is a PDF");
+    assert!(issued_output.contains("facturx:"), "{issued_output}");
+    let text = String::from_utf8_lossy(&facturx);
+    assert!(text.contains("factur-x.xml"), "the attachment is named");
+    assert!(
+        text.contains("<fx:ConformanceLevel>EN 16931</fx:ConformanceLevel>"),
+        "the packet states the profile"
     );
 
     // A name that matches no file is refused where it is typed, not traded for
@@ -714,7 +726,8 @@ fn full_slice_through_the_cli() {
     let verified = bonk_ok(&args);
     assert!(verified.contains("audit:    4 events verified"), "{verified}");
     assert!(verified.contains("hashes verified"), "{verified}");
-    assert!(verified.contains("artefacts: 4 hashes verified"), "{verified}");
+    // Two documents, each with a UBL, a PDF, and the hybrid: six artefacts.
+    assert!(verified.contains("artefacts: 6 hashes verified"), "{verified}");
 
     // Importing our own file back proves the inbound path end to end: it lands in
     // the same table with the same number and does not collide with the outbound

@@ -27,6 +27,8 @@ pub use dto::{
     DocumentLine, DocumentSummary, DraftDto, DraftLineDto, DraftTotalsDto, FindingDto, ImportDto, IssueOutcome,
     PrecedingInvoiceDto, SellerDto, Summary,
 };
-pub use issue::{DocumentLanguage, invoice_pdf, pdf_data, render_issue};
+pub use issue::{
+    DocumentLanguage, attach_facturx, facturx, facturx_from_cii, invoice_pdf, pdf_data, render_cii, render_issue,
+};
 pub use session::{Archive, restore};
 pub use templates::{ArchiveTemplate, DEFAULT_TEMPLATE, default_template, load_templates, renderer_for};

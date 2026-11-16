@@ -12,6 +12,7 @@
 
 #![forbid(unsafe_code)]
 
+mod facturx;
 pub mod layout;
 pub mod pdf;
 pub mod template;
@@ -234,6 +235,14 @@ impl Renderer {
         Self {
             template: Template::default(),
         }
+    }
+
+    /// Renders the document as Factur-X: PDF/A-3 with the CII invoice attached.
+    ///
+    /// The XML is written by `syntax` from the same view, so the page, the file
+    /// inside it, and the archive all say the same thing.
+    pub fn render_facturx(&self, data: &InvoiceData, xml: &[u8]) -> Result<Vec<u8>, RenderError> {
+        facturx::write(&self.layout(data)?, xml)
     }
 
     /// Builds the renderer with a specific template. The template is validated

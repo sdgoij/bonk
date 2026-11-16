@@ -1205,6 +1205,11 @@ pub mod find {
         sentence!(language, "Save UBL…", "UBL opslaan…")
     }
 
+    /// Writes the filed Factur-X copy, after the platform's save panel asks where.
+    pub fn save_facturx_action(language: Language) -> &'static str {
+        sentence!(language, "Save Factur-X…", "Factur-X opslaan…")
+    }
+
     /// What was written, and where.
     pub fn export_saved(language: Language, path: &str) -> String {
         sentence!(language, format!("Saved {path}"), format!("Opgeslagen: {path}"))

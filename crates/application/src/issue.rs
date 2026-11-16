@@ -8,7 +8,7 @@ use conformance::{Profile, SemanticInvoice};
 use crux::{Finding, InvoiceDraft, InvoiceTotals, LocalDate, Party};
 use render::PdfRenderer;
 use store::{CustomerRecord, DocumentStatus, IssueRequest, IssueView, SellerRecord, StoreError};
-use syntax::{Invoice, InvoiceLine, InvoiceReference, write_ubl};
+use syntax::{Invoice, InvoiceLine, InvoiceReference, write_cii, write_ubl};
 
 use crate::dto::{DocumentSummary, DraftDto, FindingDto, IssueOutcome};
 use crate::session::Archive;
@@ -73,7 +73,8 @@ pub fn issue(
 
     // The document stands even when the PDF cannot be drawn, matching the
     // desktop: the UBL artefact is what the archive is audited on, so a failed
-    // layout must not roll back an issued document.
+    // layout must not roll back an issued document. The hybrid is the same page
+    // with the CII inside, so it is filed in the same breath.
     let mut pdf_sha256 = None;
     let mut pdf_error = None;
     match invoice_pdf(
@@ -100,12 +101,37 @@ pub fn issue(
         Err(error) => pdf_error = Some(error.to_string()),
     }
 
+    let view = IssueView {
+        id: record.id,
+        number: &record.number,
+        draft: &domain,
+        seller: &seller,
+        customer: &customer,
+        totals: &record.totals,
+    };
+    let mut facturx_sha256 = None;
+    let mut facturx_error = None;
+    match attach_facturx(
+        archive,
+        &view,
+        language,
+        template.map(|template| &template.template),
+        template.map(|template| template.sha256.as_str()),
+        &now,
+    ) {
+        Ok(hash) => facturx_sha256 = Some(hash),
+        // Same rule as the PDF: the document is issued and filed either way.
+        Err(error) => facturx_error = Some(error.to_string()),
+    }
+
     Ok(IssueOutcome {
         issued: Some(DocumentSummary::from_record(&record, DocumentStatus::Issued)),
         findings: findings.iter().map(FindingDto::from).collect(),
         ubl_sha256: Some(record.ubl_sha256.clone()),
         pdf_sha256,
         pdf_error,
+        facturx_sha256,
+        facturx_error,
     })
 }
 
@@ -136,6 +162,8 @@ fn stopped(findings: Vec<Finding>) -> IssueOutcome {
         ubl_sha256: None,
         pdf_sha256: None,
         pdf_error: None,
+        facturx_sha256: None,
+        facturx_error: None,
     }
 }
 
@@ -143,6 +171,82 @@ fn stopped(findings: Vec<Finding>) -> IssueOutcome {
 ///
 /// Shared by the GUI and the CLI so both produce byte-identical artefacts.
 pub fn render_issue(view: &IssueView<'_>) -> Result<Vec<u8>, StoreError> {
+    validate_profile(view)?;
+    let lines = invoice_lines(view.draft)?;
+    write_ubl(&invoice(view, &lines))
+        .map(String::into_bytes)
+        .map_err(|error| StoreError::Render(error.to_string()))
+}
+
+/// Renders the CII invoice a Factur-X PDF carries.
+///
+/// The same profile gate runs first: a document no profile accepts must not leave
+/// as a hybrid PDF either, because the XML inside it is the invoice.
+pub fn render_cii(view: &IssueView<'_>) -> Result<Vec<u8>, StoreError> {
+    validate_profile(view)?;
+    let lines = invoice_lines(view.draft)?;
+    write_cii(&invoice(view, &lines))
+        .map(String::into_bytes)
+        .map_err(|error| StoreError::Render(error.to_string()))
+}
+
+/// Renders the document as Factur-X: the printed page with the CII inside.
+pub fn facturx(
+    view: &IssueView<'_>,
+    language: render::Language,
+    template: Option<&render::Template>,
+) -> Result<Vec<u8>, StoreError> {
+    let cii = render_cii(view)?;
+    facturx_from_cii(view, &cii, language, template)
+}
+
+/// The container, when the CII was already produced for something else.
+///
+/// The CLI writes the CII artefact as part of the issue transaction, so it hands
+/// the bytes back rather than serialising the invoice a second time.
+pub fn facturx_from_cii(
+    view: &IssueView<'_>,
+    cii: &[u8],
+    language: render::Language,
+    template: Option<&render::Template>,
+) -> Result<Vec<u8>, StoreError> {
+    let data = pdf_data(
+        view.number,
+        view.draft,
+        view.seller,
+        view.customer,
+        view.totals,
+        language,
+    );
+    renderer_for(template)
+        .render_facturx(&data, cii)
+        .map_err(|error| StoreError::Render(error.to_string()))
+}
+
+/// Renders and files the hybrid, stating the profile on the artefact.
+pub fn attach_facturx(
+    archive: &Archive,
+    view: &IssueView<'_>,
+    language: render::Language,
+    template: Option<&render::Template>,
+    template_digest: Option<&str>,
+    now: &str,
+) -> Result<String, StoreError> {
+    let bytes = facturx(view, language, template)?;
+    store::attach_artefact_with_profile(
+        archive.database().connection(),
+        view.id,
+        "facturx",
+        Some("factur-x:en16931"),
+        &bytes,
+        render::RENDERER_VERSION,
+        template_digest,
+        now,
+    )
+}
+
+/// The profile gate both serialisers run.
+fn validate_profile(view: &IssueView<'_>) -> Result<(), StoreError> {
     let semantic = SemanticInvoice::from_draft(
         view.number,
         view.draft,
@@ -155,9 +259,13 @@ pub fn render_issue(view: &IssueView<'_>) -> Result<Vec<u8>, StoreError> {
     if crux::has_blocking(&findings) {
         return Err(StoreError::Conformance(findings));
     }
+    Ok(())
+}
 
-    let mut lines = Vec::with_capacity(view.draft.lines.len());
-    for line in &view.draft.lines {
+/// The lines of a draft, with each line's net computed once.
+fn invoice_lines(draft: &InvoiceDraft) -> Result<Vec<InvoiceLine<'_>>, StoreError> {
+    let mut lines = Vec::with_capacity(draft.lines.len());
+    for line in &draft.lines {
         let net = line.net().map_err(|error| StoreError::Data(error.to_string()))?;
         lines.push(InvoiceLine {
             id: line.position,
@@ -171,8 +279,12 @@ pub fn render_issue(view: &IssueView<'_>) -> Result<Vec<u8>, StoreError> {
             treatment: &line.treatment,
         });
     }
+    Ok(lines)
+}
 
-    let invoice = Invoice {
+/// The view both syntax writers serialise.
+fn invoice<'a>(view: &'a IssueView<'a>, lines: &'a [InvoiceLine<'a>]) -> Invoice<'a> {
+    Invoice {
         number: view.number,
         issue_date: view.draft.issue_date,
         due_date: view.draft.due_date,
@@ -188,13 +300,9 @@ pub fn render_issue(view: &IssueView<'_>) -> Result<Vec<u8>, StoreError> {
         }),
         seller: &view.seller.party,
         customer: &view.customer.party,
-        lines: &lines,
+        lines,
         totals: view.totals,
-    };
-
-    write_ubl(&invoice)
-        .map(String::into_bytes)
-        .map_err(|error| StoreError::Render(error.to_string()))
+    }
 }
 
 /// Renders the visual invoice PDF for an issued document.

@@ -224,6 +224,14 @@ bonk backup --to ./backups --keep 10
 bonk verify-backup ./backups/backup-20261028T120000Z.db
 ```
 
+`issue --out <dir>` writes three files per document: `2026-0001.xml` (UBL for
+Peppol), `2026-0001.pdf` (the page as printed), and `2026-0001.factur-x.pdf` —
+the same page in a PDF/A-3 container with the invoice as CII inside it, which is
+what a counterparty that asks for Factur-X receives. The same three are filed in
+the archive, and `verify` hashes all of them. A hybrid is only written when the
+document passed the same profile gate the UBL did, so the two cannot disagree
+about what was issued.
+
 ### The books: posting and reading the ledger
 
 The ledger is derived from the archive, never typed twice. Posting is
@@ -512,9 +520,9 @@ phone number, which is normalised to E.164 against the party's country
 on file and leaves issued documents saying what they said. Date fields carry a
 calendar button that opens a month grid, but stay typable, so a date can be
 pasted as well as picked. An opened stored document re-reads its filed artefacts
-— hash-checked — rather than re-rendering them, so **Save PDF…** and **Save UBL…**
-write exactly what was archived, through the same native save panel that the
-customer **Import…** and **Export…** buttons use.
+— hash-checked — rather than re-rendering them, so **Save PDF…**, **Save UBL…**,
+and **Save Factur-X…** write exactly what was archived, through the same native
+save panel that the customer **Import…** and **Export…** buttons use.
 
 Settings holds appearance (System, Light, Dark), archive health, verified
 backups, and credentials. Labels are not selectable; values — amounts, names,
@@ -698,6 +706,16 @@ sections, columns, labels, and a footer with `{{placeholders}}` — not code, so
 template can make an invoice look wrong but never make it *be* wrong. If a
 document fails to render, issuing still succeeds and prints a warning; the UBL
 artefact is unaffected.
+
+Factur-X is the same page in a PDF/A-3 container: krilla writes it at that
+conformance level, the CII invoice is attached as `factur-x.xml` with
+`/AFRelationship /Alternative`, and the XMP packet names the file and the profile
+(`EN 16931`) beside the PDF/A statements. What `verify` checks and the container a
+counterparty receives are the same bytes, so nobody has to guess whether what was
+archived is what was sent. veraPDF has not been run against
+the output; the structural assertions in the tests and the round trip through
+this project's own PDF reader are what backs the claim today, and CI has no
+veraPDF step yet.
 
 The printed document's labels are chosen per document: English or Dutch, defaulting
 from the seller's locale. That is the language of the form ("Factuur aan", "BTW",

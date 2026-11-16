@@ -79,12 +79,12 @@ pub use reconcile::{Check, Readiness, readiness};
 pub use repo::{
     CustomerRecord, Direction, DocumentRecord, DocumentStatus, ImportSource, IssueRequest, IssueView, IssuedReference,
     ReceivedDocument, ReceivedLine, ReceivedSummary, SEARCH_LIMIT, SearchCounts, SearchHit, SearchPage, SearchRequest,
-    SellerRecord, Suppression, advance_status, attach_artefact, credit_note_for, document_status,
-    find_import_by_payload, find_inbound_number, find_issued_reference, first_seller, insert_customer, insert_draft,
-    insert_seller, issue_draft, list_customers, list_drafts, list_received, list_suppressions, load_customer,
-    load_draft, load_seller, now_rfc3339, record_received, resolve_customer, resolve_document, resolve_received,
-    save_draft, save_suppression, search, search_counts, search_page, set_supplier_match, update_customer,
-    update_seller, verify_artefacts,
+    SellerRecord, Suppression, advance_status, attach_artefact, attach_artefact_with_profile, credit_note_for,
+    document_status, find_import_by_payload, find_inbound_number, find_issued_reference, first_seller, insert_customer,
+    insert_draft, insert_seller, issue_draft, list_customers, list_drafts, list_received, list_suppressions,
+    load_customer, load_draft, load_seller, now_rfc3339, record_received, resolve_customer, resolve_document,
+    resolve_received, save_draft, save_suppression, search, search_counts, search_page, set_supplier_match,
+    update_customer, update_seller, verify_artefacts,
 };
 pub use report::{
     AccountBalance, BalanceSheet, ProfitAndLoss, TrialBalance, balance_sheet, profit_and_loss, reporting_currency,

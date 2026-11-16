@@ -1124,17 +1124,29 @@ mod tests {
         assert!(outcome.findings.is_empty(), "{outcome:?}");
         assert!(outcome.pdf_error.is_none(), "{outcome:?}");
 
-        // Both artefacts are stored, and the reported hashes are the stored ones.
+        // All three artefacts are stored, and the reported hashes are the stored
+        // ones. The hybrid states the profile it was written to on its row.
         let id = crux::DocumentId::parse_str(&issued.id).unwrap();
         let connection = archive.database().connection();
         assert_eq!(
             store::archive::artefact_kinds(connection, id).unwrap(),
-            vec!["pdf".to_owned(), "ubl".to_owned()]
+            vec!["facturx".to_owned(), "pdf".to_owned(), "ubl".to_owned()]
         );
         let ubl = store::archive::artefact_bytes(connection, id, "ubl").unwrap();
         assert_eq!(store::audit::sha256_hex(&ubl), outcome.ubl_sha256.unwrap());
         let pdf = store::archive::artefact_bytes(connection, id, "pdf").unwrap();
         assert_eq!(store::audit::sha256_hex(&pdf), outcome.pdf_sha256.unwrap());
+        let facturx = store::archive::artefact_bytes(connection, id, "facturx").unwrap();
+        assert_eq!(store::audit::sha256_hex(&facturx), outcome.facturx_sha256.unwrap());
+        assert!(facturx.starts_with(b"%PDF"), "the hybrid is a PDF");
+        let profile: String = connection
+            .query_row(
+                "SELECT syntax_profile FROM artefact WHERE document_id = ?1 AND kind = 'facturx'",
+                [id.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(profile, "factur-x:en16931");
 
         // The draft became the document.
         assert!(archive.list_drafts().unwrap().is_empty());
@@ -1313,6 +1325,51 @@ mod tests {
         // An unknown artefact kind and an unknown document are both errors.
         assert!(archive.document_artefact(&issued.id, "xml").is_err());
         assert!(archive.document("not-a-document").is_err());
+    }
+
+    /// The hybrid is not a dead end: the import path — the one that receives a
+    /// supplier's PDF — reads the archive's own Factur-X copy back as the same
+    /// invoice. The attachment, the XMP that names it, and the CII inside it are
+    /// all part of what the file has to get right, so this is the test that says
+    /// the whole chain works.
+    #[test]
+    fn the_facturx_copy_is_an_invoice_the_import_path_reads() {
+        let (_source_directory, mut source) = archive();
+        let (seller, customer) = seed(&source);
+        let issued = source
+            .issue(
+                &draft(&seller, &customer, "Consultancy"),
+                crate::DocumentLanguage::English,
+                None,
+                "test",
+            )
+            .unwrap()
+            .issued
+            .expect("an issued document");
+        let facturx = source.document_artefact(&issued.id, "facturx").unwrap();
+
+        // One page and one attachment: the package proves it is a PDF, and the
+        // CII is inside it as the file the profile names.
+        assert!(facturx.starts_with(b"%PDF"), "a PDF, not bare XML");
+        let text = String::from_utf8_lossy(&facturx);
+        assert!(text.contains("factur-x.xml"), "the attachment is named");
+        assert!(
+            text.contains("<fx:ConformanceLevel>EN 16931</fx:ConformanceLevel>"),
+            "the packet states the profile"
+        );
+
+        let (_target_directory, target) = archive();
+        seed(&target);
+        let supplier = store::CustomerRecord {
+            id: crux::CustomerId::new(),
+            party: party("Seller BV", "Delft", Some("NL123456782B01")),
+        };
+        store::insert_customer(target.database().connection(), &supplier, NOW).unwrap();
+
+        let imported = target.import_document(Some("2026-0001.pdf"), &facturx).unwrap();
+        assert_eq!(imported.number, "2026-0001");
+        assert_eq!(imported.supplier.as_deref(), Some("Seller BV"));
+        assert!(!imported.duplicate);
     }
 
     #[test]

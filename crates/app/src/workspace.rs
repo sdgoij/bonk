@@ -18,10 +18,10 @@ use crux::{
 };
 use store::backup::BackupStage;
 use store::{
-    CustomerRecord, Direction, DocumentRecord, DocumentStatus, IssueRequest, SavedSearch, SearchCounts, SearchHit,
-    SearchRequest, SellerRecord, StoreError, Suppression, advance_status, archive::DocumentView, attach_artefact,
-    credit_note_for, first_seller, insert_customer, insert_seller, issue_draft, list_customers, list_suppressions,
-    save_draft, save_suppression, set_supplier_match,
+    CustomerRecord, Direction, DocumentRecord, DocumentStatus, IssueRequest, IssueView, SavedSearch, SearchCounts,
+    SearchHit, SearchRequest, SellerRecord, StoreError, Suppression, advance_status, archive::DocumentView,
+    attach_artefact, attach_artefact_with_profile, credit_note_for, first_seller, insert_customer, insert_seller,
+    issue_draft, list_customers, list_suppressions, save_draft, save_suppression, set_supplier_match,
 };
 use zeroize::{Zeroize, Zeroizing};
 
@@ -1727,8 +1727,14 @@ impl Workspace {
                 .map(|view| view.number.clone())
                 .unwrap_or_default();
             let extension = artefact_extension(kind);
-            let description = if kind == "pdf" { "Save PDF" } else { "Save UBL" };
-            if let Some(path) = dialog::save(description, &format!("{number}.{extension}"), extension) {
+            // The hybrid is a PDF too, so its name says which one it is rather
+            // than offering to overwrite the plain copy with the same name.
+            let (description, suffix) = match kind {
+                "pdf" => (text::find::save_pdf_action(self.language), ""),
+                "ubl" => (text::find::save_ubl_action(self.language), ""),
+                _ => (text::find::save_facturx_action(self.language), "-factur-x"),
+            };
+            if let Some(path) = dialog::save(description, &format!("{number}{suffix}.{extension}"), extension) {
                 self.save_artefact(session, kind, &path);
             }
         }
@@ -4205,6 +4211,34 @@ impl Workspace {
                     }
                 }
 
+                // The hybrid is filed beside the plain PDF: the same page, with the
+                // CII invoice inside it. It is not the file the archive is audited
+                // on, so a failure here is reported and never rolls anything back.
+                let view = IssueView {
+                    id: issued.id,
+                    number: &issued.number,
+                    draft: &draft,
+                    seller: &seller,
+                    customer: &customer,
+                    totals: &issued.totals,
+                };
+                if let Err(error) = crate::facturx(&view, language, template).and_then(|bytes| {
+                    attach_artefact_with_profile(
+                        session.database().connection(),
+                        issued.id,
+                        "facturx",
+                        Some("factur-x:en16931"),
+                        &bytes,
+                        render::RENDERER_VERSION,
+                        template_digest.as_deref(),
+                        &now,
+                    )
+                    .map(|_| ())
+                }) && attach_error.is_none()
+                {
+                    attach_error = Some(error.to_string());
+                }
+
                 self.issued = Some(issued);
                 self.editor = None;
                 self.conformance_findings.clear();
@@ -6032,6 +6066,11 @@ fn document_panel(
                 && ui.button(text::find::save_ubl_action(language)).clicked()
             {
                 action = DocumentAction::Save("ubl");
+            }
+            if view.artefacts.iter().any(|artefact| artefact.kind == "facturx")
+                && ui.button(text::find::save_facturx_action(language)).clicked()
+            {
+                action = DocumentAction::Save("facturx");
             }
         });
     }

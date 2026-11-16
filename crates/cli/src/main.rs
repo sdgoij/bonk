@@ -16,9 +16,10 @@ use crux::{
     TaxTreatment, UnitCode, VatCategory, VatRate, calculate_totals, has_blocking, validate_draft,
 };
 use store::{
-    CustomerRecord, DocumentStatus, IssueRequest, KeyStore, SearchRequest, SellerRecord, StoreError, advance_status,
-    credit_note_for, first_seller, insert_customer, insert_draft, insert_seller, issue_draft, list_received,
-    load_customer, load_draft, load_seller, resolve_customer, resolve_document, resolve_received, set_supplier_match,
+    CustomerRecord, DocumentStatus, IssueRequest, IssueView, KeyStore, SearchRequest, SellerRecord, StoreError,
+    advance_status, credit_note_for, first_seller, insert_customer, insert_draft, insert_seller, issue_draft,
+    list_received, load_customer, load_draft, load_seller, resolve_customer, resolve_document, resolve_received,
+    set_supplier_match,
 };
 use zeroize::Zeroizing;
 
@@ -1808,6 +1809,7 @@ fn run(cli: Cli) -> Result<(), CliError> {
             }
 
             let mut rendered: Option<Vec<u8>> = None;
+            let mut cii: Option<Vec<u8>> = None;
             let issued = match issue_draft(
                 session.database_mut().connection_mut(),
                 IssueRequest {
@@ -1819,6 +1821,7 @@ fn run(cli: Cli) -> Result<(), CliError> {
                 },
                 |view| {
                     let bytes = render_issue(view)?;
+                    cii = Some(application::render_cii(view)?);
                     rendered = Some(bytes.clone());
                     Ok(bytes)
                 },
@@ -1898,6 +1901,44 @@ fn run(cli: Cli) -> Result<(), CliError> {
                 }
                 Err(error) => {
                     eprintln!("warning: PDF not rendered: {error}");
+                }
+            }
+
+            // The hybrid: the same page with the CII attached, which is what a
+            // counterparty that asks for Factur-X receives. It is filed as its own
+            // artefact, with the profile stated on the row.
+            if let Some(cii) = cii {
+                let view = IssueView {
+                    id: issued.id,
+                    number: &issued.number,
+                    draft: &loaded,
+                    seller: &seller,
+                    customer: &customer,
+                    totals: &issued.totals,
+                };
+                match application::facturx_from_cii(&view, &cii, language, template.map(|template| &template.template))
+                {
+                    Ok(bytes) => {
+                        let path = out.join(format!("{}.factur-x.pdf", issued.number));
+                        std::fs::write(&path, &bytes)?;
+                        match store::attach_artefact_with_profile(
+                            session.database().connection(),
+                            issued.id,
+                            "facturx",
+                            Some("factur-x:en16931"),
+                            &bytes,
+                            render::RENDERER_VERSION,
+                            template.map(|template| template.sha256.as_str()),
+                            &store::now_rfc3339(),
+                        ) {
+                            Ok(hash) => println!("facturx: {} ({hash})", path.display()),
+                            Err(error) => eprintln!(
+                                "warning: Factur-X written to {} but not attached: {error}",
+                                path.display()
+                            ),
+                        }
+                    }
+                    Err(error) => eprintln!("warning: Factur-X not rendered: {error}"),
                 }
             }
             Ok(())

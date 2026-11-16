@@ -512,6 +512,10 @@ pub struct IssueOutcome {
     pub pdf_sha256: Option<String>,
     /// Why the PDF was not filed, when the document was issued anyway.
     pub pdf_error: Option<String>,
+    /// SHA-256 of the stored Factur-X artefact, when one was rendered and filed.
+    pub facturx_sha256: Option<String>,
+    /// Why Factur-X was not filed, when the document was issued anyway.
+    pub facturx_error: Option<String>,
 }
 
 /// One row in the document register.
