@@ -1199,7 +1199,7 @@ mod tests {
         // without refusing to write it.
         let (_directory, archive) = archive();
         let (seller, customer) = seed(&archive);
-        let domain = draft(&seller, &customer, "Consulting 中")
+        let domain = draft(&seller, &customer, "Consulting \u{1F389}")
             .into_draft()
             .expect("the fixture is a valid draft");
         let seller = store::load_seller(archive.database().connection(), domain.seller_id).unwrap();
@@ -1219,7 +1219,7 @@ mod tests {
         assert_eq!(warnings[0].code, "M4-001");
         assert_eq!(warnings[0].field, "lines[0].name");
         assert_eq!(warnings[0].severity, crux::Severity::Warning, "a page is not a refusal");
-        assert!(warnings[0].message.contains("U+4E2D"), "{}", warnings[0].message);
+        assert!(warnings[0].message.contains("U+1F389"), "{}", warnings[0].message);
 
         // A document the font can draw produces nothing at all.
         let plain = draft(&seller.id.to_string(), &customer.id.to_string(), "Consultancy")

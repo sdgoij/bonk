@@ -73,6 +73,10 @@ uniffi = "0.32.2"
 krilla = { version = "0.8", default-features = false }
 harfrust = "0.15"
 
+# The bundled fonts are embedded brotli-compressed; this decompresses them once.
+# The decoder only, so the encoder (and its build cost) stays out of the tree.
+brotli-decompressor = "5"
+
 [profile.test]
 # MSVC's linker refuses a program database larger than 4 GB (LNK1140), and the
 # desktop test binary — eframe, wgpu, the SQLCipher binding — is large enough to

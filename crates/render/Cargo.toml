@@ -14,6 +14,7 @@ time.workspace = true
 
 krilla.workspace = true
 harfrust.workspace = true
+brotli-decompressor.workspace = true
 
 [lints]
 workspace = true

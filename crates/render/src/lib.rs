@@ -13,6 +13,7 @@
 #![forbid(unsafe_code)]
 
 mod facturx;
+pub mod fonts;
 pub mod layout;
 pub mod pdf;
 mod preflight;

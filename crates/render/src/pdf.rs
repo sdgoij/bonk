@@ -24,7 +24,7 @@ use krilla::paint::{Fill, FillRule, Stroke};
 use krilla::text::{Font, GlyphId, KrillaGlyph};
 
 use crate::RenderError;
-use crate::layout::{Colour, Document as Layout, FONT_BOLD, FONT_REGULAR, Op};
+use crate::layout::{Colour, Document as Layout, Op};
 use crate::text::{self, Metrics, Shaped};
 
 /// A file carried inside the PDF.
@@ -50,10 +50,10 @@ pub(crate) fn write(document: &Layout) -> Result<Vec<u8>, RenderError> {
 /// the file, so the conformance level is chosen from the attachment rather than
 /// being a second switch that can disagree with it.
 pub(crate) fn write_with(document: &Layout, attachment: Option<&Attachment<'_>>) -> Result<Vec<u8>, RenderError> {
-    let regular = harfrust::Font::new(FONT_REGULAR, 0).ok_or(RenderError::Font)?;
-    let bold = harfrust::Font::new(FONT_BOLD, 0).ok_or(RenderError::Font)?;
-    let regular_pdf = Font::new(FONT_REGULAR.into(), 0).ok_or(RenderError::Font)?;
-    let bold_pdf = Font::new(FONT_BOLD.into(), 0).ok_or(RenderError::Font)?;
+    let regular = harfrust::Font::new(crate::fonts::regular()?, 0).ok_or(RenderError::Font)?;
+    let bold = harfrust::Font::new(crate::fonts::bold()?, 0).ok_or(RenderError::Font)?;
+    let regular_pdf = Font::new(crate::fonts::regular()?.into(), 0).ok_or(RenderError::Font)?;
+    let bold_pdf = Font::new(crate::fonts::bold()?.into(), 0).ok_or(RenderError::Font)?;
     let metrics = Metrics::of(&regular);
 
     let mut pdf = match attachment {

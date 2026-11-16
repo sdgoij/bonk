@@ -219,7 +219,7 @@ pub struct TextStyle {
 impl Default for TextStyle {
     fn default() -> Self {
         Self {
-            family: vec!["DejaVu Serif".to_owned()],
+            family: vec!["Noto Serif CJK SC".to_owned()],
             size_pt: 9.5,
             title_size_pt: 18.0,
             colour: "#111111".to_owned(),

@@ -812,6 +812,9 @@ impl eframe::App for BonkApp {
 pub fn run(database: impl Into<PathBuf>, keystore: impl Into<PathBuf>) -> eframe::Result {
     let database = database.into();
     let keystore = keystore.into();
+    // A face is inflated once, but a CJK one takes a moment; paying for it here
+    // keeps the first frame that draws an invoice from stalling on it.
+    std::thread::spawn(render::fonts::warm);
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1280.0, 820.0])

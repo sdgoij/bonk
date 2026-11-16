@@ -148,20 +148,29 @@ pub fn install(ctx: &Context) {
 ///
 /// These are the same files the PDF embeds, so the preview and the issued
 /// document measure text the same way.
-pub const DOCUMENT_FAMILY: &str = "DejaVu Serif";
+pub const DOCUMENT_FAMILY: &str = "Noto Serif CJK";
 
 /// The bold face of the preview family.
-pub const DOCUMENT_FAMILY_BOLD: &str = "DejaVu Serif Bold";
+pub const DOCUMENT_FAMILY_BOLD: &str = "Noto Serif CJK Bold";
 
 fn install_document_fonts(ctx: &Context) {
+    // Both faces are embedded compressed and inflated on first use. The window is
+    // not the only thing that draws a document, so a front end that starts here
+    // pays for it once; `warm` pays it on a thread.
+    let (Ok(regular), Ok(bold)) = (render::fonts::regular(), render::fonts::bold()) else {
+        // A build without usable font bytes has a bigger problem than the preview's
+        // typeface: the window falls back to its own font and the renderer reports
+        // the failure when a document is drawn.
+        return;
+    };
     let mut fonts = egui::FontDefinitions::default();
     fonts.font_data.insert(
         DOCUMENT_FAMILY.to_owned(),
-        std::sync::Arc::new(egui::FontData::from_static(render::layout::FONT_REGULAR)),
+        std::sync::Arc::new(egui::FontData::from_owned(regular.to_vec())),
     );
     fonts.font_data.insert(
         DOCUMENT_FAMILY_BOLD.to_owned(),
-        std::sync::Arc::new(egui::FontData::from_static(render::layout::FONT_BOLD)),
+        std::sync::Arc::new(egui::FontData::from_owned(bold.to_vec())),
     );
     fonts.families.insert(
         FontFamily::Name(DOCUMENT_FAMILY.into()),
@@ -473,6 +482,21 @@ pub fn value_mono(ui: &mut Ui, text: impl Into<String>) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_preview_can_draw_the_bundled_document_font() {
+        // The composer draws the invoice with these same bytes, so a font the GUI
+        // toolkit cannot parse would be a startup failure rather than a typographic
+        // detail. The bundled face is a large CID-keyed CFF, which is not the shape
+        // epaint sees most often.
+        let context = egui::Context::default();
+        install(&context);
+        let output = context.run_ui(egui::RawInput::default(), |ui| {
+            ui.label(RichText::new("Invoice 2026-0001 顧客管理 ").family(FontFamily::Name(DOCUMENT_FAMILY.into())));
+        });
+        assert!(!output.shapes.is_empty(), "the preview drew nothing at all");
+        output.drop_without_applying_deltas();
+    }
 
     #[test]
     fn both_themes_are_readable_at_a_glance() {

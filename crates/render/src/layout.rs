@@ -15,12 +15,6 @@ use crate::template::{Align, Column, Field, LabelOverrides, Section, Template, W
 use crate::text::Metrics;
 use crate::{InvoiceData, Labels, LineData, RenderError};
 
-/// The body font, compiled into the binary.
-pub const FONT_REGULAR: &[u8] = include_bytes!("../fonts/DejaVuSerif.ttf");
-
-/// The bold font.
-pub const FONT_BOLD: &[u8] = include_bytes!("../fonts/DejaVuSerif-Bold.ttf");
-
 /// The names a footer may use between `{{` and `}}`.
 pub const PLACEHOLDERS: &[&str] = &[
     "seller.name",
@@ -145,8 +139,8 @@ pub fn colour(value: &str) -> Option<Colour> {
 pub fn layout(template: &Template, data: &InvoiceData) -> Result<Document, RenderError> {
     template.validate()?;
 
-    let regular = harfrust::Font::new(FONT_REGULAR, 0).ok_or(RenderError::Font)?;
-    let bold = harfrust::Font::new(FONT_BOLD, 0).ok_or(RenderError::Font)?;
+    let regular = harfrust::Font::new(crate::fonts::regular()?, 0).ok_or(RenderError::Font)?;
+    let bold = harfrust::Font::new(crate::fonts::bold()?, 0).ok_or(RenderError::Font)?;
     let metrics = Metrics::of(&regular);
 
     let ink = colour(&template.text.colour).unwrap_or_default();
@@ -972,14 +966,24 @@ mod tests {
             "A very long description that cannot possibly fit on a single line of the item column".to_owned();
         let document = layout(&Template::default(), &data).expect("layout");
         let found = texts(&document);
-        let fragments: Vec<&String> = found
+        // Where the line breaks depends on the font; that it breaks, and that the
+        // fragments still read as the name, is what the engine promises.
+        let start = found
             .iter()
-            .filter(|text| text.starts_with("A very long") || text.starts_with("a single"))
-            .collect();
-        assert_eq!(fragments.len(), 2, "the description wraps: {found:?}");
-        assert_eq!(fragments[0], &"A very long description that cannot possibly fit on");
-        assert_eq!(fragments[1], &"a single line of the item column");
-        assert_eq!(format!("{} {}", fragments[0], fragments[1]), data.lines[0].name);
+            .position(|text| text.starts_with("A very long"))
+            .expect("the name is drawn");
+        let mut joined = String::new();
+        let mut fragments = 0;
+        for text in found.iter().skip(start) {
+            joined.push_str(text);
+            joined.push(' ');
+            fragments += 1;
+            if joined.trim_end() == data.lines[0].name {
+                break;
+            }
+        }
+        assert!(fragments >= 2, "the description wraps: {found:?}");
+        assert_eq!(joined.trim_end(), data.lines[0].name);
     }
 
     #[test]
@@ -1095,9 +1099,9 @@ mod tests {
 
     #[test]
     fn wrapping_breaks_a_word_that_cannot_fit() {
-        let regular = harfrust::Font::new(FONT_REGULAR, 0).expect("font");
+        let regular = harfrust::Font::new(crate::fonts::regular().expect("bundled font"), 0).expect("font");
         let measurer = Measurer {
-            bold: harfrust::Font::new(FONT_BOLD, 0).expect("font"),
+            bold: harfrust::Font::new(crate::fonts::bold().expect("bundled font"), 0).expect("font"),
             metrics: Metrics::of(&regular),
             regular,
         };

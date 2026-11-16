@@ -103,17 +103,16 @@ pub(crate) fn width(font: &Font, metrics: Metrics, text: &str, size: f32) -> f32
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::layout::{FONT_BOLD, FONT_REGULAR};
 
     fn regular() -> Font {
-        Font::new(FONT_REGULAR, 0).expect("bundled font")
+        Font::new(crate::fonts::regular().expect("bundled font"), 0).expect("bundled font")
     }
 
     #[test]
     fn metrics_come_from_the_font() {
         let metrics = Metrics::of(&regular());
-        assert!((metrics.units_per_em - 2048.0).abs() < 0.01, "{metrics:?}");
-        assert!(metrics.ascender > 1500.0, "{metrics:?}");
+        assert!((metrics.units_per_em - 1000.0).abs() < 0.01, "{metrics:?}");
+        assert!(metrics.ascender > 800.0, "{metrics:?}");
         assert!(metrics.descender < 0.0, "{metrics:?}");
         assert!(metrics.line_height(10.0) > 10.0);
         assert!(metrics.ascent(10.0) < metrics.line_height(10.0));
@@ -154,7 +153,7 @@ mod tests {
     #[test]
     fn bold_is_wider_than_regular() {
         let regular = regular();
-        let bold = Font::new(FONT_BOLD, 0).expect("bundled font");
+        let bold = Font::new(crate::fonts::bold().expect("bundled font"), 0).expect("bundled font");
         let metrics = Metrics::of(&regular);
         assert!(width(&bold, metrics, "Invoice", 10.0) > width(&regular, metrics, "Invoice", 10.0));
     }

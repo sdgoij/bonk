@@ -54,9 +54,16 @@ sh tools/cargo-strawberry.sh test --workspace
 
 Set `STRAWBERRY_PERL_BIN` if it is not installed at `C:\Strawberry`. A cold
 build takes about ten minutes — OpenSSL and the vendored SQLCipher — and later
-builds are incremental. The release binary is about 32 MB: the layout engine,
-`krilla`, and one bundled font family (DejaVu Serif regular and bold) are inside
-it.
+builds are incremental. The release binary is about 64 MB: the layout engine,
+`krilla`, and one bundled font family (Noto Serif CJK SC, regular and bold) are
+inside it. The fonts are most of that size, and they earn it: one serif family
+covers Latin, Greek, Cyrillic, kana, hangul, and the Han ideographs, so an
+invoice from a supplier in any of those scripts still produces a Factur-X
+container. They are embedded brotli-compressed (50 MB of faces, 34 MB in the
+binary) and inflated once per process — about half a second in a release build,
+which `bonk gui` spends on a thread while it opens. PDFs stay small: the writer
+embeds a subset of the glyphs a document uses, so a two-page invoice is tens of
+kilobytes whatever the source font weighs.
 
 **macOS / Linux:** the Perl must provide the modules OpenSSL's build uses.
 Check it before the first build:
@@ -736,13 +743,13 @@ tighter margins, smaller type, no footer — and the PDF/A gate issues at it as 
 as at the built-in, so both are known to stay conformant.
 
 The composer checks the page before issuing it. Anything the embedded font has no
-glyph for — a CJK name typed into a line item, a stray symbol — is named with the
-field that holds it and the code point, because the alternative is discovering it
-as a blank box in a PDF nobody re-reads, and PDF/A will not accept a `.notdef`
-at all: such a document still issues and still files its UBL and plain PDF, but no
-hybrid is written. An amount too wide for the sheet is reported the same way. The
-check is read-only and never blocks: it says what to fix, and issuing is still the
-user's call.
+glyph for — an emoji pasted into a line item, a script the family does not cover —
+is named with the field that holds it and the code point, because the alternative
+is discovering it as a blank box in a PDF nobody re-reads, and PDF/A will not
+accept a `.notdef` at all: such a document still issues and still files its UBL and
+plain PDF, but no hybrid is written. An amount too wide for the sheet is reported
+the same way. The check is read-only and never blocks: it says what to fix, and
+issuing is still the user's call.
 
 Factur-X is the same page in a PDF/A-3 container: krilla writes it at that
 conformance level, the CII invoice is attached as `factur-x.xml` with

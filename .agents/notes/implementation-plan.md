@@ -700,6 +700,39 @@ legible because the warning names the value and the code point. The check respec
 the template: a layout that does not draw the lines is not checked for the names of
 the lines it leaves out.
 
+**Status, 2026-11-16 (the font was the real limit).** The warning above used a CJK
+name as its example, and that was the wrong lesson: a supplier in Shanghai should
+not cost a document its hybrid. `DejaVu Serif` (720 kB, Latin and a little more) is
+replaced by **Noto Serif CJK SC** regular and bold — one serif family covering
+Latin, Greek, Cyrillic, kana, hangul, and the unified ideographs. The faces are
+~50 MB raw and are checked in brotli-compressed (~34 MB, from a pinned commit with
+hashes in `tools/fonts.sh`), so a clone builds offline and a release binary is
+about 64 MB. That growth is the trade this project accepts for coverage now that
+Typst's size was never really about fonts.
+
+The first release build after the swap was 222 MB, not the 79 MB the weights
+implied: `include_bytes!` in a `const` is materialised at every use site, and the
+font is used by the layout, the PDF writer, the preflight, and the window preview,
+so the linker kept a copy for each. The faces had to be `static` to be shared, and
+compressing them brought the pair from 50 MB down to 34 MB. Inflating happens once
+per process through a `OnceLock` — about half a second in release — and the window
+starts it on a thread as it opens, so the first preview does not pay for it.
+
+PDFs did not grow, and in fact got smaller: krilla embeds a subset of the glyphs the
+document used, and the CFF subset beats the TrueType one it replaces. A CJK invoice
+is 19 kB of page inside a 30 kB container. veraPDF reports that hybrid
+`PASS … 3b` like any other, which is the part worth checking — the face is
+CID-keyed CFF, a different code path in the writer from the TrueType outlines it
+had before. A unit test now asserts the scripts an EU invoice meets shape without a
+missing glyph, so a future font swap cannot quietly take the coverage away; emoji
+remain the case that is refused, and `\u{1F389}` in a line name still issues with
+the warning and no hybrid.
+
+A CJK name also moved the wrapping tests: they asserted where a line broke in the
+old face. `a_long_description_wraps_inside_its_column` now asserts that the
+fragments reassemble into the name and that there is more than one of them, which
+is what the engine actually promises — the break point belongs to the font.
+
 **Status, 2026-11-16 (the profile ladder).** M4.3 is done: `crux::FacturXProfile`
 names the five levels and owns what each may carry, because the same claim is
 written twice — BT-24 in the payload, `fx:ConformanceLevel` in the PDF — and two

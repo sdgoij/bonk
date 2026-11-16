@@ -6749,7 +6749,7 @@ mod tests {
         // cannot draw is the case that has no other way to reach that code.
         let mut form = editor();
         form.customer = Some(customer.id);
-        form.lines[0].name = "Consulting 中".to_owned();
+        form.lines[0].name = "Consulting \u{1F389}".to_owned();
         workspace.editor = Some(form);
 
         for tab in [Tab::Search, Tab::Customers, Tab::Ledger, Tab::Settings] {

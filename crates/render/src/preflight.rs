@@ -12,7 +12,6 @@
 
 use harfrust::Font;
 
-use crate::layout::FONT_REGULAR;
 use crate::template::Section;
 use crate::text::{self, Metrics};
 use crate::{InvoiceData, Template};
@@ -36,9 +35,12 @@ const TOO_WIDE: &str = "M4-002";
 
 /// The problems `template` and `data` will produce together.
 pub(crate) fn check(template: &Template, data: &InvoiceData) -> Vec<Preflight> {
-    let Some(font) = Font::new(FONT_REGULAR, 0) else {
+    let Ok(bytes) = crate::fonts::regular() else {
         // A font that will not load is the renderer's problem, and it says so when
         // it tries to draw; there is nothing to add here.
+        return Vec::new();
+    };
+    let Some(font) = Font::new(bytes, 0) else {
         return Vec::new();
     };
     let metrics = Metrics::of(&font);
@@ -145,7 +147,7 @@ fn missing_glyphs(font: &Font, value: &str) -> Option<String> {
 fn totals_too_wide(template: &Template, data: &InvoiceData, font: &Font, metrics: Metrics) -> Vec<Preflight> {
     let content = template.page.width_pt - template.page.margin_left_pt - template.page.margin_right_pt;
     let size = template.text.size_pt;
-    let bold_font = Font::new(crate::layout::FONT_BOLD, 0);
+    let bold_font = crate::fonts::bold().ok().and_then(|bytes| Font::new(bytes, 0));
     let mut findings = Vec::new();
     for (field, text, bold) in [
         ("totals.net", format!("{} {}", data.net, data.currency), false),
@@ -216,12 +218,12 @@ mod tests {
     #[test]
     fn a_character_the_font_cannot_draw_is_named_with_its_field() {
         let mut data = sample();
-        data.lines[0].name = "Consulting 中".to_owned();
+        data.lines[0].name = "Consulting \u{1F600}".to_owned();
         let findings = check(&Template::default(), &data);
         assert_eq!(findings.len(), 1, "{findings:?}");
         assert_eq!(findings[0].code, NO_GLYPH);
         assert_eq!(findings[0].field, "lines[0].name");
-        assert!(findings[0].message.contains("U+4E2D"), "{}", findings[0].message);
+        assert!(findings[0].message.contains("U+1F600"), "{}", findings[0].message);
     }
 
     #[test]
@@ -229,10 +231,31 @@ mod tests {
         // The compact layout draws the lines; a template with no lines section does
         // not, so an item name it cannot draw is not a problem for that document.
         let mut data = sample();
-        data.lines[0].name = "Consulting 中".to_owned();
+        data.lines[0].name = "Consulting \u{1F600}".to_owned();
         let mut template = Template::default();
         template.sections.retain(|section| *section != Section::Lines);
         assert_eq!(check(&template, &data), Vec::new());
+    }
+
+    #[test]
+    fn the_scripts_an_eu_invoice_meets_are_covered() {
+        // The reason the bundled face is as large as it is: a supplier in another
+        // script must not cost the document its hybrid. PDF/A refuses a `.notdef`,
+        // so coverage is a correctness question, not a typographic one.
+        let font = Font::new(crate::fonts::regular().expect("the bundled font"), 0).expect("the bundled font");
+        for value in [
+            "Consulting",       // Latin
+            "Ελληνικά",         // Greek
+            "Консалтинг",       // Cyrillic
+            "顧客管理",         // Han
+            "コンサルティング", // Kana
+            "한국어",           // Hangul
+        ] {
+            assert_eq!(missing_glyphs(&font, value), None, "{value} is not drawable");
+        }
+        // Emoji are the case that is still refused, and it has to be refused rather
+        // than drawn as a box PDF/A will reject.
+        assert!(missing_glyphs(&font, "\u{1F600}").is_some());
     }
 
     #[test]
@@ -253,16 +276,16 @@ mod tests {
     #[test]
     fn every_character_is_named_once_with_a_count() {
         let mut data = sample();
-        data.customer.name = "顧客 中 中 文".to_owned();
+        data.customer.name = "\u{1F600} \u{1F601} \u{1F602} \u{1F603} \u{1F600}".to_owned();
         let findings = check(&Template::default(), &data);
         assert_eq!(findings.len(), 1, "{findings:?}");
         let message = &findings[0].message;
         assert_eq!(
-            message.matches("U+4E2D").count(),
+            message.matches("U+1F600").count(),
             1,
             "a repeated character is named once: {message}"
         );
-        assert!(message.contains("U+9867"), "{message}");
+        assert!(message.contains("U+1F601"), "{message}");
         assert!(message.contains("and 1 more"), "{message}");
     }
 }
