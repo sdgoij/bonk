@@ -2708,6 +2708,9 @@ impl Workspace {
                         supplier.as_deref(),
                         outcome.duplicate,
                     ));
+                    if let Some(error) = outcome.facturx_error.as_deref() {
+                        lines.push(text::find::page_not_drawn(language, &outcome.number, error));
+                    }
                 }
                 Err(error) => {
                     failed += 1;
@@ -4310,12 +4313,18 @@ impl Workspace {
             .supplier
             .and_then(|id| self.customers.iter().find(|customer| customer.id == id))
             .map(|customer| customer.party.legal_name.clone());
-        self.message = Some(Message::ok(text::find::imported(
-            language,
-            &outcome.number,
-            supplier.as_deref(),
-            outcome.duplicate,
-        )));
+        self.message = Some(if let Some(error) = outcome.facturx_error.as_deref() {
+            // The document is in the archive; only its page is missing, and that is
+            // worth saying rather than leaving the register quietly page-less.
+            Message::error(text::find::page_not_drawn(language, &outcome.number, error))
+        } else {
+            Message::ok(text::find::imported(
+                language,
+                &outcome.number,
+                supplier.as_deref(),
+                outcome.duplicate,
+            ))
+        });
         if !outcome.duplicate {
             // Importing is explicit, so show the register with the new document
             // folded open rather than leaving it behind the current filters.

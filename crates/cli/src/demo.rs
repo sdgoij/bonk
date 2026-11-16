@@ -1479,12 +1479,14 @@ mod tests {
         session.integrity_check().unwrap();
         let connection = session.database().connection();
         assert!(store::audit::verify_chain(connection).unwrap() > 0);
-        assert_eq!(store::verify_artefacts(connection).unwrap(), 40);
+        // One UBL per issued document, and one page per received one: the demo
+        // imports its inbound documents through the same path a user does.
+        assert_eq!(store::verify_artefacts(connection).unwrap(), 50);
 
         let report = store::integrity::audit(connection).unwrap();
-        assert_eq!(report.artefacts, 40);
+        assert_eq!(report.artefacts, 50);
         assert_eq!(report.imports, 10);
-        assert_eq!(report.blobs, 50);
+        assert_eq!(report.blobs, 60);
         assert_eq!(report.orphaned_blobs, 0);
 
         let received = store::list_received(connection, owner(&session)).unwrap();

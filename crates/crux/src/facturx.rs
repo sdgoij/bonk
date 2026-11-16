@@ -93,6 +93,19 @@ impl FacturXProfile {
         Self::ALL.into_iter().find(|profile| profile.code() == normalised)
     }
 
+    /// The most detailed level a document's content can fill.
+    ///
+    /// Used for a document we did not write: re-serialising a received invoice at
+    /// a level above what it carries would make the payload claim content it does
+    /// not have, which is exactly what the level ladder exists to prevent.
+    pub const fn carrying(lines: bool, vat_breakdown: bool) -> Self {
+        match (lines, vat_breakdown) {
+            (true, _) => Self::En16931,
+            (false, true) => Self::BasicWl,
+            (false, false) => Self::Minimum,
+        }
+    }
+
     /// True when the payload carries the lines (BG-25).
     pub const fn carries_lines(self) -> bool {
         matches!(self, Self::Basic | Self::En16931 | Self::Extended)
@@ -250,6 +263,19 @@ mod tests {
             FacturXProfile::Basic.guideline(),
             "urn:cen.eu:en16931:2017#compliant#urn:factur-x.eu:1p0:basic"
         );
+    }
+
+    #[test]
+    fn a_document_is_re_serialised_at_the_level_its_content_fills() {
+        assert_eq!(FacturXProfile::carrying(true, true), FacturXProfile::En16931);
+        assert_eq!(FacturXProfile::carrying(false, true), FacturXProfile::BasicWl);
+        assert_eq!(FacturXProfile::carrying(false, false), FacturXProfile::Minimum);
+        // The level chosen always carries what was asked for.
+        for (lines, breakdown) in [(true, true), (false, true), (false, false)] {
+            let profile = FacturXProfile::carrying(lines, breakdown);
+            assert_eq!(profile.carries_lines(), lines, "{profile}");
+            assert_eq!(profile.carries_vat_breakdown(), breakdown, "{profile}");
+        }
     }
 
     #[test]

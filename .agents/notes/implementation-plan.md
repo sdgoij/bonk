@@ -687,6 +687,30 @@ the artefact row records `factur-x:<level>`, so the archive says what was claime
 without anyone opening the bytes. The window issues at EN 16931 — a chooser in the
 form is a later addition, not a gap in the writer.
 
+**Status, 2026-11-16 (received documents get a page too).** A document that arrives
+as data now leaves with a page: `application::import` files a hybrid beside the
+payload, drawn from the terms that were read, so the register can show a
+supplier's invoice without anyone opening an XML file. The bytes as received stay
+the payload — nothing inbound is rewritten — and the hybrid is a second artefact,
+with its own row and its own hash, which `verify` checks like any other. The window
+needed nothing new to show it: the artefact list and **Save Factur-X…** were
+already driven by the row.
+
+The level is chosen from the content (`FacturXProfile::carrying`): lines mean
+EN 16931, a breakdown without lines means BASIC WL, neither means MINIMUM. That is
+the point of the ladder the other slice added — the hybrid is our re-rendering, so
+it claims what we wrote, not what the sender's BT-24 happened to say, and a
+supplier that exports only a summary still gets a page that does not pretend to
+carry lines. A payload that is already a PDF gets no second page, because the
+file is the page.
+
+Importing is still one code path: the picker, the share hand-off, the folder
+watcher, and the demo seeder all go through `application::import`, which is why
+the demo's received documents now have pages as well. A hybrid that cannot be
+drawn is reported as `ImportOutcome::facturx_error` and never rolls the import
+back; the CLI prints it as a warning, and the window shows it in the watch log and
+in the message after an import.
+
 ---
 
 ### M5 — Search, templates, polish (2 weeks)

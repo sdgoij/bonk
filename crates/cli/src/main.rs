@@ -1586,6 +1586,11 @@ fn run(cli: Cli) -> Result<(), CliError> {
                         println!("  document: {}", outcome.document_id);
                         println!("  supplier: {supplier}");
                         println!("  file:     {}", outcome.path);
+                        match (&outcome.facturx_sha256, &outcome.facturx_error) {
+                            (Some(hash), _) => println!("  facturx:  {hash}"),
+                            (None, Some(error)) => eprintln!("  warning:  no page drawn: {error}"),
+                            (None, None) => {}
+                        }
                     }
                     Err(error) => {
                         eprintln!("error: {}: {error}", file.display());
@@ -3537,6 +3542,9 @@ fn import_watched(session: &Session, owner: SellerId, files: &[PathBuf]) -> Resu
                     .map(|id| id.to_string())
                     .unwrap_or_else(|| "unmatched".to_owned());
                 println!("imported:  {} (supplier {supplier}) {}", outcome.number, outcome.path);
+                if let Some(error) = &outcome.facturx_error {
+                    eprintln!("warning:   no page drawn for {}: {error}", outcome.number);
+                }
             }
             Err(error) => {
                 eprintln!("error:     {}: {error}", file.display());

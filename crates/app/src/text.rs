@@ -1261,6 +1261,16 @@ pub mod find {
         )
     }
 
+    /// Reported when a received document was imported but no page could be drawn
+    /// for it. The document stands; the archive just holds no page of its own.
+    pub fn page_not_drawn(language: Language, number: &str, error: &str) -> String {
+        sentence!(
+            language,
+            format!("{number} was imported, but no page could be drawn for it: {error}"),
+            format!("{number} is geïmporteerd, maar er kon geen pagina voor worden getekend: {error}")
+        )
+    }
+
     /// Label for the supplier row of a received document.
     pub fn supplier_label(language: Language) -> &'static str {
         sentence!(language, "Supplier", "Leverancier")

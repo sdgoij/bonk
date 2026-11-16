@@ -1010,6 +1010,44 @@ mod tests {
         party
     }
 
+    /// A CII invoice with a VAT breakdown and no lines: what a supplier sends when
+    /// its system only exports the summary (BASIC WL, or MINIMUM without the
+    /// breakdown). Written by the writer so the fixture cannot drift from it.
+    fn summary_only_cii() -> String {
+        let seller = party("Seller BV", "Delft", Some("NL123456782B01"));
+        let customer = party("Buyer BV", "Utrecht", None);
+        let money = |major: i64| crux::Money::from_major_units(major, crux::Currency::EUR).unwrap();
+        let totals = crux::InvoiceTotals {
+            net: money(100),
+            tax: money(21),
+            gross: money(121),
+            breakdown: vec![crux::TaxBreakdown {
+                category: crux::VatCategory::Standard,
+                rate_bp: 2100,
+                taxable_base: money(100),
+                tax: money(21),
+            }],
+        };
+        let lines: [syntax::InvoiceLine<'_>; 0] = [];
+        let view = syntax::Invoice {
+            number: "SUP-77",
+            issue_date: crux::LocalDate::parse_iso("2026-10-01").unwrap(),
+            due_date: None,
+            delivery_date: None,
+            doc_type: crux::DocType::Invoice,
+            currency: crux::Currency::EUR,
+            buyer_reference: None,
+            order_reference: None,
+            note: None,
+            preceding_invoice: None,
+            seller: &seller,
+            customer: &customer,
+            lines: &lines,
+            totals: &totals,
+        };
+        syntax::write_cii_at(&view, crux::FacturXProfile::BasicWl).expect("the level fits the content")
+    }
+
     /// Inserts one seller and one customer and returns their identities.
     fn seed(archive: &Archive) -> (String, String) {
         let seller = store::SellerRecord {
@@ -1483,6 +1521,95 @@ mod tests {
 
         // A file that is not a UBL invoice is refused rather than stored.
         assert!(target.import_document(Some("notes.txt"), b"not an invoice").is_err());
+    }
+
+    #[test]
+    fn an_imported_xml_gets_a_page_of_its_own() {
+        // The register can show a supplier's invoice without anyone opening an XML
+        // file: the imported bytes stay as they came, and a hybrid is filed beside
+        // them, drawn from the terms that were read.
+        let (_source_directory, mut source) = archive();
+        let (seller, customer) = seed(&source);
+        let issued = source
+            .issue(
+                &draft(&seller, &customer, "Consultancy"),
+                crate::DocumentLanguage::English,
+                None,
+                "test",
+            )
+            .unwrap()
+            .issued
+            .expect("an issued document");
+        let ubl = source.document_artefact(&issued.id, "ubl").unwrap();
+
+        let (_target_directory, target) = archive();
+        seed(&target);
+        let supplier = store::CustomerRecord {
+            id: crux::CustomerId::new(),
+            party: party("Seller BV", "Delft", Some("NL123456782B01")),
+        };
+        store::insert_customer(target.database().connection(), &supplier, NOW).unwrap();
+
+        let imported = target.import_document(Some("2026-0001.xml"), &ubl).unwrap();
+        let id = crux::DocumentId::parse_str(&imported.document_id).unwrap();
+        let connection = target.database().connection();
+
+        assert_eq!(
+            store::archive::artefact_kinds(connection, id).unwrap(),
+            vec!["facturx".to_owned()]
+        );
+        let hybrid = store::archive::artefact_bytes(connection, id, "facturx").unwrap();
+        assert!(hybrid.starts_with(b"%PDF"), "the page is a PDF");
+        let text = String::from_utf8_lossy(&hybrid);
+        assert!(text.contains("factur-x.xml"), "the invoice is inside it");
+        assert!(
+            text.contains("<fx:ConformanceLevel>EN 16931</fx:ConformanceLevel>"),
+            "the hybrid claims the level it was written at"
+        );
+        assert!(
+            text.contains("IncludedSupplyChainTradeLineItem"),
+            "and carries what the received document had"
+        );
+        let profile: String = connection
+            .query_row(
+                "SELECT syntax_profile FROM artefact WHERE document_id = ?1 AND kind = 'facturx'",
+                [id.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(profile, "factur-x:en16931");
+    }
+
+    #[test]
+    fn a_received_document_without_lines_gets_a_narrower_page() {
+        // MINIMUM and BASIC WL exist for exactly this: a supplier that sends the
+        // amounts and no lines still gets a page, and the hybrid does not claim
+        // content the document does not have.
+        let (_target_directory, target) = archive();
+        seed(&target);
+        let owner = target.ensure_seller().unwrap();
+        let owner = crux::SellerId::parse_str(&owner).unwrap();
+
+        let summary_only = summary_only_cii();
+        let outcome = crate::import::import_bytes(
+            target.database(),
+            owner,
+            Some("summary.xml"),
+            summary_only.as_bytes(),
+            NOW,
+        )
+        .unwrap();
+        assert!(outcome.facturx_error.is_none(), "{outcome:?}");
+        assert!(outcome.facturx_sha256.is_some(), "{outcome:?}");
+
+        let hybrid =
+            store::archive::artefact_bytes(target.database().connection(), outcome.document_id, "facturx").unwrap();
+        let text = String::from_utf8_lossy(&hybrid);
+        assert!(
+            text.contains("<fx:ConformanceLevel>BASIC WL</fx:ConformanceLevel>"),
+            "a document with a breakdown but no lines is BASIC WL"
+        );
+        assert!(!text.contains("IncludedSupplyChainTradeLineItem"));
     }
 
     #[test]

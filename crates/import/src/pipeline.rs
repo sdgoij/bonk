@@ -19,6 +19,14 @@ pub struct ImportOutcome {
     pub supplier: Option<CustomerId>,
     /// True when nothing new was written because this document was already here.
     pub duplicate: bool,
+    /// SHA-256 of the hybrid drawn for this document, when one was.
+    ///
+    /// A document that arrives as data has no page; `application::import` draws
+    /// one and files it as its own artefact. It is left empty when the payload was
+    /// already a PDF, because a page needs nothing drawn for it.
+    pub facturx_sha256: Option<String>,
+    /// Why no hybrid was filed, when the document itself was imported anyway.
+    pub facturx_error: Option<String>,
 }
 
 /// Why a file was not imported.
@@ -99,6 +107,8 @@ pub fn import_bytes(
             number: invoice.number,
             supplier: supplier.map(|(customer_id, _)| customer_id),
             duplicate: true,
+            facturx_sha256: None,
+            facturx_error: None,
         });
     }
 
@@ -112,6 +122,8 @@ pub fn import_bytes(
             number: invoice.number,
             supplier: Some(customer_id),
             duplicate: true,
+            facturx_sha256: None,
+            facturx_error: None,
         });
     }
 
@@ -177,6 +189,8 @@ pub fn import_bytes(
         number: invoice.number,
         supplier: supplier.map(|(customer_id, _)| customer_id),
         duplicate: false,
+        facturx_sha256: None,
+        facturx_error: None,
     })
 }
 

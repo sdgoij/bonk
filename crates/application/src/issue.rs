@@ -383,7 +383,8 @@ pub fn pdf_data(
     }
 }
 
-fn party_data(party: &Party) -> render::PartyData {
+/// The party fields the page prints, shared with the received-document page.
+pub(crate) fn party_data(party: &Party) -> render::PartyData {
     let mut parts = Vec::new();
     if let Some(street) = &party.address.street {
         parts.push(street.clone());

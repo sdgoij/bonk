@@ -563,6 +563,15 @@ Peppol identifier, then legal name and city; an unmatched supplier is kept and
 flagged rather than invented. Importing the same file (or the same supplier
 number) twice writes nothing and reports a duplicate.
 
+A document that arrives as data also leaves with a page: the bytes stay exactly
+as received, and a hybrid is drawn from the terms that were read and filed beside
+them, so the register can show a supplier's invoice without anyone opening an XML
+file. The level is chosen from what the document carries — lines make it EN 16931,
+a breakdown without lines makes it BASIC WL — because the hybrid is our
+re-rendering and has to claim what we wrote, not what the sender claimed. A file
+that arrived as a PDF needs no second page, so none is drawn. If the page cannot
+be drawn, the document is imported anyway and the import says so.
+
 `received` is the payable register: number, supplier, dates, amount, and status.
 When the import-time match picked the wrong party, `match <document> <customer>`
 records the right one by identifier or display name. The override is its own row
