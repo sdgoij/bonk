@@ -669,6 +669,12 @@ pub fn allocate_group(
                 transaction.currency
             )));
         }
+        if item.fx_rate_micros.is_some() {
+            return Err(StoreError::Rejected(format!(
+                "{} was posted at a rate; settling it must release its carrying value and post the realised difference, which this version does not do yet",
+                item.number
+            )));
+        }
         let share = remaining.min(item.outstanding.micros().abs());
         if share == 0 {
             return Err(StoreError::Rejected(format!(
@@ -699,9 +705,9 @@ pub fn allocate_group(
         let allocation_id = crux::DocumentId::new().to_string();
         database.execute(
             "INSERT INTO allocation
-                 (id, transaction_id, open_item_id, entry_id, amount_micros, fx_difference_micros,
-                  matched_at, matched_by, match_method, reversed)
-             VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6, ?7, ?8, 0)",
+                 (id, transaction_id, open_item_id, entry_id, amount_micros, base_amount_micros,
+                  fx_difference_micros, matched_at, matched_by, match_method, reversed)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?5, 0, ?6, ?7, ?8, 0)",
             params![
                 allocation_id,
                 transaction_id,
@@ -806,11 +812,12 @@ pub fn unmatch(
     actor: &str,
     now: &str,
 ) -> Result<(), StoreError> {
-    let (transaction_id, open_item_id, amount_micros): (String, String, i64) = conn
+    let (transaction_id, open_item_id, amount_micros, base_amount_micros): (String, String, i64, i64) = conn
         .query_row(
-            "SELECT transaction_id, open_item_id, amount_micros FROM allocation WHERE id = ?1",
+            "SELECT transaction_id, open_item_id, amount_micros, base_amount_micros
+             FROM allocation WHERE id = ?1",
             [allocation_id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
         )
         .map_err(|_| StoreError::NotFound(format!("allocation {allocation_id}")))?;
 
@@ -828,14 +835,15 @@ pub fn unmatch(
 
     conn.execute(
         "INSERT INTO allocation
-             (id, transaction_id, open_item_id, entry_id, amount_micros, fx_difference_micros,
-              matched_at, matched_by, match_method, reversed)
-         VALUES (?1, ?2, ?3, NULL, ?4, 0, ?5, ?6, 'manual', 1)",
+             (id, transaction_id, open_item_id, entry_id, amount_micros, base_amount_micros,
+              fx_difference_micros, matched_at, matched_by, match_method, reversed)
+         VALUES (?1, ?2, ?3, NULL, ?4, ?5, 0, ?6, ?7, 'manual', 1)",
         params![
             crux::DocumentId::new().to_string(),
             transaction_id,
             open_item_id,
             -amount_micros,
+            -base_amount_micros,
             now,
             actor,
         ],

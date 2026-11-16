@@ -13,8 +13,8 @@
 //! A3 rather than here; posting one today would have to guess a rate.
 
 use crux::{
-    AccountCode, Currency, DocumentId, Journal, LedgerEntry, LedgerLine, LocalDate, Money, SellerId, VatCategory,
-    VatRate,
+    AccountCode, Currency, DocumentId, ExchangeRate, Journal, LedgerEntry, LedgerLine, LocalDate, Money, SellerId,
+    VatCategory, VatRate,
 };
 use rusqlite::{Connection, OptionalExtension};
 use serde_json::Value;
@@ -123,7 +123,7 @@ pub fn post_outbound_document(
             posting_profile_id: PROFILE_ID,
             rule_version: RULE_VERSION,
             reverses: None,
-            open_item: open_item_for(&document),
+            open_item: open_item_for(&document, &entry),
         },
     )
 }
@@ -223,7 +223,7 @@ pub fn post_inbound_document(
             posting_profile_id: PROFILE_ID,
             rule_version: RULE_VERSION,
             reverses: None,
-            open_item: open_item_for(&document),
+            open_item: open_item_for(&document, &entry),
         },
     )
 }
@@ -237,7 +237,31 @@ pub fn open_item_for_document(
     conn: &Connection,
     document_id: DocumentId,
 ) -> Result<Option<crate::open_items::NewOpenItem>, StoreError> {
-    Ok(open_item_for(&load_document(conn, document_id)?))
+    let document = load_document(conn, document_id)?;
+    // A repair must write what the posting wrote, not what today's rate cache
+    // would write. When the entry exists, its control line is the carrying value
+    // and its rate is the one the books hold; a document still unposted is
+    // rebuilt through the same rules the posting would run.
+    let entry = match crate::ledger::entry_for_document(conn, document_id)? {
+        Some(id) => match crate::ledger::load_entry(conn, id)? {
+            Some(stored) => stored.entry,
+            None => entry_for(&document)?,
+        },
+        None => entry_for(&document)?,
+    };
+    Ok(open_item_for(&document, &entry))
+}
+
+/// The entry a stored document posts, without writing it.
+fn entry_for(document: &DocumentFacts) -> Result<LedgerEntry, StoreError> {
+    match document.direction.as_str() {
+        "outbound" => outbound_entry_for(document),
+        "inbound" => inbound_entry_for(document),
+        other => Err(StoreError::Data(format!(
+            "document {} has direction {other:?}",
+            document.number
+        ))),
+    }
 }
 
 /// The subledger entry a document creates, if its counterparty is known.
@@ -245,7 +269,7 @@ pub fn open_item_for_document(
 /// A credit note is negative: it reduces what is owed rather than creating a
 /// second receivable, which is what keeps the control account equal to the sum of
 /// the subledger across a correction.
-fn open_item_for(document: &DocumentFacts) -> Option<crate::open_items::NewOpenItem> {
+fn open_item_for(document: &DocumentFacts, entry: &LedgerEntry) -> Option<crate::open_items::NewOpenItem> {
     let party_id = document.counterparty_id?;
     let gross = money(&document.totals, "gross", document.currency).ok()?;
     let signed = if document.is_credit_note() {
@@ -253,17 +277,116 @@ fn open_item_for(document: &DocumentFacts) -> Option<crate::open_items::NewOpenI
     } else {
         gross
     };
+    let kind = if document.direction == "outbound" {
+        crate::open_items::OpenItemKind::Receivable
+    } else {
+        crate::open_items::OpenItemKind::Payable
+    };
+    // The control line is the subledger balance. Its reporting-currency amount is
+    // the carrying value, and the one the trial balance shows, so the item and the
+    // account cannot disagree by a micro-unit of conversion rounding.
+    let control = entry
+        .lines()
+        .iter()
+        .find(|line| line.account().as_str() == kind.control_account())?;
+    let base = control.base_amount().unwrap_or_else(|| control.amount());
+    let base_signed = if document.is_credit_note() {
+        base.checked_neg().ok()?
+    } else {
+        base
+    };
     Some(crate::open_items::NewOpenItem {
-        kind: if document.direction == "outbound" {
-            crate::open_items::OpenItemKind::Receivable
-        } else {
-            crate::open_items::OpenItemKind::Payable
-        },
+        kind,
         party_id,
         amount: signed,
+        base_amount: base_signed,
+        fx_rate_micros: entry.fx().map(|fx| fx.rate.per_unit_micros()),
         due_date: document.due_date,
         original_date: document.issue_date,
     })
+}
+
+/// Converts every line into the reporting currency.
+///
+/// Conversion rounds each line once. The control line takes the residual so the
+/// two sides still balance in the reporting currency and the subledger's carrying
+/// value is exactly what the trial balance shows; without that, a document could
+/// round a micro-unit into a trial balance that no longer nets to zero.
+fn converted_lines(
+    document: &DocumentFacts,
+    lines: Vec<LedgerLine>,
+    control: AccountCode,
+) -> Result<Vec<LedgerLine>, StoreError> {
+    let Some(rate) = document.fx else {
+        rate_required(document)?;
+        return Ok(lines);
+    };
+    let base = document.base_currency;
+    let mut bases = Vec::with_capacity(lines.len());
+    for line in &lines {
+        bases.push(rate.convert(line.amount(), base).map_err(domain)?);
+    }
+    let mut other = Money::zero(base);
+    for (line, amount) in lines.iter().zip(&bases) {
+        if *line.account() != control {
+            other = other.checked_add(*amount).map_err(domain)?;
+        }
+    }
+    let mut converted = Vec::with_capacity(lines.len());
+    for (line, amount) in lines.iter().zip(&bases) {
+        let base_amount = if *line.account() == control { other } else { *amount };
+        converted.push(line_with_base(line, base_amount)?);
+    }
+    Ok(converted)
+}
+
+/// The same line with a reporting-currency amount, tags included.
+fn line_with_base(line: &LedgerLine, base: Money) -> Result<LedgerLine, StoreError> {
+    let mut rebuilt = LedgerLine::new(line.account().clone(), line.side(), line.amount()).map_err(domain)?;
+    if let Some(vat) = line.vat() {
+        let rate = VatRate::from_basis_points(vat.rate_bp).map_err(domain)?;
+        rebuilt = rebuilt.tagged(vat.category, rate);
+    }
+    if let Some(code) = line.tax_code() {
+        rebuilt = rebuilt.coded(code.clone());
+    }
+    rebuilt.converted(base).map_err(domain)
+}
+
+/// Builds the entry, converted when the document is not in the reporting currency.
+fn entry_with_conversion(
+    document: &DocumentFacts,
+    journal: Journal,
+    description: String,
+    lines: Vec<LedgerLine>,
+) -> Result<LedgerEntry, StoreError> {
+    match document.fx {
+        Some(rate) => LedgerEntry::converted(journal, description, lines, document.base_currency, rate).map_err(domain),
+        None => {
+            rate_required(document)?;
+            LedgerEntry::new(journal, description, lines).map_err(domain)
+        }
+    }
+}
+
+/// The rate a foreign document needs, with the commands that provide one.
+fn rate_required(document: &DocumentFacts) -> Result<Option<ExchangeRate>, StoreError> {
+    if document.currency == document.base_currency {
+        return Ok(None);
+    }
+    if let Some(rate) = document.fx {
+        return Ok(Some(rate));
+    }
+    Err(StoreError::Rejected(format!(
+        "document {} is in {} and the books report in {}, but there is no rate on or before {}; import a rate file (`bonk ledger fx import <file>`) or choose one for this document (`bonk ledger fx override {} --rate <{} per {}>`)",
+        document.number,
+        document.currency,
+        document.base_currency,
+        document.issue_date,
+        document.number,
+        document.base_currency,
+        document.currency
+    )))
 }
 
 /// The entry an outbound document would produce, without writing it.
@@ -333,7 +456,8 @@ fn outbound_entry_for(document: &DocumentFacts) -> Result<LedgerEntry, StoreErro
     } else {
         format!("Factuur {}", document.number)
     };
-    let entry = LedgerEntry::new(Journal::Sales, description.clone(), lines).map_err(domain)?;
+    let lines = converted_lines(document, lines, account(DEBTORS)?)?;
+    let entry = entry_with_conversion(document, Journal::Sales, description.clone(), lines)?;
     if document.is_credit_note() {
         // A credit note is the invoice's mirror, so the correction reads the same
         // way the invoice did, with every side reversed.
@@ -438,7 +562,8 @@ fn inbound_entry_for(document: &DocumentFacts) -> Result<LedgerEntry, StoreError
     } else {
         format!("Inkoopfactuur {}", document.number)
     };
-    let entry = LedgerEntry::new(Journal::Purchase, description.clone(), lines).map_err(domain)?;
+    let lines = converted_lines(document, lines, account(CREDITORS)?)?;
+    let entry = entry_with_conversion(document, Journal::Purchase, description.clone(), lines)?;
     if document.is_credit_note() {
         entry.reversed(description).map_err(domain)
     } else {
@@ -490,6 +615,10 @@ struct DocumentFacts {
     seller_id: SellerId,
     counterparty_id: Option<crux::CustomerId>,
     currency: Currency,
+    /// The books' reporting currency.
+    base_currency: Currency,
+    /// The rate to that currency, null when the document is already in it.
+    fx: Option<ExchangeRate>,
     issue_date: LocalDate,
     due_date: Option<LocalDate>,
     totals: Value,
@@ -517,17 +646,27 @@ fn load_document(conn: &Connection, id: DocumentId) -> Result<DocumentFacts, Sto
     };
     let counterparty: Option<String> = row.get(4)?;
     let due_date: Option<String> = row.get(7)?;
+    let seller_id = SellerId::parse_str(&row.get::<_, String>(3)?).map_err(domain)?;
+    let currency = Currency::parse(&row.get::<_, String>(5)?).map_err(domain)?;
+    let issue_date = LocalDate::parse_iso(&row.get::<_, String>(6)?).map_err(domain)?;
+    let number: String = row.get(2)?;
+    let base_currency = crate::report::reporting_currency(conn, seller_id)?;
+    let fx = crate::fx::document_rate(conn, seller_id, id, currency, issue_date)?
+        .map(|(rate, _source)| rate)
+        .filter(|_| currency != base_currency);
     Ok(DocumentFacts {
         direction: row.get(0)?,
         doc_type: row.get(1)?,
-        number: row.get(2)?,
-        seller_id: SellerId::parse_str(&row.get::<_, String>(3)?).map_err(domain)?,
+        number,
+        seller_id,
         counterparty_id: counterparty
             .map(|value| crux::CustomerId::parse_str(&value))
             .transpose()
             .map_err(domain)?,
-        currency: Currency::parse(&row.get::<_, String>(5)?).map_err(domain)?,
-        issue_date: LocalDate::parse_iso(&row.get::<_, String>(6)?).map_err(domain)?,
+        currency,
+        base_currency,
+        fx,
+        issue_date,
         due_date: due_date
             .map(|value| LocalDate::parse_iso(&value))
             .transpose()

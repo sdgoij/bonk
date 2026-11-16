@@ -149,6 +149,14 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("../migrations/0019_document_account.sql"),
         down: Some(include_str!("../migrations/0019_document_account_down.sql")),
     },
+    Migration {
+        version: 20,
+        name: "0020_fx_rates",
+        // Irreversible once a foreign posting exists: dropping the base amounts
+        // would leave the control accounts and the subledger disagreeing.
+        sql: include_str!("../migrations/0020_fx_rates.sql"),
+        down: None,
+    },
 ];
 
 /// SHA-256 of the migration source, hex encoded.
@@ -288,21 +296,20 @@ mod tests {
     fn rollback_is_preflighted_and_refuses_irreversible_migrations() {
         let mut conn = Connection::open_in_memory().unwrap();
         apply(&mut conn).unwrap();
-        assert_eq!(current_version(&conn), 19);
+        assert_eq!(current_version(&conn), 20);
 
+        // 0020 is irreversible once a foreign posting exists, so no rollback may
+        // cross it, and the refusal happens before anything is dropped.
         assert!(rollback_to(&mut conn, 1).is_err());
+        assert!(rollback_to(&mut conn, 2).is_err());
         assert_eq!(
             current_version(&conn),
-            19,
+            20,
             "a refused rollback must not partially apply"
         );
 
-        assert_eq!(
-            rollback_to(&mut conn, 2).unwrap(),
-            17,
-            "0019 through 0003 all declare a down"
-        );
-        assert_eq!(current_version(&conn), 2);
+        assert_eq!(rollback_to(&mut conn, 20).unwrap(), 0);
+        assert_eq!(current_version(&conn), 20);
     }
 
     #[test]
@@ -326,12 +333,18 @@ mod tests {
         )
         .unwrap();
 
-        let error = rollback_to(&mut conn, 2).unwrap_err();
-        let text = error.to_string();
-        assert!(text.contains("no_postings"), "unexpected error: {text}");
+        // The newest migration is irreversible, so reach the 0011 guard directly:
+        // it must refuse to drop a ledger that already holds a posting.
+        let down = MIGRATIONS
+            .iter()
+            .find(|migration| migration.version == 11)
+            .and_then(|migration| migration.down)
+            .unwrap();
+        let error = conn.execute_batch(down).unwrap_err();
+        assert!(error.to_string().contains("no_postings"), "unexpected error: {error}");
         assert_eq!(
             current_version(&conn),
-            19,
+            20,
             "nothing may be dropped before the guard trips"
         );
     }

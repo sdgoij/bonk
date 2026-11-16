@@ -270,6 +270,17 @@ fn aging_puts_each_item_in_the_bucket_its_due_date_earns() {
 #[test]
 fn aging_keeps_each_currency_apart() {
     let mut books = Books::open();
+    // A pound invoice needs a rate before it can post; one pound is 1.17 euros.
+    store::fx::set_manual_rate(
+        books.database.connection(),
+        books.seller,
+        Currency::GBP,
+        date("2026-01-01"),
+        crux::ExchangeRate::from_per_unit_micros(1_170_000).unwrap(),
+        "ada",
+        NOW,
+    )
+    .unwrap();
     let invoice = books.issue_in(Currency::EUR, 100, "2026-01-05", Some("2026-02-04"));
     post_outbound_document(books.database.connection(), invoice, "ada", NOW).unwrap();
     let invoice = books.issue_in(Currency::GBP, 200, "2026-01-06", Some("2026-02-05"));

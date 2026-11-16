@@ -1734,17 +1734,35 @@ failed the addition and the Ledger tab showed
 `corrupt record: currency mismatch: EUR vs GBP` instead of the subledger. Aging and
 totals are now kept per currency — the reporting currency first, the rest in code
 order — the window draws one aging matrix per currency, and `bonk ledger
-open-items` prints a block per currency and each item in its own. What this does
-not do is convert: posting still writes the document currency,
-`base_amount_micros` still equals the line amount, `allocation.fx_difference_micros`
-is still always zero, and the control-account check still adds the currencies
-numerically. Realised FX is therefore the next accounting slice and stays open:
-a versioned, offline rate cache (ECB reference rates, with a per-document override
-that is part of the posting record), conversion of the GL share of a
-foreign-currency posting, and a realised-difference account settled on payment,
-as §3.5 of the accounting design requires. Until that exists, a trial balance, P&L,
-or balance sheet that spans more than the reporting currency is only right per
-document, not as a total.
+open-items` prints a block per currency and each item in its own.
+
+**Status, 2026-11-16 (foreign postings are converted; settlement remains).**
+Migration 0020 adds the offline rate cache and the conversion columns. `fx_rate`
+holds the ECB `eurofxref-hist.csv` crossed into the books' reporting currency at
+import time, versioned by the file's hash; `document_fx_rate` is a person's rate
+for one document, with an author and a time; `journal_entry.base_currency`, the
+open item's carrying value and the allocation's carrying value follow the posting.
+`store::fx` selects the latest cached rate at or before the document's issue date,
+or the override, and `posting` converts every line once and lets the AR/AP control
+line absorb the rounding residual — so the control account, the subledger and the
+trial balance cannot disagree by a micro-unit. The content hash and the evidence
+verifier include the rate and base amounts only when they exist, so every posting
+written before this still hashes exactly as it did, and a foreign entry's bundle
+still verifies offline. Reversals and reclassifications carry the original rate
+rather than restating it; a rate is refused after posting because the entry is
+append-only. The control-account check now sums carrying values. The CLI has
+`bonk ledger fx import|set|override|clear|list|show`, a posting without a rate
+names the command that fixes it, and `demo-seed` writes labelled demonstration
+rates so its dollar and pound documents still post.
+
+Still open is settlement. `allocation.amount_micros` is the amount in the item's
+currency and `base_amount_micros` its carrying value, but a payment that settles a
+foreign item has to decide how much of the document currency it clears, release
+the carrying value, and post the realised difference to a dedicated account; the
+same question applies to re-matching after an unmatch, where the payment entry is
+reused. Until that is designed, `bank match` refuses an item posted at a rate
+rather than guessing, and `allocation.fx_difference_micros` stays zero. Unrealised
+revaluation at a period end remains out of scope, as the design's cut line says.
 
 ---
 

@@ -24,6 +24,31 @@ pub enum DomainError {
     #[error("amount overflow")]
     AmountOverflow,
 
+    /// An exchange rate was zero or negative.
+    #[error("invalid exchange rate: {0}")]
+    InvalidRate(i64),
+
+    /// A reporting-currency amount was negative.
+    #[error("a reporting-currency amount must not be negative, got {0} micro-units")]
+    InvalidBaseAmount(i64),
+
+    /// A line carried a reporting-currency amount on an entry with no rate.
+    #[error("a line carries a base amount but the entry names no exchange rate")]
+    BaseWithoutRate,
+
+    /// A converted entry had a line without a reporting-currency amount.
+    #[error("a converted entry has a line without a base amount")]
+    BaseAmountMissing,
+
+    /// A line's reporting-currency amount was in the wrong currency.
+    #[error("base amount currency mismatch: {expected} vs {found}")]
+    BaseCurrencyMismatch {
+        /// The entry's reporting currency.
+        expected: String,
+        /// The line's own base currency.
+        found: String,
+    },
+
     /// A decimal string could not be parsed as an amount or quantity.
     #[error("invalid decimal value: {0:?}")]
     InvalidDecimal(String),
@@ -142,6 +167,11 @@ impl DomainError {
             Self::InvalidCurrency(_) => "currency-invalid",
             Self::CurrencyMismatch { .. } => "currency-mismatch",
             Self::AmountOverflow => "amount-overflow",
+            Self::InvalidRate(_) => "rate-invalid",
+            Self::InvalidBaseAmount(_) => "base-amount-invalid",
+            Self::BaseWithoutRate => "base-without-rate",
+            Self::BaseAmountMissing => "base-amount-missing",
+            Self::BaseCurrencyMismatch { .. } => "base-currency-mismatch",
             Self::InvalidDecimal(_) => "decimal-invalid",
             Self::InvalidScale(_) => "scale-invalid",
             Self::InvalidQuantity(_) => "quantity-invalid",
@@ -185,6 +215,14 @@ mod tests {
                 right: "USD".to_owned(),
             },
             DomainError::AmountOverflow,
+            DomainError::InvalidRate(0),
+            DomainError::InvalidBaseAmount(-1),
+            DomainError::BaseWithoutRate,
+            DomainError::BaseAmountMissing,
+            DomainError::BaseCurrencyMismatch {
+                expected: "EUR".to_owned(),
+                found: "USD".to_owned(),
+            },
             DomainError::InvalidDecimal("x".to_owned()),
             DomainError::InvalidScale(9),
             DomainError::InvalidQuantity("x".to_owned()),

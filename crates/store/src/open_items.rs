@@ -63,6 +63,10 @@ pub struct NewOpenItem {
     pub party_id: CustomerId,
     /// Signed amount: negative for a credit note.
     pub amount: Money,
+    /// The same amount in the reporting currency, signed likewise.
+    pub base_amount: Money,
+    /// The rate the posting used, null when the document is in the reporting currency.
+    pub fx_rate_micros: Option<i64>,
     /// When it falls due, if the document says.
     pub due_date: Option<LocalDate>,
     /// The document date the item belongs to.
@@ -84,6 +88,10 @@ pub struct OpenItem {
     pub number: String,
     /// Signed original amount.
     pub amount: Money,
+    /// Signed original amount in the reporting currency.
+    pub base_amount: Money,
+    /// The rate the posting used, null when the document is in the reporting currency.
+    pub fx_rate_micros: Option<i64>,
     /// When it falls due.
     pub due_date: Option<LocalDate>,
     /// The document date.
@@ -180,8 +188,9 @@ pub(crate) fn insert(
     conn.execute(
         "INSERT INTO open_item
              (id, seller_id, kind, party_id, source_kind, source_id, amount_micros,
-              currency, due_date_local, original_date_local, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+              base_amount_micros, base_currency, fx_rate_micros, currency, due_date_local,
+              original_date_local, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
         params![
             DocumentId::new().to_string(),
             seller_id.to_string(),
@@ -190,6 +199,9 @@ pub(crate) fn insert(
             source,
             source_id.to_string(),
             item.amount.micros(),
+            item.base_amount.micros(),
+            item.base_amount.currency().as_str(),
+            item.fx_rate_micros,
             item.amount.currency().as_str(),
             item.due_date.map(LocalDate::to_iso_string),
             item.original_date.to_iso_string(),
@@ -205,7 +217,8 @@ pub(crate) fn insert(
 /// after the fact; callers that want the work queue filter on [`OpenItem::is_open`].
 pub fn list(conn: &Connection, seller_id: SellerId, kind: OpenItemKind) -> Result<Vec<OpenItem>, StoreError> {
     let mut statement = conn.prepare(
-        "SELECT o.id, o.kind, o.party_id, o.source_id, d.number, o.amount_micros, o.currency,
+        "SELECT o.id, o.kind, o.party_id, o.source_id, d.number, o.amount_micros,
+                o.base_amount_micros, o.base_currency, o.fx_rate_micros, o.currency,
                 o.due_date_local, o.original_date_local,
                 o.amount_micros + COALESCE(
                     (SELECT sum(a.amount_micros) FROM allocation a WHERE a.open_item_id = o.id), 0
@@ -222,11 +235,16 @@ pub fn list(conn: &Connection, seller_id: SellerId, kind: OpenItemKind) -> Resul
         let kind_raw: String = row.get(1)?;
         let party: String = row.get(2)?;
         let source: String = row.get(3)?;
-        let currency_raw: String = row.get(6)?;
-        let due: Option<String> = row.get(7)?;
-        let original: String = row.get(8)?;
+        let base_currency_raw: Option<String> = row.get(7)?;
+        let currency_raw: String = row.get(9)?;
+        let due: Option<String> = row.get(10)?;
+        let original: String = row.get(11)?;
 
         let currency = Currency::parse(&currency_raw).map_err(|error| StoreError::Data(error.to_string()))?;
+        let base_currency = match base_currency_raw.as_deref() {
+            Some(raw) => Currency::parse(raw).map_err(|error| StoreError::Data(error.to_string()))?,
+            None => currency,
+        };
         let amount = Money::from_micros(row.get(5)?, currency);
         items.push(OpenItem {
             id,
@@ -235,12 +253,14 @@ pub fn list(conn: &Connection, seller_id: SellerId, kind: OpenItemKind) -> Resul
             source: DocumentId::parse_str(&source).map_err(|error| StoreError::Data(error.to_string()))?,
             number: row.get(4)?,
             amount,
+            base_amount: Money::from_micros(row.get(6)?, base_currency),
+            fx_rate_micros: row.get(8)?,
             due_date: due
                 .map(|value| LocalDate::parse_iso(&value))
                 .transpose()
                 .map_err(|error| StoreError::Data(error.to_string()))?,
             original_date: LocalDate::parse_iso(&original).map_err(|error| StoreError::Data(error.to_string()))?,
-            outstanding: Money::from_micros(row.get(9)?, currency),
+            outstanding: Money::from_micros(row.get(12)?, currency),
         });
     }
     Ok(items)
@@ -322,6 +342,8 @@ pub(crate) fn audit_payload(item: &NewOpenItem) -> serde_json::Value {
         "kind": item.kind.as_str(),
         "party_id": item.party_id.to_string(),
         "amount_micros": item.amount.micros(),
+        "base_amount_micros": item.base_amount.micros(),
+        "fx_rate_micros": item.fx_rate_micros,
         "due_date": item.due_date.map(LocalDate::to_iso_string),
     })
 }

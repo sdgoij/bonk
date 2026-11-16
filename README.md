@@ -281,6 +281,11 @@ bonk ledger post-manual --date 2026-03-01 --description "Bankkosten" --line "710
 bonk ledger reclassify IK:2026-0001 NL-AE-GOODS --reason "verkeerde rubriek"
 bonk ledger reclassify IK:2026-0001 --account 7100 --reason "verkeerde rekening" --date 2026-03-31
 bonk ledger open-items --kind payable --aging --as-of 2026-03-31
+bonk ledger fx import ~/Downloads/eurofxref-hist.csv   # ECB reference rates, offline
+bonk ledger fx set --currency GBP --date 2026-03-01 --rate 1.17
+bonk ledger fx override 2026-0002 --rate 1.18          # one document, before it posts
+bonk ledger fx show 2026-0002                          # the rate it would use, and why
+bonk ledger fx list --currency GBP
 bonk ledger bank add --name "Zakelijk" --iban NL91ABNA0417164300
 bonk ledger bank profile put rabo --file rabo.toml    # how to read this bank's CSV
 bonk ledger bank import ./statements/feb.camt.xml     # CAMT.053, MT940, or CSV
@@ -307,6 +312,16 @@ it. Preparing is refused while a check is red: every document dated in the perio
 has to be posted, the VAT posted per document has to equal the VAT on that
 document, and the trial balance has to net to zero. The AR and AP control accounts are
 compared against the open items behind them, which bank payments settle.
+
+A document keeps its own currency; the ledger keeps the seller's reporting
+currency. A foreign-currency posting uses the latest cached reference rate at or
+before the document's issue date, or the rate chosen for that document, and
+records it on every journal line with the converted amount beside it. Import the
+ECB's `eurofxref-hist.csv` once, or set a rate for a day; without one, posting
+refuses and names the command. The subledger keeps both the document amount and
+its carrying value. Settling a foreign-currency invoice — releasing the carrying
+value and posting the realised difference — is the remaining FX step: a match on
+an item posted at a rate is refused rather than guessed.
 
 A month is closed with `ledger close` and opened again with `ledger reopen --reason`,
 and the two gates are deliberately separate. Filing is refused while a document

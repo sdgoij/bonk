@@ -698,7 +698,7 @@ fn the_content_hash_is_a_function_of_the_entry() {
     let (_dir, database, seller) = database();
     seed_starter_chart(database.connection(), NOW).unwrap();
 
-    let document = DocumentId::new();
+    let document = DocumentId::parse_str("00000000-0000-4000-8000-000000000001").unwrap();
     let entry = domestic_sale("Invoice 2026-0001");
     let posted = post(
         &database,
@@ -718,6 +718,13 @@ fn the_content_hash_is_a_function_of_the_entry() {
     assert_eq!(
         recomputed, posted.content_hash,
         "a verifier must be able to re-derive it"
+    );
+    // Pinned shape: this is what an entry written before foreign-currency support
+    // hashes to. A new key must be added only when it applies, or every old
+    // posting (and every evidence bundle carrying one) stops verifying.
+    assert_eq!(
+        posted.content_hash,
+        "917a446f440ff87aa866827d2b677f6e38f55307b1ec689c33aa4cd4e6552f70"
     );
 
     // Any change to what the entry says changes the hash; the identifier and the

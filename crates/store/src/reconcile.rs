@@ -134,8 +134,10 @@ fn control_accounts(
             .find(|row| row.code.as_str() == control)
             .map_or(0, crate::report::AccountBalance::balance_micros);
         let subledger: Option<i64> = conn.query_row(
-            "SELECT sum(amount_micros) FROM open_item
-             WHERE seller_id = ?1 AND kind = ?2 AND original_date_local <= ?3",
+            "SELECT sum(o.base_amount_micros + COALESCE(
+                        (SELECT sum(a.base_amount_micros) FROM allocation a WHERE a.open_item_id = o.id), 0))
+             FROM open_item o
+             WHERE o.seller_id = ?1 AND o.kind = ?2 AND o.original_date_local <= ?3",
             rusqlite::params![seller_id.to_string(), kind.as_str(), ends.to_iso_string()],
             |row| row.get(0),
         )?;
@@ -214,7 +216,7 @@ fn invoice_to_ledger(
     let (starts, ends) = vat::period_bounds(year, period_no).map_err(|error| StoreError::Data(error.to_string()))?;
 
     let mut statement = conn.prepare(
-        "SELECT d.direction, d.number, d.doc_type, d.tax_breakdown_json, e.id
+        "SELECT d.direction, d.number, d.doc_type, d.tax_breakdown_json, d.currency, e.id
          FROM document d
          LEFT JOIN journal_entry e
                 ON e.source_id = d.id
@@ -237,15 +239,27 @@ fn invoice_to_ledger(
         let number: String = row.get(1)?;
         let doc_type: String = row.get(2)?;
         let breakdown: String = row.get(3)?;
-        let entry: Option<String> = row.get(4)?;
+        let document_currency = Currency::parse(&row.get::<_, String>(4)?)
+            .map_err(|error| StoreError::Data(format!("document {number}: {error}")))?;
+        let entry: Option<String> = row.get(5)?;
 
         let Some(entry) = entry else {
             problems.push(format!("{number} is not posted"));
             continue;
         };
 
-        let document_tax = signed_document_tax(&breakdown, &doc_type, currency)
+        // The document states its VAT in its own currency; the posting stored the
+        // reporting-currency amount. Convert at the rate the entry recorded, so a
+        // foreign invoice is compared on the same footing as an invoice in euros.
+        let document_tax = signed_document_tax(&breakdown, &doc_type, document_currency)
             .map_err(|error| StoreError::Data(format!("document {number}: {error}")))?;
+        let document_tax = match entry_rate(conn, &entry)? {
+            Some((base, rate)) => rate
+                .convert(Money::from_micros(document_tax, document_currency), base)
+                .map_err(|error| StoreError::Data(format!("document {number}: {error}")))?
+                .micros(),
+            None => document_tax,
+        };
 
         if direction == "outbound" {
             let posted = vat_account_net(conn, &entry, &[VAT_PAYABLE_HIGH, VAT_PAYABLE_LOW, VAT_PAYABLE_OTHER])?;
@@ -302,10 +316,14 @@ fn signed_document_tax(breakdown: &str, doc_type: &str, currency: Currency) -> R
 }
 
 /// Net movement of one entry across a set of accounts, credit positive.
+///
+/// The reporting-currency column, because that is what the return and the trial
+/// balance are in; a document currency would make a foreign posting disagree with
+/// the box it lands in.
 fn vat_account_net(conn: &Connection, entry: &str, accounts: &[&str]) -> Result<i64, StoreError> {
     let placeholders = vec!["?"; accounts.len()].join(", ");
     let sql = format!(
-        "SELECT sum(CASE side WHEN 'credit' THEN amount_micros ELSE -amount_micros END)
+        "SELECT sum(CASE side WHEN 'credit' THEN base_amount_micros ELSE -base_amount_micros END)
          FROM journal_line WHERE entry_id = ? AND account_code IN ({placeholders})"
     );
     let mut statement = conn.prepare(&sql)?;
@@ -313,6 +331,28 @@ fn vat_account_net(conn: &Connection, entry: &str, accounts: &[&str]) -> Result<
     values.extend(accounts.iter().map(|account| (*account).to_owned()));
     let net: Option<i64> = statement.query_row(rusqlite::params_from_iter(values), |row| row.get(0))?;
     Ok(net.unwrap_or(0))
+}
+
+/// The conversion an entry recorded, when it was not in the reporting currency.
+fn entry_rate(conn: &Connection, entry: &str) -> Result<Option<(Currency, crux::ExchangeRate)>, StoreError> {
+    let (base, rate): (Option<String>, Option<i64>) = conn.query_row(
+        "SELECT e.base_currency,
+                (SELECT fx_rate_micros FROM journal_line
+                 WHERE entry_id = e.id AND fx_rate_micros IS NOT NULL LIMIT 1)
+         FROM journal_entry e WHERE e.id = ?1",
+        [entry],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    match (base, rate) {
+        (None, None) => Ok(None),
+        (Some(base), Some(rate)) => Ok(Some((
+            Currency::parse(&base).map_err(|error| StoreError::Data(error.to_string()))?,
+            crux::ExchangeRate::from_per_unit_micros(rate).map_err(|error| StoreError::Data(error.to_string()))?,
+        ))),
+        _ => Err(StoreError::Data(format!(
+            "entry {entry} names a base currency without a rate, or the reverse"
+        ))),
+    }
 }
 
 /// The books balance up to the end of the period.

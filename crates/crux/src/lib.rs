@@ -22,6 +22,7 @@ pub mod date;
 pub mod error;
 pub mod facturx;
 pub mod findings;
+pub mod fx;
 pub mod ids;
 pub mod invoice;
 pub mod ledger;
@@ -38,6 +39,7 @@ pub use date::LocalDate;
 pub use error::DomainError;
 pub use facturx::FacturXProfile;
 pub use findings::{Finding, Severity, has_blocking};
+pub use fx::ExchangeRate;
 pub use ids::{CustomerId, DeviceId, DocumentId, FiscalPeriodId, JournalEntryId, LineId, SavedSearchId, SellerId};
 pub use invoice::{
     DocType, DraftLine, InvoiceDraft, InvoiceEvent, InvoiceState, PrecedingInvoice, TransitionError, transition,

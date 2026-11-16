@@ -621,6 +621,68 @@ enum ProfileCommand {
     },
 }
 
+/// Subcommands of [`LedgerCommand::Fx`].
+#[derive(Debug, Subcommand)]
+enum FxCommand {
+    /// Import the ECB's `eurofxref-hist.csv` into the rate cache.
+    ///
+    /// The file is wide: a date column and one column per currency, quoted per
+    /// euro. Every value is crossed into the books' reporting currency, and the
+    /// file's hash versions every row it writes. Re-importing a corrected file
+    /// updates the cache rather than adding a second opinion beside it.
+    Import {
+        /// The downloaded CSV file.
+        file: PathBuf,
+        #[arg(long, default_value = "cli")]
+        actor: String,
+    },
+    /// Store a manual rate for one currency and day.
+    Set {
+        /// The currency being converted from, e.g. `GBP`.
+        #[arg(long)]
+        currency: String,
+        /// The date the rate applies from, `YYYY-MM-DD`.
+        #[arg(long)]
+        date: String,
+        /// Reporting currency per one unit, e.g. `1.17` for a pound.
+        #[arg(long)]
+        rate: String,
+        #[arg(long, default_value = "cli")]
+        actor: String,
+    },
+    /// Choose the rate for one document, before it is posted.
+    Override {
+        /// The document, by number or identifier.
+        document: String,
+        /// Reporting currency per one unit of the document's currency.
+        #[arg(long)]
+        rate: String,
+        /// The date the rate belongs to; defaults to the document's issue date.
+        #[arg(long)]
+        date: Option<String>,
+        #[arg(long, default_value = "cli")]
+        actor: String,
+    },
+    /// Remove a document's rate override, returning it to the cache.
+    Clear {
+        /// The document, by number or identifier.
+        document: String,
+        #[arg(long, default_value = "cli")]
+        actor: String,
+    },
+    /// List cached rates, newest first.
+    List {
+        /// Only this currency.
+        #[arg(long)]
+        currency: Option<String>,
+    },
+    /// Show the rate a document would post at, and where it came from.
+    Show {
+        /// The document, by number or identifier.
+        document: String,
+    },
+}
+
 /// Subcommands of [`Command::Ledger`].
 #[derive(Debug, Subcommand)]
 enum LedgerCommand {
@@ -771,6 +833,17 @@ enum LedgerCommand {
     Bank {
         #[command(subcommand)]
         command: BankCommand,
+    },
+    /// Manage the offline exchange-rate cache and per-document overrides.
+    ///
+    /// A document keeps its own currency and the ledger keeps the reporting
+    /// currency, so a foreign-currency posting needs a rate. Rates are offline:
+    /// import the ECB's eurofxref-hist.csv, or set one for a day, or choose one
+    /// for a single document before it is posted. The rate travels in the entry,
+    /// so a report never restates history at today's market.
+    Fx {
+        #[command(subcommand)]
+        command: FxCommand,
     },
     /// List open items, or age them (openstaande posten).
     #[command(name = "open-items")]
@@ -2423,6 +2496,111 @@ fn ledger(access: &Access, database: &Path, keystore: &Path, command: LedgerComm
             }
             Ok(())
         }
+        LedgerCommand::Fx { command } => {
+            match command {
+                FxCommand::Import { file, actor } => {
+                    let bytes = std::fs::read(&file)?;
+                    let report = store::import_ecb(connection, owner, &bytes, &actor, &now)?;
+                    println!("rows:       {}", report.rows);
+                    println!("written:    {}", report.written);
+                    println!("skipped:    {}", report.skipped);
+                    println!("currencies: {}", report.currencies);
+                    println!("version:    {}", report.provider_version);
+                }
+                FxCommand::Set {
+                    currency,
+                    date,
+                    rate,
+                    actor,
+                } => {
+                    let reporting = store::reporting_currency(connection, owner)?;
+                    let currency = Currency::parse(&currency)
+                        .map_err(|_| CliError::Input(format!("{currency:?} is not a currency code")))?;
+                    let as_of = LocalDate::parse_iso(&date)
+                        .map_err(|_| CliError::Input(format!("{date:?} is not a date, expected YYYY-MM-DD")))?;
+                    let rate = parse_rate(&rate, reporting)?;
+                    store::set_manual_rate(connection, owner, currency, as_of, rate, &actor, &now)?;
+                    println!(
+                        "{currency} from {as_of}: {} {reporting} per unit",
+                        rate_text(rate, reporting)?
+                    );
+                }
+                FxCommand::Override {
+                    document,
+                    rate,
+                    date,
+                    actor,
+                } => {
+                    let id = resolve_document(connection, owner, &document)?
+                        .ok_or_else(|| CliError::Input(format!("no document matching {document:?}")))?;
+                    let reporting = store::reporting_currency(connection, owner)?;
+                    let (currency, issue_date) = store::document_facts(connection, owner, id)?;
+                    if currency == reporting {
+                        return Err(CliError::Input(format!(
+                            "{document} is already in {reporting}; it needs no rate"
+                        )));
+                    }
+                    let rate = parse_rate(&rate, reporting)?;
+                    let as_of = parse_date_or(date, issue_date)?;
+                    store::set_override(connection, owner, id, rate, as_of, &actor, &now)?;
+                    println!(
+                        "{document}: {currency} at {} {reporting} per unit from {as_of}",
+                        rate_text(rate, reporting)?
+                    );
+                }
+                FxCommand::Clear { document, actor } => {
+                    let id = resolve_document(connection, owner, &document)?
+                        .ok_or_else(|| CliError::Input(format!("no document matching {document:?}")))?;
+                    store::clear_override(connection, owner, id, &actor, &now)?;
+                    println!("cleared: {document}; it falls back to the cached rate");
+                }
+                FxCommand::List { currency } => {
+                    let currency = currency
+                        .map(|raw| {
+                            Currency::parse(&raw)
+                                .map_err(|_| CliError::Input(format!("{raw:?} is not a currency code")))
+                        })
+                        .transpose()?;
+                    let reporting = store::reporting_currency(connection, owner)?;
+                    let rates = store::list_rates(connection, owner, currency)?;
+                    if rates.is_empty() {
+                        println!("no cached rates");
+                        return Ok(());
+                    }
+                    println!(
+                        "{:<6} {:<6} {:<12} {:>14} {:<8} version",
+                        "from", "to", "as of", "rate", "source"
+                    );
+                    for rate in rates {
+                        println!(
+                            "{:<6} {:<6} {:<12} {:>14} {:<8} {}",
+                            rate.currency.as_str(),
+                            rate.base_currency.as_str(),
+                            rate.as_of.to_iso_string(),
+                            rate_text(rate.rate, reporting)?,
+                            rate.source,
+                            &rate.provider_version[..rate.provider_version.len().min(12)]
+                        );
+                    }
+                }
+                FxCommand::Show { document } => {
+                    let id = resolve_document(connection, owner, &document)?
+                        .ok_or_else(|| CliError::Input(format!("no document matching {document:?}")))?;
+                    let reporting = store::reporting_currency(connection, owner)?;
+                    match store::rate_for_document(connection, owner, id)? {
+                        Some((currency, issue_date, rate, source)) => println!(
+                            "{document}: {currency} at {} {reporting} per unit ({}, document dated {issue_date})",
+                            rate_text(rate, reporting)?,
+                            source.as_str()
+                        ),
+                        None => println!(
+                            "{document}: no rate on or before its issue date; import a rate file or choose one"
+                        ),
+                    }
+                }
+            }
+            Ok(())
+        }
         LedgerCommand::TaxCodes => {
             let codes = store::list_tax_codes(connection)?;
             if codes.is_empty() {
@@ -3286,6 +3464,19 @@ fn window(from: Option<String>, to: Option<String>) -> Result<(LocalDate, LocalD
 }
 
 /// Parses an optional `YYYY-MM-DD`, falling back to a default.
+/// Parses a rate the user typed: reporting currency per one unit.
+fn parse_rate(raw: &str, currency: Currency) -> Result<crux::ExchangeRate, CliError> {
+    let value = Money::parse_fixed(raw, currency)
+        .map_err(|_| CliError::Input(format!("{raw:?} is not a rate; use decimals such as 1.17")))?;
+    crux::ExchangeRate::from_per_unit_micros(value.micros())
+        .map_err(|_| CliError::Input("a rate must be greater than zero".to_owned()))
+}
+
+/// Renders a rate as a six-decimal number.
+fn rate_text(rate: crux::ExchangeRate, currency: Currency) -> Result<String, CliError> {
+    Ok(Money::from_micros(rate.per_unit_micros(), currency).to_fixed_string(6)?)
+}
+
 fn parse_date_or(raw: Option<String>, default: LocalDate) -> Result<LocalDate, CliError> {
     match raw {
         Some(value) => Ok(LocalDate::parse_iso(&value)

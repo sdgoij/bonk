@@ -25,6 +25,7 @@ mod dto;
 pub mod error;
 pub mod evidence;
 pub mod expense;
+pub mod fx;
 pub mod import_profile;
 pub mod integrity;
 pub mod keystore;
@@ -55,6 +56,11 @@ pub use db::Database;
 pub use device::DeviceStore;
 pub use error::StoreError;
 pub use evidence::EvidenceReport;
+pub use fx::{
+    CachedRate, DocumentRate, ImportReport as RateImportReport, RateSource, clear_override, document_facts,
+    document_rate, import_ecb, list_rates, override_for, rate_for_document, rate_on, seed_demo_rate, set_manual_rate,
+    set_override,
+};
 pub use integrity::IntegrityReport;
 pub use keystore::{KdfParams, KeyStore, copy_to_directory};
 pub use kit::KitReport;

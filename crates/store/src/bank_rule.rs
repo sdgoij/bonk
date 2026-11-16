@@ -322,7 +322,26 @@ pub fn classify_one(
         }
     };
 
-    let amount = Money::from_micros(line.amount_micros.abs(), line.currency);
+    let reporting = crate::report::reporting_currency(conn, seller_id)?;
+    let amount_document = Money::from_micros(line.amount_micros.abs(), line.currency);
+    // The GL is in the reporting currency; a foreign bank account's line is
+    // converted at the rate for the day the bank booked it. A missing rate is a
+    // refusal rather than a number in the wrong currency.
+    let amount = if line.currency == reporting {
+        amount_document
+    } else {
+        let rate = crate::fx::rate_on(conn, seller_id, line.currency, line.booking_date)?.ok_or_else(|| {
+            StoreError::Rejected(format!(
+                "transaction {transaction_id} is in {}, and there is no {reporting} rate on or before {}; import a rate file (`bonk ledger fx import <file>`) or set one (`bonk ledger fx set --currency {} --date {} --rate <{reporting} per {}>`)",
+                line.currency,
+                line.booking_date,
+                line.currency,
+                line.booking_date,
+                line.currency
+            ))
+        })?;
+        rate.convert(amount_document, reporting).map_err(domain)?
+    };
     if dry_run {
         return Ok(Classification::Posted(Classified {
             transaction_id: transaction_id.to_owned(),

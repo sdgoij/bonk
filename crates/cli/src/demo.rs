@@ -448,6 +448,19 @@ fn seed_books(
 ) -> Result<BookCounts, DemoError> {
     let connection = session.database().connection();
     store::seed_starter_chart(connection, &at(today, 8, 45))?;
+    // The demo trades in dollars and pounds; fixed, labelled rates keep posting
+    // deterministic without pretending to be a market quote.
+    for (currency, micros) in [(Currency::USD, 925_000), (Currency::GBP, 1_170_000)] {
+        store::seed_demo_rate(
+            connection,
+            owner,
+            currency,
+            LocalDate::parse_iso("2020-01-02")?,
+            crux::ExchangeRate::from_per_unit_micros(micros)?,
+            ACTOR,
+            &at(today, 8, 46),
+        )?;
+    }
 
     let mut posted = 0_usize;
     let mut newest: Vec<&Issued> = issued.iter().collect();

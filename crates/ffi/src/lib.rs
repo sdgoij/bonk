@@ -1769,7 +1769,7 @@ mod tests {
         let archive =
             Archive::create(database.clone(), keystore.clone(), "passphrase".to_owned()).expect("a new archive");
         assert!(archive_exists(database.clone(), keystore.clone()));
-        assert_eq!(archive.summary().expect("a summary").schema_version, 19);
+        assert_eq!(archive.summary().expect("a summary").schema_version, 20);
         assert_eq!(archive.database_path().expect("a path"), database);
 
         archive.lock();

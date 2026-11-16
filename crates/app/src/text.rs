@@ -2693,6 +2693,31 @@ pub mod problem {
                 "The amount is too large.".to_owned(),
                 "Het bedrag is te groot.".to_owned()
             ),
+            DomainError::InvalidRate(_) => sentence!(
+                language,
+                "The exchange rate must be greater than zero.".to_owned(),
+                "De wisselkoers moet groter dan nul zijn.".to_owned()
+            ),
+            DomainError::InvalidBaseAmount(_) => sentence!(
+                language,
+                "The reporting-currency amount is not valid.".to_owned(),
+                "Het bedrag in de rapportagevaluta is niet geldig.".to_owned()
+            ),
+            DomainError::BaseWithoutRate => sentence!(
+                language,
+                "The entry has reporting-currency amounts but no exchange rate.".to_owned(),
+                "De boeking heeft bedragen in de rapportagevaluta maar geen wisselkoers.".to_owned()
+            ),
+            DomainError::BaseAmountMissing => sentence!(
+                language,
+                "A line is missing its reporting-currency amount.".to_owned(),
+                "Een regel mist het bedrag in de rapportagevaluta.".to_owned()
+            ),
+            DomainError::BaseCurrencyMismatch { .. } => sentence!(
+                language,
+                "The reporting-currency amounts are in different currencies.".to_owned(),
+                "De bedragen in de rapportagevaluta staan in verschillende valuta.".to_owned()
+            ),
             DomainError::InvalidDecimal(value) => {
                 sentence!(
                     language,

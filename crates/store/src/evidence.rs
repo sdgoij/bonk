@@ -32,8 +32,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crux::{
-    AccountCode, Currency, DocumentId, Journal, LedgerEntry, LedgerLine, LocalDate, Money, SellerId, Side, VatCategory,
-    VatRate,
+    AccountCode, Currency, DocumentId, ExchangeRate, Journal, LedgerEntry, LedgerLine, LocalDate, Money, SellerId,
+    Side, VatCategory, VatRate,
 };
 use rusqlite::{Connection, OptionalExtension, params, params_from_iter};
 use serde::{Deserialize, Serialize};
@@ -636,6 +636,8 @@ struct LedgerRecord {
     date: String,
     description: String,
     currency: String,
+    #[serde(default)]
+    base_currency: Option<String>,
     source_kind: String,
     #[serde(default)]
     source_id: Option<String>,
@@ -855,7 +857,7 @@ fn read_ledger(conn: &Connection, ids: &BTreeSet<String>) -> Result<Vec<LedgerRe
     for chunk in ids.chunks(ID_CHUNK) {
         let placeholders = vec!["?"; chunk.len()].join(", ");
         let sql = format!(
-            "SELECT id, journal_code, number, entry_date_local, description, currency,
+            "SELECT id, journal_code, number, entry_date_local, description, currency, base_currency,
                     source_kind, source_id, reverses_entry_id, posting_profile_id, rule_version,
                     created_at, created_by, content_hash
              FROM journal_entry WHERE id IN ({placeholders})"
@@ -870,14 +872,15 @@ fn read_ledger(conn: &Connection, ids: &BTreeSet<String>) -> Result<Vec<LedgerRe
                 date: row.get(3)?,
                 description: row.get(4)?,
                 currency: row.get(5)?,
-                source_kind: row.get(6)?,
-                source_id: row.get(7)?,
-                reverses: row.get(8)?,
-                posting_profile: row.get(9)?,
-                rule_version: row.get(10)?,
-                created_at: row.get(11)?,
-                created_by: row.get(12)?,
-                content_hash: row.get(13)?,
+                base_currency: row.get(6)?,
+                source_kind: row.get(7)?,
+                source_id: row.get(8)?,
+                reverses: row.get(9)?,
+                posting_profile: row.get(10)?,
+                rule_version: row.get(11)?,
+                created_at: row.get(12)?,
+                created_by: row.get(13)?,
+                content_hash: row.get(14)?,
                 lines: Vec::new(),
             });
         }
@@ -1024,8 +1027,17 @@ fn record_content_hash(record: &LedgerRecord) -> Result<String, StoreError> {
         .map_err(|error| StoreError::Integrity(format!("ledger entry {} has a date: {error}", record.number)))?;
     let currency = Currency::parse(&record.currency)
         .map_err(|error| StoreError::Integrity(format!("ledger entry {} has a currency: {error}", record.number)))?;
+    let base_currency = record
+        .base_currency
+        .as_deref()
+        .map(Currency::parse)
+        .transpose()
+        .map_err(|error| {
+            StoreError::Integrity(format!("ledger entry {} has a base currency: {error}", record.number))
+        })?;
 
     let mut lines = Vec::new();
+    let mut entry_rate: Option<i64> = None;
     for line in &record.lines {
         let account = AccountCode::parse(&line.account).map_err(|error| {
             StoreError::Integrity(format!("ledger entry {} names an account: {error}", record.number))
@@ -1049,12 +1061,57 @@ fn record_content_hash(record: &LedgerRecord) -> Result<String, StoreError> {
             })?;
             ledger_line = ledger_line.coded(code);
         }
+        match (base_currency, line.fx_rate_micros) {
+            (Some(base_currency), Some(rate)) => {
+                if entry_rate.is_some_and(|existing| existing != rate) {
+                    return Err(StoreError::Integrity(format!(
+                        "ledger entry {} mixes exchange rates on its lines",
+                        record.number
+                    )));
+                }
+                entry_rate = Some(rate);
+                ledger_line = ledger_line
+                    .converted(Money::from_micros(line.base_amount_micros, base_currency))
+                    .map_err(|error| {
+                        StoreError::Integrity(format!("ledger entry {} has a base amount: {error}", record.number))
+                    })?;
+            }
+            (Some(_), None) => {
+                return Err(StoreError::Integrity(format!(
+                    "ledger entry {} reports a base currency but a line has no rate",
+                    record.number
+                )));
+            }
+            (None, Some(_)) => {
+                return Err(StoreError::Integrity(format!(
+                    "ledger entry {} has a rate but no base currency",
+                    record.number
+                )));
+            }
+            (None, None) => {}
+        }
         lines.push(ledger_line);
     }
 
-    let entry = LedgerEntry::new(journal, record.description.as_str(), lines).map_err(|error| {
-        StoreError::Integrity(format!("ledger entry {} cannot be read back: {error}", record.number))
-    })?;
+    let entry = match (base_currency, entry_rate) {
+        (Some(base_currency), Some(rate)) => LedgerEntry::converted(
+            journal,
+            record.description.as_str(),
+            lines,
+            base_currency,
+            ExchangeRate::from_per_unit_micros(rate).map_err(|error| {
+                StoreError::Integrity(format!("ledger entry {} has a rate: {error}", record.number))
+            })?,
+        ),
+        (None, None) => LedgerEntry::new(journal, record.description.as_str(), lines),
+        _ => {
+            return Err(StoreError::Integrity(format!(
+                "ledger entry {} cannot name both a base currency and a rate",
+                record.number
+            )));
+        }
+    }
+    .map_err(|error| StoreError::Integrity(format!("ledger entry {} cannot be read back: {error}", record.number)))?;
     let source = posting_source(&record.source_kind, record.source_id.as_deref())?;
     crate::ledger::content_hash(&entry, &record.number, date, source)
 }

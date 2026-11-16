@@ -8213,6 +8213,16 @@ mod tests {
     #[test]
     fn the_open_items_tab_keeps_currencies_apart() {
         let (_dir, mut session, seller) = posted_session();
+        store::set_manual_rate(
+            session.database().connection(),
+            seller.id,
+            Currency::GBP,
+            LocalDate::parse_iso("2026-01-01").unwrap(),
+            crux::ExchangeRate::from_per_unit_micros(1_170_000).unwrap(),
+            "test",
+            NOW,
+        )
+        .unwrap();
         let customer = list_customers(session.database().connection()).unwrap()[0].clone();
         let mut form = editor();
         form.customer = Some(customer.id);

@@ -1045,8 +1045,8 @@ fn post_entry_into(
         "INSERT INTO journal_entry
              (id, journal_code, period_id, number, entry_date_local, description,
               source_kind, source_id, reverses_entry_id, posting_profile_id, rule_version,
-              currency, created_at, created_by, content_hash)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+              currency, base_currency, created_at, created_by, content_hash)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
         params![
             id.to_string(),
             request.entry.journal().code(),
@@ -1060,21 +1060,24 @@ fn post_entry_into(
             request.posting_profile_id,
             request.rule_version,
             request.entry.currency().as_str(),
+            request.entry.fx().map(|fx| fx.base_currency.as_str().to_owned()),
             request.now,
             request.actor,
             content_hash,
         ],
     )?;
 
+    let fx_rate_micros = request.entry.fx().map(|fx| fx.rate.per_unit_micros());
     for (index, line) in request.entry.lines().iter().enumerate() {
         let line_no = i64::try_from(index + 1).map_err(|_| StoreError::Data("too many lines".to_owned()))?;
         let amount = line.amount().micros();
+        let base_amount = line.base_amount().map_or(amount, Money::micros);
         conn.execute(
             "INSERT INTO journal_line
                  (id, entry_id, line_no, account_code, side, amount_micros, currency,
                   fx_rate_micros, base_amount_micros, party_id, tax_code_id, description,
                   vat_category, vat_rate_bp)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL, ?6, NULL, ?10, NULL, ?8, ?9)",
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, NULL, ?10, NULL, ?11, ?12)",
             params![
                 JournalEntryId::new().to_string(),
                 id.to_string(),
@@ -1083,9 +1086,11 @@ fn post_entry_into(
                 line.side().as_str(),
                 amount,
                 request.entry.currency().as_str(),
+                fx_rate_micros,
+                base_amount,
+                line.tax_code().map(crux::TaxCode::as_str),
                 line.vat().map(|tag| tag.category.code()),
                 line.vat().map(|tag| tag.rate_bp),
-                line.tax_code().map(crux::TaxCode::as_str),
             ],
         )?;
     }
@@ -1252,7 +1257,7 @@ pub struct StoredEntry {
 pub fn load_entry(conn: &Connection, id: JournalEntryId) -> Result<Option<StoredEntry>, StoreError> {
     let stored = {
         let mut statement = conn.prepare(
-            "SELECT number, journal_code, entry_date_local, description, currency,
+            "SELECT number, journal_code, entry_date_local, description, currency, base_currency,
                     content_hash, reverses_entry_id, created_by, posting_profile_id, rule_version
              FROM journal_entry WHERE id = ?1",
         )?;
@@ -1266,11 +1271,12 @@ pub fn load_entry(conn: &Connection, id: JournalEntryId) -> Result<Option<Stored
             row.get::<_, String>(2)?,
             row.get::<_, String>(3)?,
             row.get::<_, String>(4)?,
-            row.get::<_, String>(5)?,
-            row.get::<_, Option<String>>(6)?,
-            row.get::<_, String>(7)?,
+            row.get::<_, Option<String>>(5)?,
+            row.get::<_, String>(6)?,
+            row.get::<_, Option<String>>(7)?,
             row.get::<_, String>(8)?,
             row.get::<_, String>(9)?,
+            row.get::<_, String>(10)?,
         )
     };
 
@@ -1280,6 +1286,7 @@ pub fn load_entry(conn: &Connection, id: JournalEntryId) -> Result<Option<Stored
         entry_date_raw,
         description,
         currency_raw,
+        base_currency_raw,
         content_hash,
         reverses_raw,
         created_by,
@@ -1290,13 +1297,19 @@ pub fn load_entry(conn: &Connection, id: JournalEntryId) -> Result<Option<Stored
     let journal = Journal::parse(&journal_code).map_err(|error| StoreError::Data(error.to_string()))?;
     let entry_date = LocalDate::parse_iso(&entry_date_raw).map_err(|error| StoreError::Data(error.to_string()))?;
     let currency = crux::Currency::parse(&currency_raw).map_err(|error| StoreError::Data(error.to_string()))?;
+    let base_currency = base_currency_raw
+        .map(|raw| crux::Currency::parse(&raw))
+        .transpose()
+        .map_err(|error| StoreError::Data(error.to_string()))?;
 
     let mut lines_statement = conn.prepare(
-        "SELECT account_code, side, amount_micros, vat_category, vat_rate_bp, tax_code_id
+        "SELECT account_code, side, amount_micros, vat_category, vat_rate_bp, tax_code_id,
+                fx_rate_micros, base_amount_micros
              FROM journal_line WHERE entry_id = ?1 ORDER BY line_no",
     )?;
     let mut line_rows = lines_statement.query([id.to_string()])?;
     let mut lines = Vec::new();
+    let mut entry_rate: Option<i64> = None;
     while let Some(row) = line_rows.next()? {
         let account: String = row.get(0)?;
         let side: String = row.get(1)?;
@@ -1304,6 +1317,8 @@ pub fn load_entry(conn: &Connection, id: JournalEntryId) -> Result<Option<Stored
         let category: Option<String> = row.get(3)?;
         let rate_bp: Option<i64> = row.get(4)?;
         let code: Option<String> = row.get(5)?;
+        let fx_rate: Option<i64> = row.get(6)?;
+        let base_micros: i64 = row.get(7)?;
         let mut line = LedgerLine::new(
             AccountCode::parse(&account).map_err(|error| StoreError::Data(error.to_string()))?,
             crux::Side::parse(&side).map_err(|error| StoreError::Data(error.to_string()))?,
@@ -1321,11 +1336,49 @@ pub fn load_entry(conn: &Connection, id: JournalEntryId) -> Result<Option<Stored
         if let Some(code) = code {
             line = line.coded(TaxCode::parse(&code).map_err(|error| StoreError::Data(error.to_string()))?);
         }
+        match (base_currency, fx_rate) {
+            (Some(base_currency), Some(rate)) => {
+                if entry_rate.is_some_and(|existing| existing != rate) {
+                    return Err(StoreError::Data(format!(
+                        "stored entry {id} mixes exchange rates on its lines"
+                    )));
+                }
+                entry_rate = Some(rate);
+                line = line
+                    .converted(crux::Money::from_micros(base_micros, base_currency))
+                    .map_err(|error| StoreError::Data(error.to_string()))?;
+            }
+            (Some(_), None) => {
+                return Err(StoreError::Data(format!(
+                    "stored entry {id} reports a base currency but a line has no rate"
+                )));
+            }
+            (None, Some(_)) => {
+                return Err(StoreError::Data(format!(
+                    "stored entry {id} has a rate but no base currency"
+                )));
+            }
+            (None, None) => {}
+        }
         lines.push(line);
     }
 
-    let entry = LedgerEntry::new(journal, description, lines)
-        .map_err(|error| StoreError::Data(format!("stored entry {id} cannot be read back: {error}")))?;
+    let entry = match (base_currency, entry_rate) {
+        (Some(base_currency), Some(rate)) => LedgerEntry::converted(
+            journal,
+            description,
+            lines,
+            base_currency,
+            crux::ExchangeRate::from_per_unit_micros(rate).map_err(|error| StoreError::Data(error.to_string()))?,
+        ),
+        (None, None) => LedgerEntry::new(journal, description, lines),
+        _ => {
+            return Err(StoreError::Data(format!(
+                "stored entry {id} cannot name both a base currency and a rate"
+            )));
+        }
+    }
+    .map_err(|error| StoreError::Data(format!("stored entry {id} cannot be read back: {error}")))?;
 
     Ok(Some(StoredEntry {
         id,
@@ -1519,6 +1572,11 @@ pub fn reclassify(
                 rebuilt = rebuilt.coded(existing.clone());
             }
         }
+        if let Some(base) = line.base_amount() {
+            rebuilt = rebuilt
+                .converted(base)
+                .map_err(|error| StoreError::Data(error.to_string()))?;
+        }
         lines.push(rebuilt);
     }
     if !matched {
@@ -1530,8 +1588,7 @@ pub fn reclassify(
     }
 
     let description = format!("Herindeling {} ({})", stored.number, reason.trim());
-    let corrected =
-        LedgerEntry::new(stored.journal, description, lines).map_err(|error| StoreError::Data(error.to_string()))?;
+    let corrected = rebuild_entry(&stored, description, lines)?;
 
     let transaction = conn.unchecked_transaction()?;
     let seller_id = seller_of(&transaction, entry_id)?;
@@ -1657,12 +1714,16 @@ pub fn reclassify_account(
         if let Some(existing) = line.tax_code() {
             rebuilt = rebuilt.coded(existing.clone());
         }
+        if let Some(base) = line.base_amount() {
+            rebuilt = rebuilt
+                .converted(base)
+                .map_err(|error| StoreError::Data(error.to_string()))?;
+        }
         lines.push(rebuilt);
     }
 
     let description = format!("Herindeling rekening {} ({})", stored.number, reason.trim());
-    let corrected =
-        LedgerEntry::new(stored.journal, description, lines).map_err(|error| StoreError::Data(error.to_string()))?;
+    let corrected = rebuild_entry(&stored, description, lines)?;
 
     let transaction = conn.unchecked_transaction()?;
     let seller_id = seller_of(&transaction, entry_id)?;
@@ -1719,6 +1780,19 @@ pub fn reclassify_account(
         reversal,
         corrected,
     })
+}
+
+/// Rebuilds a corrected entry with the conversion of the entry it replaces.
+///
+/// A correction changes a code or an account, never the reporting amounts, so a
+/// foreign-currency entry is re-posted at the same rate with the same bases. A
+/// new rate here would restate the ledger beside the entry it is correcting.
+fn rebuild_entry(stored: &StoredEntry, description: String, lines: Vec<LedgerLine>) -> Result<LedgerEntry, StoreError> {
+    match stored.entry.fx() {
+        Some(fx) => LedgerEntry::converted(stored.entry.journal(), description, lines, fx.base_currency, fx.rate),
+        None => LedgerEntry::new(stored.entry.journal(), description, lines),
+    }
+    .map_err(|error| StoreError::Data(error.to_string()))
 }
 
 /// The received document an entry was posted for, when one is behind it.
@@ -1899,11 +1973,17 @@ pub fn content_hash(
             if let Some(code) = line.tax_code() {
                 value["tax_code"] = json!(code.as_str());
             }
+            // The same rule for a foreign-currency posting: an entry that was in
+            // the reporting currency has no base amount in its hash, so adding
+            // conversion did not restate every posting written before it.
+            if entry.fx().is_some() {
+                value["base_amount_micros"] = json!(line.base_amount().map_or(0, Money::micros));
+            }
             value
         })
         .collect();
 
-    let canonical = json!({
+    let mut canonical = json!({
         "currency": entry.currency().as_str(),
         "date": entry_date.to_iso_string(),
         "description": entry.description(),
@@ -1912,6 +1992,13 @@ pub fn content_hash(
         "number": number,
         "source": { "id": source.id(), "kind": source.kind() },
     });
+    // Only a converted entry names a base currency or a rate. Adding these keys
+    // unconditionally would change the hash of every posting written before
+    // conversion existed, and a verifier would then reject sound history.
+    if let Some(fx) = entry.fx() {
+        canonical["base_currency"] = json!(fx.base_currency.as_str());
+        canonical["fx_rate_micros"] = json!(fx.rate.per_unit_micros());
+    }
     // serde_json maps are BTreeMap-backed, so key order is stable and the hash is
     // a function of the values rather than of the order they were written in.
     Ok(audit::sha256_hex(serde_json::to_string(&canonical)?.as_bytes()))

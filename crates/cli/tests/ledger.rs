@@ -210,6 +210,45 @@ impl Archive {
 }
 
 #[test]
+fn exchange_rates_are_set_listed_and_imported() {
+    let archive = Archive::new();
+
+    let said = archive.run(&[
+        "ledger",
+        "fx",
+        "set",
+        "--currency",
+        "GBP",
+        "--date",
+        "2026-02-01",
+        "--rate",
+        "1.17",
+    ]);
+    assert!(said.contains("GBP from 2026-02-01"), "{said}");
+
+    let said = archive.run(&["ledger", "fx", "list"]);
+    assert!(said.contains("GBP"), "{said}");
+    assert!(said.contains("manual"), "{said}");
+
+    let file = archive.dir.path().join("eurofxref-hist.csv");
+    std::fs::write(&file, "Date,USD\n2026-02-01,1.08\n").expect("the rate file is written");
+    let said = archive.run(&["ledger", "fx", "import", file.to_str().expect("utf-8")]);
+    assert!(said.contains("written:    1"), "{said}");
+    assert!(said.contains("currencies: 1"), "{said}");
+
+    let said = archive.run(&["ledger", "fx", "list", "--currency", "USD"]);
+    assert!(said.contains("USD"), "{said}");
+    assert!(!said.contains("GBP"), "the filter keeps the other currency out: {said}");
+
+    // An invoice in the reporting currency needs no rate, and the command says so.
+    let number = archive.sell("50.00");
+    let said = archive.run(&["ledger", "fx", "show", &number]);
+    assert!(said.contains("reporting"), "{said}");
+    let refused = archive.fail(&["ledger", "fx", "override", &number, "--rate", "1.20"]);
+    assert!(refused.contains("needs no rate"), "{refused}");
+}
+
+#[test]
 fn the_ledger_runs_from_setup_to_a_reversal() {
     let archive = Archive::new();
 

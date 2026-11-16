@@ -16,6 +16,7 @@ use core::fmt;
 use std::str::FromStr;
 
 use crate::error::DomainError;
+use crate::fx::ExchangeRate;
 use crate::money::{Currency, Money};
 
 /// Longest account code the ledger accepts.
@@ -266,12 +267,14 @@ pub struct VatTag {
 ///
 /// The amount is strictly positive and carries the entry's currency; the side
 /// carries the direction. Construction is checked, so a line that exists is a
-/// line that can be posted.
+/// line that can be posted. A line of a converted entry also carries the same
+/// amount in the reporting currency, computed at the rate the entry names.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct LedgerLine {
     account: AccountCode,
     side: Side,
     amount: Money,
+    base: Option<Money>,
     vat: Option<VatTag>,
     tax_code: Option<crate::vat::TaxCode>,
 }
@@ -286,9 +289,19 @@ impl LedgerLine {
             account,
             side,
             amount,
+            base: None,
             vat: None,
             tax_code: None,
         })
+    }
+
+    /// Attaches the same line's amount in the reporting currency.
+    pub fn converted(mut self, base: Money) -> Result<Self, DomainError> {
+        if base.is_negative() {
+            return Err(DomainError::InvalidBaseAmount(base.micros()));
+        }
+        self.base = Some(base);
+        Ok(self)
     }
 
     /// Attaches the VAT treatment of the document line behind this one.
@@ -346,12 +359,18 @@ impl LedgerLine {
         self.amount
     }
 
+    /// The same amount in the reporting currency, for a converted entry.
+    pub const fn base_amount(&self) -> Option<Money> {
+        self.base
+    }
+
     /// The same amount on the other side.
     pub fn mirrored(&self) -> Self {
         Self {
             account: self.account.clone(),
             side: self.side.opposite(),
             amount: self.amount,
+            base: self.base,
             vat: self.vat,
             tax_code: self.tax_code.clone(),
         }
@@ -368,20 +387,77 @@ impl LedgerLine {
 /// Entries are immutable. A wrong entry is corrected by mirroring it into a
 /// reversing entry and posting the right one, so the mistake stays visible in the
 /// books instead of disappearing from them.
+///
+/// A foreign-currency entry keeps its amounts in the document currency and carries
+/// each line's reporting-currency amount beside it, at the rate the entry names.
+/// Both sides must balance in the document currency and in the reporting currency:
+/// a trial balance that disagreed with its postings would be worse than a refusal.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct LedgerEntry {
     journal: Journal,
     description: String,
     currency: Currency,
     lines: Vec<LedgerLine>,
+    fx: Option<EntryFx>,
+}
+
+/// The conversion a foreign-currency entry was posted at.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct EntryFx {
+    /// The reporting currency every line's base amount is in.
+    pub base_currency: Currency,
+    /// Reporting currency per unit of the entry's currency.
+    pub rate: ExchangeRate,
 }
 
 impl LedgerEntry {
-    /// Builds an entry, rejecting anything the ledger cannot hold.
+    /// Builds an entry in one currency, rejecting anything the ledger cannot hold.
     ///
     /// The checks are ordered: an empty entry is reported as empty rather than as
     /// unbalanced, because "no lines" is the actionable message.
     pub fn new(journal: Journal, description: impl Into<String>, lines: Vec<LedgerLine>) -> Result<Self, DomainError> {
+        let entry = Self::assemble(journal, description, lines, None)?;
+        if entry.lines.iter().any(|line| line.base.is_some()) {
+            return Err(DomainError::BaseWithoutRate);
+        }
+        entry.check_amounts()?;
+        Ok(entry)
+    }
+
+    /// Builds an entry whose lines also carry reporting-currency amounts.
+    ///
+    /// Every line must carry a base amount in `base_currency`, and both the
+    /// document-currency and the reporting-currency sides must balance. The
+    /// caller converts the lines and decides which line absorbs a micro-unit of
+    /// rounding, so the ledger never silently adjusts an amount.
+    pub fn converted(
+        journal: Journal,
+        description: impl Into<String>,
+        lines: Vec<LedgerLine>,
+        base_currency: Currency,
+        rate: ExchangeRate,
+    ) -> Result<Self, DomainError> {
+        let entry = Self::assemble(journal, description, lines, Some(EntryFx { base_currency, rate }))?;
+        for line in &entry.lines {
+            let base = line.base.ok_or(DomainError::BaseAmountMissing)?;
+            if base.currency() != base_currency {
+                return Err(DomainError::BaseCurrencyMismatch {
+                    expected: base_currency.to_string(),
+                    found: base.currency().to_string(),
+                });
+            }
+        }
+        entry.check_amounts()?;
+        entry.check_base()?;
+        Ok(entry)
+    }
+
+    fn assemble(
+        journal: Journal,
+        description: impl Into<String>,
+        lines: Vec<LedgerLine>,
+        fx: Option<EntryFx>,
+    ) -> Result<Self, DomainError> {
         let description = description.into();
         if description.trim().is_empty() {
             return Err(DomainError::EmptyText("journal entry description"));
@@ -400,21 +476,13 @@ impl LedgerEntry {
             }
         }
 
-        let entry = Self {
+        Ok(Self {
             journal,
             description,
             currency,
             lines,
-        };
-        let debits = entry.side_total(Side::Debit)?;
-        let credits = entry.side_total(Side::Credit)?;
-        if debits.micros() != credits.micros() {
-            return Err(DomainError::EntryUnbalanced {
-                debit_micros: debits.micros(),
-                credit_micros: credits.micros(),
-            });
-        }
-        Ok(entry)
+            fx,
+        })
     }
 
     /// The journal the entry belongs to.
@@ -430,6 +498,12 @@ impl LedgerEntry {
     /// The single currency every line uses.
     pub const fn currency(&self) -> Currency {
         self.currency
+    }
+
+    /// The conversion this entry was posted at, when it was not in the reporting
+    /// currency.
+    pub const fn fx(&self) -> Option<EntryFx> {
+        self.fx
     }
 
     /// The lines, in the order they were built.
@@ -451,10 +525,41 @@ impl LedgerEntry {
     ///
     /// The reversal carries its own description, because "reversal of X" is a
     /// statement about why the correction exists and the store records that
-    /// reason separately from the arithmetic.
+    /// reason separately from the arithmetic. A converted entry reverses at the
+    /// same rate, so a correction cannot restate the reporting amount.
     pub fn reversed(&self, description: impl Into<String>) -> Result<Self, DomainError> {
         let lines = self.lines.iter().map(LedgerLine::mirrored).collect();
-        Self::new(self.journal, description, lines)
+        match self.fx {
+            Some(fx) => Self::converted(self.journal, description, lines, fx.base_currency, fx.rate),
+            None => Self::new(self.journal, description, lines),
+        }
+    }
+
+    fn check_amounts(&self) -> Result<(), DomainError> {
+        let debits = self.side_total(Side::Debit)?;
+        let credits = self.side_total(Side::Credit)?;
+        if debits.micros() != credits.micros() {
+            return Err(DomainError::EntryUnbalanced {
+                debit_micros: debits.micros(),
+                credit_micros: credits.micros(),
+            });
+        }
+        Ok(())
+    }
+
+    fn check_base(&self) -> Result<(), DomainError> {
+        let Some(fx) = self.fx else {
+            return Ok(());
+        };
+        let debits = self.base_side_total(Side::Debit, fx.base_currency)?;
+        let credits = self.base_side_total(Side::Credit, fx.base_currency)?;
+        if debits.micros() != credits.micros() {
+            return Err(DomainError::EntryUnbalanced {
+                debit_micros: debits.micros(),
+                credit_micros: credits.micros(),
+            });
+        }
+        Ok(())
     }
 
     fn side_total(&self, side: Side) -> Result<Money, DomainError> {
@@ -462,6 +567,16 @@ impl LedgerEntry {
             .iter()
             .filter(|line| line.side == side)
             .try_fold(Money::zero(self.currency), |total, line| total.checked_add(line.amount))
+    }
+
+    fn base_side_total(&self, side: Side, currency: Currency) -> Result<Money, DomainError> {
+        self.lines
+            .iter()
+            .filter(|line| line.side == side)
+            .try_fold(Money::zero(currency), |total, line| {
+                let base = line.base.ok_or(DomainError::BaseAmountMissing)?;
+                total.checked_add(base)
+            })
     }
 }
 
@@ -506,6 +621,124 @@ mod tests {
         assert_eq!(entry.debit_total().unwrap(), euros(1_210));
         assert_eq!(entry.credit_total().unwrap(), euros(1_210));
         assert_eq!(entry.lines().len(), 3);
+        assert!(entry.fx().is_none());
+    }
+
+    fn pounds(units: i64) -> Money {
+        Money::from_major_units(units, Currency::GBP).unwrap()
+    }
+
+    /// £1 000 at 21 % in pounds, converted to euros at 1.17.
+    fn converted_sale() -> LedgerEntry {
+        let rate = ExchangeRate::from_per_unit_micros(1_170_000).unwrap();
+        let base = |micros: i64| Money::from_micros(micros, Currency::EUR);
+        LedgerEntry::converted(
+            Journal::Sales,
+            "Invoice 2026-0001",
+            vec![
+                LedgerLine::debit(account("1300"), pounds(1_210))
+                    .unwrap()
+                    .converted(base(1_415_700_000))
+                    .unwrap(),
+                LedgerLine::credit(account("8000"), pounds(1_000))
+                    .unwrap()
+                    .converted(base(1_170_000_000))
+                    .unwrap(),
+                LedgerLine::credit(account("1600"), pounds(210))
+                    .unwrap()
+                    .converted(base(245_700_000))
+                    .unwrap(),
+            ],
+            Currency::EUR,
+            rate,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn a_converted_entry_balances_in_both_currencies() {
+        let entry = converted_sale();
+        assert_eq!(entry.currency(), Currency::GBP);
+        let fx = entry.fx().expect("a converted entry names its rate");
+        assert_eq!(fx.base_currency, Currency::EUR);
+        assert_eq!(fx.rate.per_unit_micros(), 1_170_000);
+        assert_eq!(entry.debit_total().unwrap(), pounds(1_210));
+        assert_eq!(entry.credit_total().unwrap(), pounds(1_210));
+    }
+
+    #[test]
+    fn a_line_with_a_base_needs_an_entry_rate() {
+        let line = LedgerLine::debit(account("1300"), pounds(1))
+            .unwrap()
+            .converted(euros(1))
+            .unwrap();
+        assert_eq!(
+            LedgerEntry::new(Journal::Sales, "x", vec![line]).unwrap_err(),
+            DomainError::BaseWithoutRate
+        );
+    }
+
+    #[test]
+    fn a_converted_entry_needs_a_base_on_every_line() {
+        let lines = vec![
+            LedgerLine::debit(account("1300"), pounds(1))
+                .unwrap()
+                .converted(euros(1))
+                .unwrap(),
+            LedgerLine::credit(account("8000"), pounds(1)).unwrap(),
+        ];
+        assert_eq!(
+            LedgerEntry::converted(Journal::Sales, "x", lines, Currency::EUR, ExchangeRate::ONE).unwrap_err(),
+            DomainError::BaseAmountMissing
+        );
+    }
+
+    #[test]
+    fn a_base_in_the_wrong_currency_is_refused() {
+        let lines = vec![
+            LedgerLine::debit(account("1300"), pounds(1))
+                .unwrap()
+                .converted(Money::from_major_units(1, Currency::USD).unwrap())
+                .unwrap(),
+            LedgerLine::credit(account("8000"), pounds(1))
+                .unwrap()
+                .converted(Money::from_major_units(1, Currency::EUR).unwrap())
+                .unwrap(),
+        ];
+        assert!(matches!(
+            LedgerEntry::converted(Journal::Sales, "x", lines, Currency::EUR, ExchangeRate::ONE),
+            Err(DomainError::BaseCurrencyMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn a_base_imbalance_is_refused() {
+        let rate = ExchangeRate::from_per_unit_micros(1_170_000).unwrap();
+        let lines = vec![
+            LedgerLine::debit(account("1300"), pounds(1))
+                .unwrap()
+                .converted(Money::from_micros(1_170_001, Currency::EUR))
+                .unwrap(),
+            LedgerLine::credit(account("8000"), pounds(1))
+                .unwrap()
+                .converted(Money::from_micros(1_170_000, Currency::EUR))
+                .unwrap(),
+        ];
+        assert!(matches!(
+            LedgerEntry::converted(Journal::Sales, "x", lines, Currency::EUR, rate),
+            Err(DomainError::EntryUnbalanced { .. })
+        ));
+    }
+
+    #[test]
+    fn a_reversal_keeps_the_rate_and_the_bases() {
+        let entry = converted_sale();
+        let reversal = entry.reversed("Tegenboeking").unwrap();
+        assert_eq!(reversal.fx(), entry.fx());
+        for (original, mirrored) in entry.lines().iter().zip(reversal.lines()) {
+            assert_eq!(original.side().opposite(), mirrored.side());
+            assert_eq!(original.base_amount(), mirrored.base_amount());
+        }
     }
 
     #[test]
