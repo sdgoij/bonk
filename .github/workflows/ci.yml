@@ -179,9 +179,12 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: instrumented-apks
+          # The emulator is x86_64, so the debug split and the release split it
+          # measures a cold start with are both the x86_64 one.
           path: |
             mobile/androidApp/build/outputs/apk/debug/androidApp-x86_64-debug.apk
             mobile/androidApp/build/outputs/apk/androidTest/debug/androidApp-debug-androidTest.apk
+            mobile/androidApp/build/outputs/apk/release/androidApp-x86_64-release.apk
           if-no-files-found: error
           retention-days: 7
 
