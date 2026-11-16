@@ -17,7 +17,9 @@ class ArtefactDeterminismTest {
         val hashes = artefactHashes()
 
         assertEquals("UBL length", 4305UL, hashes.ublLen)
-        assertEquals("PDF length", 25846UL, hashes.pdfLen)
+        // The PDF moved when the bundled font did: the CFF subset of Noto Serif CJK
+        // is smaller than the TrueType one it replaced.
+        assertEquals("PDF length", 15527UL, hashes.pdfLen)
         assertEquals(
             "UBL SHA-256",
             "7d7f70eb279208887daae6a0099bf1c61359a709f7fc0e6fb565ea7e9c5f7020",
@@ -25,7 +27,7 @@ class ArtefactDeterminismTest {
         )
         assertEquals(
             "PDF SHA-256",
-            "b81c0e35d9c11e1fa4c421fba60af47748a6bf949576dba38d2a66038d63e512",
+            "0f6aede0989aeecdd72841b0faf8b73f5b6b21d07ce2d4eeaab9f682f3ca0351",
             hashes.pdfSha256,
         )
     }
