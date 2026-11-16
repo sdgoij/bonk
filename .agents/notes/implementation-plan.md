@@ -667,6 +667,14 @@ against the shipped Linux binary, and `release` waits for it. The gate asserts t
 layout it asked for is the one the CLI reported drawing, so a template that quietly
 fell back to the built-in cannot pass as coverage of two.
 
+The validator is pinned by assertion (1.30.4), not by URL: veraPDF publishes one
+moving `releases/verapdf-installer.zip`, so a fresh machine gets whatever upstream
+ships that day. `tools/verapdf.sh` compares the version it installed against the
+pin and stops with an explanation when upstream has moved, and the CI cache key
+carries the same version so a cached install cannot outlive the pin. The twelve
+validations run four at a time — four cores, one JVM per file, and no shared state
+— which takes the step from about twenty-five seconds to nine.
+
 The gate was not ceremony. The first run said the hybrid *was not a valid PDF*:
 splicing the Factur-X statements into the XMP packet had moved every byte after
 the packet, and the cross-reference table still named the old offsets. lopdf —

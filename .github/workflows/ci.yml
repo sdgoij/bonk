@@ -468,11 +468,13 @@ jobs:
           distribution: temurin
           java-version: "17"
       # veraPDF is downloaded by the gate itself; the cache only saves the wait.
-      # The key carries no version because the download URL does not either.
+      # The version is in the key because the download URL does not carry one: a
+      # cached install outlives the pin going stale, and the gate asserts the
+      # version it finds, so the two have to move together.
       - uses: actions/cache@v6
         with:
           path: target/validator/verapdf
-          key: verapdf-installer
+          key: verapdf-1.30.4
 
       - uses: actions/download-artifact@v8
         with:

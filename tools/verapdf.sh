@@ -17,6 +17,28 @@ KEY=$WORK/keystore.bin
 OUT=$WORK/out
 PASS=pdfa-validation-gate
 
+# The version this gate was last checked against. The download URL carries no
+# version, so a fresh machine gets whatever upstream ships that day; this pin is
+# what turns "it still passes" into "the validator we know passes". Bump it
+# deliberately, after reading the report from the newer one.
+VERAPDF_VERSION=${VERAPDF_VERSION:-1.30.4}
+
+# Validating one file: this script again with a flag. `sh` cannot export a
+# function, and the worker needs the environment the gate just set up, so
+# re-entering is the portable way to give `xargs -P` something to run.
+if [ "${1:-}" = "--check-one" ]; then
+    pdf=$2
+    report=$WORK/$(basename "$(dirname "$pdf")")-$(basename "$pdf").verapdf.log
+    if "$JAVA_BIN" -jar "$VERAPDF_CLI" --format text "$pdf" >"$report" 2>&1 &&
+        grep -q '^PASS .* 3b$' "$report"; then
+        echo "PASS $(basename "$(dirname "$pdf")")/$(basename "$pdf") PDF/A-3B"
+        exit 0
+    fi
+    echo "FAIL: $pdf" >&2
+    cat "$report" >&2
+    exit 1
+fi
+
 if [ -n "${BONK_BIN:-}" ]; then
     :
 elif [ -x target/debug/bonk.exe ]; then
@@ -88,9 +110,20 @@ if [ -z "$CLI" ]; then
     echo "error: veraPDF installed without a CLI jar" >&2
     exit 1
 fi
+VERAPDF_CLI=$CLI
 
 version=$("$JAVA_BIN" -jar "$CLI" --version 2>/dev/null | head -n 1 | tr -d '\r')
 echo "$version"
+case "$version" in
+    *"$VERAPDF_VERSION"*) ;;
+    *)
+        echo "error: expected veraPDF $VERAPDF_VERSION, got '$version'" >&2
+        echo "       The download URL has no version in it, so upstream has moved." >&2
+        echo "       Read the report from the new one, then bump VERAPDF_VERSION here" >&2
+        echo "       and the cache key in .github/workflows/ci.yml." >&2
+        exit 1
+        ;;
+esac
 
 field() {
     sed -n "s/^$1: //p" | tr -d '\r'
@@ -185,21 +218,27 @@ mixed=$(
     --out "$OUT/other" >/dev/null
 
 total=0
+pdfs=$WORK/pdfs.txt
+: >"$pdfs"
 for pdf in "$OUT"/*/*.factur-x.pdf; do
+    printf '%s\n' "$pdf" >>"$pdfs"
     total=$((total + 1))
-    report=$WORK/$(basename "$(dirname "$pdf")")-$(basename "$pdf").verapdf.log
-    if "$JAVA_BIN" -jar "$CLI" --format text "$pdf" >"$report" 2>&1 && grep -q '^PASS .* 3b$' "$report"; then
-        echo "PASS $(basename "$pdf") PDF/A-3B"
-    else
-        echo "FAIL: $pdf" >&2
-        cat "$report" >&2
-        exit 1
-    fi
 done
 
 if [ "$total" -ne 12 ]; then
-    echo "error: expected 12 hybrids, validated $total" >&2
+    echo "error: expected 12 hybrids, found $total" >&2
     exit 1
 fi
 
-echo "veraPDF: $total hybrids valid as PDF/A-3B (5 levels × 2 templates, 1 credit note, 1 mixed-rate invoice)"
+export JAVA_BIN VERAPDF_CLI WORK
+# Four at a time: one JVM per file, and these runners give four cores. The
+# validations do not touch each other, so the wall time becomes one file's rather
+# than twelve, and a failure still prints the report that explains it.
+started=$(date +%s)
+if ! xargs -P 4 -n 1 sh "$0" --check-one <"$pdfs"; then
+    echo "error: at least one hybrid is not PDF/A-3B; the reports are in $WORK" >&2
+    exit 1
+fi
+elapsed=$(( $(date +%s) - started ))
+
+echo "veraPDF: $total hybrids valid as PDF/A-3B in ${elapsed}s (5 levels × 2 templates, 1 credit note, 1 mixed-rate invoice)"

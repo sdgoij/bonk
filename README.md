@@ -799,7 +799,9 @@ sh tools/verapdf.sh
 It downloads veraPDF into `target/validator/verapdf/` on the first run, issues one
 document at each of the five Factur-X levels with the built-in layout and with
 `templates/compact.json`, plus a credit note and a mixed-rate invoice, and
-validates every hybrid. Last result: **12/12 valid as PDF/A-3B** (veraPDF 1.30.4).
+validates every hybrid four at a time. It asserts the validator's version (1.30.4)
+because veraPDF's download URL carries none, so "it passes" cannot quietly become
+"a different validator passes". Last result: **12/12 valid as PDF/A-3B in 9 s**.
 
 For VAT-category or exemption-reason changes, also run the category matrix:
 
