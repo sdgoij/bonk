@@ -1772,15 +1772,22 @@ amount, carrying value and realised difference, and `unmatch` reverses all four.
 The queue's "left" and the matched/full test read the payment-currency column, so
 a dollar payment against a pound item still caps correctly.
 
+**Status, 2026-11-16 (a settlement at a rate can be undone and matched again).**
+`bank unmatch --reason` undoes a rate settlement whole: it reverses the payment
+entry and appends the opposite allocation for every item the payment settled, in
+one transaction, so the invoice reopens and the ledger stops showing it cleared.
+The reversal is dated on the payment's booking date and named in the
+`bank_transaction_unmatched` audit event. A payment that settled several items is
+undone as a unit, because its one entry cannot be split across allocations that
+stay behind. The `(source_kind, source_id)` uniqueness that stops a payment
+posting twice would otherwise hand a re-match the reversed entry; instead, a
+re-match after a reversal posts a bank entry with no source identifier, while a
+match against an entry that still stands keeps reusing it.
+
 What this deliberately does not do: cross-currency proposals. `bank propose` and
 `auto-match` stay same-currency, because an exact amount in one currency is not an
 exact amount in another; a cross-currency match is made by hand with `bank match`.
-A settlement at a rate cannot be unmatched in this version: the payment entry is
-keyed by the transaction and carries the realised difference, so appending the
-opposite allocation would reopen the item while the ledger still shows it cleared.
-The refusal is explicit rather than a half-undo. The two remaining FX questions are
-an allocation correction that reverses the entry with it, and period-end
-unrealised revaluation, which stays out of scope as the design's cut line says.
+Period-end unrealised revaluation stays out of scope as the design's cut line says.
 
 ---
 

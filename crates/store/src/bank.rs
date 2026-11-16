@@ -11,7 +11,7 @@
 //! lets a second format be added without touching this module.
 
 use crux::{AccountCode, Currency, LocalDate, Money, SellerId};
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::audit;
 use crate::error::StoreError;
@@ -473,6 +473,18 @@ struct UndoRow {
     transaction_amount_micros: i64,
     base_amount_micros: i64,
     fx_difference_micros: i64,
+    entry_id: Option<String>,
+    reversed: i64,
+}
+
+/// An allocation still in force, as a rate-settlement undo needs it.
+struct ActiveAllocation {
+    open_item_id: String,
+    amount_micros: i64,
+    transaction_amount_micros: i64,
+    base_amount_micros: i64,
+    fx_difference_micros: i64,
+    entry_id: Option<String>,
     item_currency: Option<String>,
     item_rate: Option<i64>,
 }
@@ -682,12 +694,11 @@ pub fn allocate_group(
     let items = crate::open_items::list(conn, seller_id, transaction.kind())?;
     // A payment is posted once, keyed by the transaction. A later match reuses that
     // entry, which is sound while every item is in the entry's currency; a match at
-    // a rate is fixed by the entry it wrote and cannot be recomputed.
-    let already_posted: bool = conn.query_row(
-        "SELECT count(*) FROM journal_entry WHERE source_kind = 'bank' AND source_id = ?1",
-        [transaction_id],
-        |row| row.get::<_, i64>(0),
-    )? > 0;
+    // a rate is fixed by the entry it wrote and cannot be recomputed. An undone
+    // settlement leaves its entry reversed, so the re-match that follows is allowed
+    // to write a fresh one.
+    let active_entry = active_settlement_entry(conn, transaction.id)?;
+    let already_posted = active_entry.is_some();
 
     let rate_payment = reporting_rate(conn, seller_id, transaction.currency, transaction.booking_date, base)?;
     let mut payment_left = transaction.amount_micros.abs();
@@ -811,6 +822,7 @@ pub fn allocate_group(
         Money::from_micros(total_carrying, base),
         Money::from_micros(total_gain, base),
         base,
+        active_entry,
         actor,
         now,
     )?;
@@ -929,22 +941,29 @@ pub fn allocate(
 /// Undoes a match by appending its opposite.
 ///
 /// Nothing is deleted: the history says a person matched it and then matched it
-/// away, which is what an auditor needs and what a delete cannot say. A settlement
-/// at a rate is refused: its carrying value and realised difference are in the
-/// payment entry, and appending the opposite allocation alone would reopen the item
-/// while the ledger still shows it cleared.
+/// away, which is what an auditor needs and what a delete cannot say.
+///
+/// A settlement made at a rate also released a carrying value and wrote a realised
+/// difference into the payment entry, so undoing it means undoing the entry as
+/// well. The reversal and the opposite allocation are written together. A payment
+/// that settled several items is undone whole, because its one entry cannot be
+/// split across allocations that stay behind.
 pub fn unmatch(
     conn: &Connection,
     seller_id: SellerId,
     allocation_id: &str,
+    reason: &str,
     actor: &str,
     now: &str,
 ) -> Result<(), StoreError> {
+    if reason.trim().is_empty() {
+        return Err(StoreError::Rejected("an unmatch needs a reason".to_owned()));
+    }
     let row: UndoRow = conn
         .query_row(
             "SELECT a.transaction_id, a.open_item_id, a.amount_micros, a.transaction_amount_micros,
-                    a.base_amount_micros, a.fx_difference_micros, o.currency, o.fx_rate_micros
-             FROM allocation a LEFT JOIN open_item o ON o.id = a.open_item_id
+                    a.base_amount_micros, a.fx_difference_micros, a.entry_id, a.reversed
+             FROM allocation a
              WHERE a.id = ?1",
             [allocation_id],
             |row| {
@@ -955,41 +974,48 @@ pub fn unmatch(
                     transaction_amount_micros: row.get(3)?,
                     base_amount_micros: row.get(4)?,
                     fx_difference_micros: row.get(5)?,
-                    item_currency: row.get(6)?,
-                    item_rate: row.get(7)?,
+                    entry_id: row.get(6)?,
+                    reversed: row.get(7)?,
                 })
             },
         )
         .map_err(|_| StoreError::NotFound(format!("allocation {allocation_id}")))?;
 
-    let Some(open_item_id) = row.open_item_id else {
+    let Some(open_item_id) = row.open_item_id.clone() else {
         return Err(StoreError::Rejected(format!(
             "allocation {allocation_id} is not a settlement against an open item"
         )));
     };
-    let base = crate::report::reporting_currency(conn, seller_id)?;
-    let foreign = match row.item_currency.as_deref() {
-        Some(raw) => Currency::parse(raw).map_err(|error| StoreError::Data(error.to_string()))? != base,
-        None => false,
-    };
-    // A settlement at a rate released a carrying value and wrote a difference into
-    // the payment entry. Appending the opposite allocation would open the item
-    // again while the ledger still shows it cleared, so this version refuses rather
-    // than half-undo the match. The item, the rate and the difference stay as the
-    // entry recorded them.
-    if foreign
-        || row.fx_difference_micros != 0
-        || row.transaction_amount_micros != row.amount_micros
-        || row.item_rate.is_some()
-    {
+    if row.reversed != 0 {
         return Err(StoreError::Rejected(format!(
-            "allocation {allocation_id} settled an item at a rate; its realised difference is part of the payment entry, which this version cannot undo"
+            "allocation {allocation_id} has already been undone"
         )));
+    }
+
+    // Whether the payment entry carries a rate settlement is a property of the
+    // whole transaction, not of the one allocation named: a euro item in a group
+    // that also settled a pound item has no rate of its own, but its payment entry
+    // still carries the realised difference of the group.
+    let base = crate::report::reporting_currency(conn, seller_id)?;
+    let shares = active_allocations(conn, &row.transaction_id)?;
+    let mut at_a_rate = false;
+    for share in &shares {
+        let foreign = match share.item_currency.as_deref() {
+            Some(raw) => Currency::parse(raw).map_err(|error| StoreError::Data(error.to_string()))? != base,
+            None => false,
+        };
+        at_a_rate |= foreign
+            || share.fx_difference_micros != 0
+            || share.transaction_amount_micros != share.amount_micros
+            || share.item_rate.is_some();
+    }
+    if at_a_rate {
+        return unmatch_at_a_rate(conn, seller_id, &row, &shares, allocation_id, reason, actor, now);
     }
 
     let undone: i64 = conn.query_row(
         "SELECT count(*) FROM allocation
-         WHERE transaction_id = ?1 AND open_item_id = ?2 AND amount_micros = ?3",
+         WHERE transaction_id = ?1 AND open_item_id = ?2 AND amount_micros = ?3 AND reversed = 1",
         params![row.transaction_id, open_item_id, -row.amount_micros],
         |row| row.get(0),
     )?;
@@ -1032,9 +1058,135 @@ pub fn unmatch(
             "allocation": allocation_id,
             "open_item": open_item_id,
             "amount_micros": -row.amount_micros,
+            "reason": reason,
         }),
     )?;
     Ok(())
+}
+
+/// Undoes a settlement that was posted at a rate.
+///
+/// The payment entry carries the carrying value it released and the difference it
+/// realised, so the item cannot reopen while the entry stands. The reversal and
+/// the opposite allocations are written in one transaction, so the item and the
+/// ledger change together. A payment posts one entry, and undoing part of it would
+/// leave the other allocations describing a payment the ledger no longer shows, so
+/// the whole transaction is undone rather than the one allocation named.
+#[allow(clippy::too_many_arguments)]
+fn unmatch_at_a_rate(
+    conn: &Connection,
+    seller_id: SellerId,
+    row: &UndoRow,
+    shares: &[ActiveAllocation],
+    allocation_id: &str,
+    reason: &str,
+    actor: &str,
+    now: &str,
+) -> Result<(), StoreError> {
+    if shares.is_empty() {
+        return Err(StoreError::Rejected(format!(
+            "allocation {allocation_id} has already been undone"
+        )));
+    }
+    let Some(entry_raw) = row.entry_id.as_deref() else {
+        return Err(StoreError::Rejected(format!(
+            "allocation {allocation_id} settled an item at a rate but names no entry to reverse"
+        )));
+    };
+    let entry_id = crux::JournalEntryId::parse_str(entry_raw).map_err(|error| StoreError::Data(error.to_string()))?;
+    if shares.iter().any(|share| share.entry_id.as_deref() != Some(entry_raw)) {
+        return Err(StoreError::Rejected(format!(
+            "payment {} has allocations from more than one entry; unmatch them one entry at a time",
+            row.transaction_id
+        )));
+    }
+    let transaction = load_transaction(conn, seller_id, &row.transaction_id)?;
+
+    let database = conn.unchecked_transaction()?;
+    if crate::ledger::reversal_of(&database, entry_id)?.is_some() {
+        return Err(StoreError::Rejected(format!(
+            "allocation {allocation_id} has already been undone"
+        )));
+    }
+    let reversal = crate::ledger::reverse_entry_in(&database, entry_id, reason, transaction.booking_date, actor, now)?;
+
+    let mut open_items = Vec::with_capacity(shares.len());
+    for share in shares {
+        database.execute(
+            "INSERT INTO allocation
+                 (id, transaction_id, open_item_id, entry_id, amount_micros,
+                  transaction_amount_micros, base_amount_micros, fx_difference_micros,
+                  matched_at, matched_by, match_method, reversed)
+             VALUES (?1, ?2, ?3, NULL, ?4, ?5, ?6, ?7, ?8, ?9, 'manual', 1)",
+            params![
+                crux::DocumentId::new().to_string(),
+                row.transaction_id,
+                share.open_item_id,
+                -share.amount_micros,
+                -share.transaction_amount_micros,
+                -share.base_amount_micros,
+                -share.fx_difference_micros,
+                now,
+                actor,
+            ],
+        )?;
+        open_items.push(share.open_item_id.clone());
+    }
+
+    database.execute(
+        "UPDATE bank_transaction SET status = 'new' WHERE id = ?1",
+        [&row.transaction_id],
+    )?;
+    audit::append(
+        &database,
+        now,
+        actor,
+        "bank_transaction_unmatched",
+        "bank_transaction",
+        &row.transaction_id,
+        serde_json::json!({
+            "allocation": allocation_id,
+            "open_items": open_items,
+            "reversal": reversal.id.to_string(),
+            "reason": reason,
+        }),
+    )?;
+    database.commit()?;
+    Ok(())
+}
+
+/// The allocations still in force for a transaction.
+///
+/// An allocation is in force while the entry it was posted with stands. A rate
+/// settlement is undone by reversing that entry, which leaves every allocation it
+/// named behind the reversal rather than pointing at a payment that is gone.
+fn active_allocations(conn: &Connection, transaction_id: &str) -> Result<Vec<ActiveAllocation>, StoreError> {
+    let mut statement = conn.prepare(
+        "SELECT a.open_item_id, a.amount_micros, a.transaction_amount_micros,
+                a.base_amount_micros, a.fx_difference_micros, a.entry_id, o.currency, o.fx_rate_micros
+         FROM allocation a
+         JOIN open_item o ON o.id = a.open_item_id
+         WHERE a.transaction_id = ?1
+           AND a.reversed = 0
+           AND a.entry_id IS NOT NULL
+           AND NOT EXISTS (SELECT 1 FROM journal_entry r WHERE r.reverses_entry_id = a.entry_id)
+         ORDER BY a.matched_at, a.id",
+    )?;
+    let mut rows = statement.query([transaction_id])?;
+    let mut shares = Vec::new();
+    while let Some(row) = rows.next()? {
+        shares.push(ActiveAllocation {
+            open_item_id: row.get(0)?,
+            amount_micros: row.get(1)?,
+            transaction_amount_micros: row.get(2)?,
+            base_amount_micros: row.get(3)?,
+            fx_difference_micros: row.get(4)?,
+            entry_id: row.get(5)?,
+            item_currency: row.get(6)?,
+            item_rate: row.get(7)?,
+        });
+    }
+    Ok(shares)
 }
 
 /// The rate from `currency` into the reporting currency at a date, or a refusal
@@ -1082,9 +1234,16 @@ fn post_settlement(
     carrying: Money,
     gain: Money,
     base: Currency,
+    active: Option<crux::JournalEntryId>,
     actor: &str,
     now: &str,
 ) -> Result<crate::ledger::PostedEntry, StoreError> {
+    // A match against an entry that still stands reuses it, whether that entry was
+    // keyed by the transaction or, after an undone rate settlement, posted without
+    // a source of its own.
+    if let Some(entry_id) = active {
+        return existing_settlement(conn, entry_id);
+    }
     let bank_account = account(&transaction.ledger_account_code)?;
     let mut lines = if transaction.kind() == crate::open_items::OpenItemKind::Receivable {
         vec![
@@ -1120,7 +1279,7 @@ fn post_settlement(
             entry: &entry,
             seller_id: transaction.seller_id,
             entry_date: transaction.booking_date,
-            source: crate::ledger::PostingSource::BankTransaction(transaction.id),
+            source: settlement_source(conn, transaction.id)?,
             actor,
             now,
             posting_profile_id: crate::posting::PROFILE_ID,
@@ -1129,6 +1288,88 @@ fn post_settlement(
             open_item: None,
         },
     )
+}
+
+/// The entry a transaction's settlement is currently filed under, if any.
+///
+/// The first match keys its entry to the transaction. A settlement undone at a
+/// rate leaves that entry reversed, and the re-match that follows posts a fresh
+/// entry with no source of its own; both cases are read back through the
+/// allocations, which name the entry in force.
+fn active_settlement_entry(
+    conn: &Connection,
+    transaction_id: crux::DocumentId,
+) -> Result<Option<crux::JournalEntryId>, StoreError> {
+    let id: Option<String> = conn
+        .query_row(
+            "SELECT e.id
+             FROM journal_entry e
+             WHERE e.id IN (
+                 SELECT id FROM journal_entry WHERE source_kind = 'bank' AND source_id = ?1
+                 UNION
+                 SELECT entry_id FROM allocation WHERE transaction_id = ?1 AND entry_id IS NOT NULL AND reversed = 0
+             )
+             AND NOT EXISTS (SELECT 1 FROM journal_entry r WHERE r.reverses_entry_id = e.id)
+             ORDER BY e.created_at, e.id
+             LIMIT 1",
+            [transaction_id.to_string()],
+            |row| row.get(0),
+        )
+        .optional()?;
+    id.map(|raw| crux::JournalEntryId::parse_str(&raw).map_err(|error| StoreError::Data(error.to_string())))
+        .transpose()
+}
+
+/// The source a settlement entry is filed under.
+///
+/// The transaction's own identifier is the natural key, and the unique index on
+/// `(source_kind, source_id)` is what stops a payment posting twice. Once that
+/// entry has been reversed the key belongs to history, so a re-match posts a bank
+/// entry with no source identifier instead of colliding with it.
+fn settlement_source(
+    conn: &Connection,
+    transaction_id: crux::DocumentId,
+) -> Result<crate::ledger::PostingSource, StoreError> {
+    let reversed: bool = conn.query_row(
+        "SELECT count(*) FROM journal_entry e
+         WHERE e.source_kind = 'bank' AND e.source_id = ?1
+           AND EXISTS (SELECT 1 FROM journal_entry r WHERE r.reverses_entry_id = e.id)",
+        [transaction_id.to_string()],
+        |row| row.get::<_, i64>(0),
+    )? > 0;
+    Ok(if reversed {
+        crate::ledger::PostingSource::Bank
+    } else {
+        crate::ledger::PostingSource::BankTransaction(transaction_id)
+    })
+}
+
+/// An entry that already exists, shaped like a fresh posting.
+fn existing_settlement(
+    conn: &Connection,
+    entry_id: crux::JournalEntryId,
+) -> Result<crate::ledger::PostedEntry, StoreError> {
+    let (journal, number, period_id, content_hash) = conn.query_row(
+        "SELECT journal_code, number, period_id, content_hash FROM journal_entry WHERE id = ?1",
+        [entry_id.to_string()],
+        |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+            ))
+        },
+    )?;
+    Ok(crate::ledger::PostedEntry {
+        id: entry_id,
+        journal: crux::Journal::parse(&journal).map_err(|error| StoreError::Data(error.to_string()))?,
+        number,
+        period_id: crux::FiscalPeriodId::parse_str(&period_id).map_err(|error| StoreError::Data(error.to_string()))?,
+        content_hash,
+        audit_head: String::new(),
+        created: false,
+    })
 }
 
 /// The transaction as the matcher needs it.

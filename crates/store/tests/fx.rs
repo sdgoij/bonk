@@ -839,7 +839,7 @@ fn a_foreign_purchase_settles_with_a_realised_loss() {
 }
 
 #[test]
-fn a_foreign_settlement_cannot_be_undone_without_a_reversal() {
+fn unmatching_a_foreign_settlement_reverses_the_entry_and_reopens_the_item() {
     let mut books = Books::open();
     books.rate(Currency::GBP, "2026-01-01", 1_170_000);
     books.rate(Currency::GBP, "2026-02-01", 1_250_000);
@@ -847,7 +847,7 @@ fn a_foreign_settlement_cannot_be_undone_without_a_reversal() {
     post_outbound_document(books.database.connection(), invoice, "ada", NOW).unwrap();
 
     let item = books.receivable();
-    let payment = books.receive_payment(1_000_000_000, "2026-02-20", "Betaling 2026-0001", "feb");
+    let payment = books.receive_payment(1_512_500_000, "2026-02-20", "Betaling 2026-0001", "feb");
     let report = allocate(
         books.database.connection(),
         books.seller,
@@ -858,19 +858,99 @@ fn a_foreign_settlement_cannot_be_undone_without_a_reversal() {
         NOW,
     )
     .unwrap();
+    assert!(!books.receivable().is_open());
 
-    let refused = unmatch(
+    unmatch(
         books.database.connection(),
         books.seller,
         &report.allocation_id,
+        "the payment was for another invoice",
+        "ada",
+        NOW,
+    )
+    .unwrap();
+
+    let reopened = books.receivable();
+    assert_eq!(
+        reopened.outstanding,
+        gbp_micros(1_210_000_000),
+        "the invoice is open again"
+    );
+    assert!(reopened.is_open());
+
+    // The payment entry is reversed, not deleted: the reversal carries the same
+    // amounts on the other side, so the ledger no longer shows the item cleared.
+    let reversal_number = store::reversal_of(books.database.connection(), report.entry_id)
+        .unwrap()
+        .expect("the settlement entry is reversed");
+    let reversal_id = store::find_entry(books.database.connection(), crux::Journal::Bank, &reversal_number)
+        .unwrap()
+        .expect("the reversal is in the bank journal");
+    let reversal = store::load_entry(books.database.connection(), reversal_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(reversal.entry.lines().len(), 3);
+    assert_eq!(line(&reversal.entry, "1100").side(), Side::Credit);
+    assert_eq!(line(&reversal.entry, "1100").amount(), eur_micros(1_512_500_000));
+    assert_eq!(line(&reversal.entry, "1300").side(), Side::Debit);
+    assert_eq!(line(&reversal.entry, "1300").amount(), eur_micros(1_415_700_000));
+    assert_eq!(line(&reversal.entry, "7900").side(), Side::Debit);
+    assert_eq!(line(&reversal.entry, "7900").amount(), eur_micros(96_800_000));
+
+    let balance = store::trial_balance(
+        books.database.connection(),
+        books.seller,
+        date("2026-01-01"),
+        date("2026-12-31"),
+    )
+    .unwrap();
+    assert!(balance.balances());
+    // The payment is gone from the bank and the exchange difference nets to zero;
+    // the debtors control shows the invoice that is open again.
+    let expected = [("1100", 0), ("1300", 1_415_700_000), ("7900", 0)];
+    for (code, micros) in expected {
+        let row = balance.rows.iter().find(|row| row.code.as_str() == code).unwrap();
+        assert_eq!(row.balance_micros(), micros, "{code}");
+    }
+    assert_eq!(
+        store::list_transactions(books.database.connection(), books.seller, Some("new"))
+            .unwrap()
+            .len(),
+        1,
+        "the payment is back in the queue"
+    );
+
+    let readiness = store::readiness(books.database.connection(), books.seller, 2026, 2).unwrap();
+    assert!(
+        matches!(readiness.control_accounts, store::Check::Passed),
+        "the control account and the subledger agree again: {:?}",
+        readiness.control_accounts
+    );
+
+    // Undoing the same allocation twice is refused.
+    let again = unmatch(
+        books.database.connection(),
+        books.seller,
+        &report.allocation_id,
+        "twice",
         "ada",
         NOW,
     )
     .unwrap_err();
-    assert!(refused.to_string().contains("at a rate"), "{refused}");
+    assert!(again.to_string().contains("already been undone"), "{again}");
+}
+
+#[test]
+fn a_foreign_settlement_can_be_matched_again_after_an_unmatch() {
+    let mut books = Books::open();
+    books.rate(Currency::GBP, "2026-01-01", 1_170_000);
+    books.rate(Currency::GBP, "2026-02-01", 1_250_000);
+    let invoice = books.issue(Currency::GBP, 1_000, "2026-01-10", "2026-02-09");
+    post_outbound_document(books.database.connection(), invoice, "ada", NOW).unwrap();
 
     let item = books.receivable();
-    let refused = allocate(
+    let payment = books.receive_payment(1_512_500_000, "2026-02-20", "Betaling 2026-0001", "feb");
+    let first = allocate(
         books.database.connection(),
         books.seller,
         &payment,
@@ -879,6 +959,179 @@ fn a_foreign_settlement_cannot_be_undone_without_a_reversal() {
         "ada",
         NOW,
     )
+    .unwrap();
+    unmatch(
+        books.database.connection(),
+        books.seller,
+        &first.allocation_id,
+        "wrong invoice",
+        "ada",
+        NOW,
+    )
+    .unwrap();
+
+    let reopened = books.receivable();
+    let second = allocate(
+        books.database.connection(),
+        books.seller,
+        &payment,
+        &reopened.id,
+        MatchMethod::Manual,
+        "ada",
+        NOW,
+    )
+    .unwrap();
+
+    assert_ne!(second.entry_id, first.entry_id, "the reversed entry is not reused");
+    assert_eq!(second.fx_difference, eur_micros(96_800_000));
+    assert!(!books.receivable().is_open());
+
+    // The transaction's key belongs to the reversed entry, so the re-match posts a
+    // bank entry without a source identifier rather than colliding with it.
+    let source: Option<String> = books
+        .database
+        .connection()
+        .query_row(
+            "SELECT source_id FROM journal_entry WHERE id = ?1",
+            [second.entry_id.to_string()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(source, None);
+
+    let balance = store::trial_balance(
+        books.database.connection(),
+        books.seller,
+        date("2026-01-01"),
+        date("2026-12-31"),
+    )
+    .unwrap();
+    assert!(balance.balances());
+    let expected = [("1100", 1_512_500_000), ("1300", 0), ("7900", -96_800_000)];
+    for (code, micros) in expected {
+        let row = balance.rows.iter().find(|row| row.code.as_str() == code).unwrap();
+        assert_eq!(row.balance_micros(), micros, "{code}");
+    }
+
+    let readiness = store::readiness(books.database.connection(), books.seller, 2026, 2).unwrap();
+    assert!(
+        matches!(readiness.control_accounts, store::Check::Passed),
+        "{:?}",
+        readiness.control_accounts
+    );
+    assert!(matches!(readiness.balance_sheet, store::Check::Passed));
+
+    // The fresh entry stands, so the payment cannot settle a second foreign item
+    // until that entry is undone too.
+    let another = books.issue(Currency::GBP, 10, "2026-01-12", "2026-02-09");
+    post_outbound_document(books.database.connection(), another, "ada", NOW).unwrap();
+    let open = list(books.database.connection(), books.seller, OpenItemKind::Receivable)
+        .unwrap()
+        .into_iter()
+        .find(|item| item.is_open())
+        .expect("the second invoice is open");
+    let refused = allocate(
+        books.database.connection(),
+        books.seller,
+        &payment,
+        &open.id,
+        MatchMethod::Manual,
+        "ada",
+        NOW,
+    )
     .unwrap_err();
     assert!(refused.to_string().contains("already matched at a rate"), "{refused}");
+}
+
+#[test]
+fn unmatching_a_group_at_a_rate_undoes_the_whole_payment() {
+    let mut books = Books::open();
+    books.rate(Currency::GBP, "2026-01-01", 1_170_000);
+    books.rate(Currency::GBP, "2026-02-01", 1_250_000);
+    let euro = books.issue(Currency::EUR, 100, "2026-01-10", "2026-02-09");
+    post_outbound_document(books.database.connection(), euro, "ada", NOW).unwrap();
+    let pound = books.issue(Currency::GBP, 100, "2026-01-11", "2026-02-09");
+    post_outbound_document(books.database.connection(), pound, "ada", NOW).unwrap();
+
+    let items = list(books.database.connection(), books.seller, OpenItemKind::Receivable).unwrap();
+    let euro_item = items
+        .iter()
+        .find(|item| item.amount.currency() == Currency::EUR)
+        .unwrap();
+    let pound_item = items
+        .iter()
+        .find(|item| item.amount.currency() == Currency::GBP)
+        .unwrap();
+    let payment = books.receive_payment(272_250_000, "2026-02-20", "Betalingen", "feb");
+    let reports = allocate_group(
+        books.database.connection(),
+        books.seller,
+        &payment,
+        &[euro_item.id.clone(), pound_item.id.clone()],
+        MatchMethod::Group,
+        "ada",
+        NOW,
+    )
+    .unwrap();
+    assert_eq!(reports.len(), 2);
+
+    // Naming one allocation undoes the payment whole: one entry cannot be split
+    // across allocations that stay behind.
+    unmatch(
+        books.database.connection(),
+        books.seller,
+        &reports[0].allocation_id,
+        "both invoices were the wrong ones",
+        "ada",
+        NOW,
+    )
+    .unwrap();
+
+    let reopened = list(books.database.connection(), books.seller, OpenItemKind::Receivable).unwrap();
+    assert_eq!(reopened.iter().filter(|item| item.is_open()).count(), 2);
+    assert_eq!(
+        reopened
+            .iter()
+            .find(|item| item.amount.currency() == Currency::EUR)
+            .unwrap()
+            .outstanding,
+        eur_micros(121_000_000)
+    );
+    assert_eq!(
+        reopened
+            .iter()
+            .find(|item| item.amount.currency() == Currency::GBP)
+            .unwrap()
+            .outstanding,
+        gbp_micros(121_000_000)
+    );
+
+    let allocations: i64 = books
+        .database
+        .connection()
+        .query_row("SELECT count(*) FROM allocation", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(allocations, 4, "two matches and their two undos");
+    assert_eq!(
+        store::list_transactions(books.database.connection(), books.seller, Some("new"))
+            .unwrap()
+            .len(),
+        1
+    );
+
+    let balance = store::trial_balance(
+        books.database.connection(),
+        books.seller,
+        date("2026-01-01"),
+        date("2026-12-31"),
+    )
+    .unwrap();
+    assert!(balance.balances());
+    // Both invoices are open again, so the control account carries their carrying
+    // value while the payment and its realised difference are gone.
+    let expected = [("1100", 0), ("1300", 262_570_000), ("7900", 0)];
+    for (code, micros) in expected {
+        let row = balance.rows.iter().find(|row| row.code.as_str() == code).unwrap();
+        assert_eq!(row.balance_micros(), micros, "{code}");
+    }
 }

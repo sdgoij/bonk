@@ -511,6 +511,9 @@ enum BankCommand {
     Unmatch {
         /// The allocation identifier, as a match reports it.
         allocation: String,
+        /// Why the match is undone; it becomes part of the reversal.
+        #[arg(long, default_value = "match undone by hand")]
+        reason: String,
     },
     /// Manage the rules that classify lines no invoice will match.
     ///
@@ -3196,8 +3199,8 @@ fn bank(database: &store::Database, owner: SellerId, command: BankCommand, now: 
             }
             Ok(())
         }
-        BankCommand::Unmatch { allocation } => {
-            store::unmatch(connection, owner, &allocation, "cli", now)?;
+        BankCommand::Unmatch { allocation, reason } => {
+            store::unmatch(connection, owner, &allocation, &reason, "cli", now)?;
             println!("unmatched allocation {allocation}");
             println!("the invoice is open again and the reversal is on the record");
             Ok(())

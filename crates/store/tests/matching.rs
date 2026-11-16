@@ -332,6 +332,7 @@ fn unmatching_puts_the_item_back_and_keeps_the_history() {
         books.database.connection(),
         books.seller,
         &matched[0].allocation_id,
+        "the wrong invoice",
         "ada",
         NOW,
     )
@@ -361,6 +362,7 @@ fn unmatching_puts_the_item_back_and_keeps_the_history() {
         books.database.connection(),
         books.seller,
         &matched[0].allocation_id,
+        "the wrong invoice",
         "ada",
         NOW,
     )
