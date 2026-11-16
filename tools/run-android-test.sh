@@ -12,8 +12,23 @@ serial=${1:--}
 test_class=${2:-}
 shift 2
 package=com.github.sdgoij.bonk
-# CI hands over the APKs it built; a local run uses the Gradle outputs.
-apk=${BONK_APK:-mobile/androidApp/build/outputs/apk/debug/androidApp-debug.apk}
+
+# CI hands over the APKs it built; a local run uses the Gradle output. The APKs are
+# split per ABI, so take whichever this host built.
+default_apk() {
+    for candidate in "$@"; do
+        if [ -f "$candidate" ]; then
+            printf '%s' "$candidate"
+            return 0
+        fi
+    done
+    printf '%s' "$1"
+}
+
+apk=${BONK_APK:-$(default_apk \
+    mobile/androidApp/build/outputs/apk/debug/androidApp-arm64-v8a-debug.apk \
+    mobile/androidApp/build/outputs/apk/debug/androidApp-x86_64-debug.apk \
+    mobile/androidApp/build/outputs/apk/debug/androidApp-debug.apk)}
 test_apk=${BONK_TEST_APK:-mobile/androidApp/build/outputs/apk/androidTest/debug/androidApp-debug-androidTest.apk}
 
 if [ -z "$test_class" ]; then

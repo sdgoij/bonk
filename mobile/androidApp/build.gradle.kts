@@ -19,9 +19,8 @@ android {
         versionName = "0.1.0"
         // The instrumented test asserts the golden artefact hashes on a device.
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        ndk {
-            abiFilters += listOf("arm64-v8a", "x86_64")
-        }
+        // The ABIs are declared once, by `splits` below: AGP refuses to have both
+        // `ndk.abiFilters` and split filters describe the same set.
     }
 
     compileOptions {
@@ -42,6 +41,20 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
             )
+        }
+    }
+
+    // The native libraries dominate the APK: two ABIs, and each `libbonkc.so`
+    // carries the brotli-compressed font pair that makes a Factur-X hybrid
+    // possible on a device. Play splits by ABI anyway, so build the same shape
+    // here and let the size guard measure what a device actually downloads
+    // rather than an artefact nobody installs.
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            include("arm64-v8a", "x86_64")
+            isUniversalApk = false
         }
     }
 }

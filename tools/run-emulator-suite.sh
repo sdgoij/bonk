@@ -12,18 +12,23 @@ set -eu
 directory=${1:?name the directory the APKs were downloaded into}
 
 find_apk() {
-    found=$(find "$directory" -name "$1" -print -quit)
-    if [ -z "$found" ] || [ ! -f "$found" ]; then
-        echo "error: no $1 under $directory" >&2
-        find "$directory" -type f >&2
-        exit 1
-    fi
-    printf '%s' "$found"
+    # The emulator is x86_64; a universal APK is the fallback for a build made
+    # before the ABIs were split.
+    for candidate in "androidApp-x86_64-$1.apk" "androidApp-$1.apk"; do
+        found=$(find "$directory" -name "$candidate" -print -quit)
+        if [ -n "$found" ] && [ -f "$found" ]; then
+            printf '%s' "$found"
+            return 0
+        fi
+    done
+    echo "error: no x86_64 or universal $1 APK under $directory" >&2
+    find "$directory" -type f >&2
+    exit 1
 }
 
-apk=$(find_apk androidApp-debug.apk)
-test_apk=$(find_apk androidApp-debug-androidTest.apk)
-release_apk=$(find_apk androidApp-release.apk)
+apk=$(find_apk debug)
+test_apk=$(find_apk debug-androidTest)
+release_apk=$(find_apk release)
 
 # `sys.boot_completed` can land before the package service is ready, and an
 # install that arrives then fails with a broken pipe. Wait for the service

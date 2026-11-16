@@ -156,32 +156,41 @@ jobs:
       - name: APKs
         run: cd mobile && ./gradlew :androidApp:assembleDebug :androidApp:assembleDebugAndroidTest :androidApp:assembleRelease -Pnative
 
-      # A regression guard, not the §6.8 number: that budget is a per-device
-      # download from Play, while this APK carries both ABIs for a manual
-      # install and so is roughly twice the size. Measured against the
-      # universal APK, 32 MB catches a dependency that arrives unnoticed.
+      # The native libraries dominate the APK: two ABIs, each carrying the
+      # brotli-compressed font pair a Factur-X hybrid needs. Gradle emits one APK
+      # per ABI (Play delivers the same shape), so the guard measures what a device
+      # downloads instead of a universal artefact nobody installs. 56 MiB is two
+      # thirds of the universal build and leaves room for a dependency that arrives
+      # unnoticed without hiding one that arrives as a font.
       - name: Download size guard
         run: |
           set -eu
-          apk=mobile/androidApp/build/outputs/apk/release/androidApp-release.apk
-          size=$(stat -c %s "$apk")
-          echo "universal release APK: $size bytes"
-          test "$size" -lt 33554432
+          limit=$((56 * 1024 * 1024))
+          found=0
+          for apk in mobile/androidApp/build/outputs/apk/release/androidApp-*-release.apk; do
+            test -f "$apk"
+            size=$(stat -c %s "$apk")
+            echo "$(basename "$apk"): $size bytes"
+            test "$size" -lt "$limit"
+            found=$((found + 1))
+          done
+          test "$found" -eq 2
 
       - uses: actions/upload-artifact@v7
         with:
           name: instrumented-apks
           path: |
-            mobile/androidApp/build/outputs/apk/debug/androidApp-debug.apk
+            mobile/androidApp/build/outputs/apk/debug/androidApp-x86_64-debug.apk
             mobile/androidApp/build/outputs/apk/androidTest/debug/androidApp-debug-androidTest.apk
-            mobile/androidApp/build/outputs/apk/release/androidApp-release.apk
           if-no-files-found: error
           retention-days: 7
 
       - uses: actions/upload-artifact@v7
         with:
           name: bonk-android
-          path: mobile/androidApp/build/outputs/apk/release/androidApp-release.apk
+          path: |
+            mobile/androidApp/build/outputs/apk/release/androidApp-arm64-v8a-release.apk
+            mobile/androidApp/build/outputs/apk/release/androidApp-x86_64-release.apk
           if-no-files-found: error
           retention-days: 14
 
@@ -522,12 +531,13 @@ jobs:
           path: dist
           merge-multiple: true
 
-      # The asset name says what it is; the APK is signed with the debug key,
-      # because there is no release key yet.
-      - name: Name the APK
+      # The asset names say what they are; the APKs are split per ABI and signed
+      # with the debug key, because there is no release key yet.
+      - name: Name the APKs
         run: |
           set -eu
-          mv dist/androidApp-release.apk dist/bonk-android.apk
+          mv dist/androidApp-arm64-v8a-release.apk dist/bonk-android-arm64-v8a.apk
+          mv dist/androidApp-x86_64-release.apk dist/bonk-android-x86_64.apk
 
       # Every asset, including the SBOMs, so a download can be checked offline.
       # The counts are asserted first: a short set means an archive or a target
@@ -536,7 +546,7 @@ jobs:
         run: |
           cd dist
           test "$(ls bonk-*.tar.gz bonk-*.zip | wc -l)" -eq 5
-          test "$(ls bonk-*.apk | wc -l)" -eq 1
+          test "$(ls bonk-*.apk | wc -l)" -eq 2
           test "$(ls bonk-*.cdx.json | wc -l)" -eq 5
           sha256sum bonk-*.tar.gz bonk-*.zip bonk-*.apk bonk-*.cdx.json > SHA256SUMS
           cat SHA256SUMS
