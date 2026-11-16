@@ -4222,19 +4222,21 @@ impl Workspace {
                     customer: &customer,
                     totals: &issued.totals,
                 };
-                if let Err(error) = crate::facturx(&view, language, template).and_then(|bytes| {
-                    attach_artefact_with_profile(
-                        session.database().connection(),
-                        issued.id,
-                        "facturx",
-                        Some("factur-x:en16931"),
-                        &bytes,
-                        render::RENDERER_VERSION,
-                        template_digest.as_deref(),
-                        &now,
-                    )
-                    .map(|_| ())
-                }) && attach_error.is_none()
+                if let Err(error) =
+                    crate::facturx(&view, language, template, crate::FacturXProfile::DEFAULT).and_then(|bytes| {
+                        attach_artefact_with_profile(
+                            session.database().connection(),
+                            issued.id,
+                            "facturx",
+                            Some(&crate::FacturXProfile::DEFAULT.artefact_profile()),
+                            &bytes,
+                            render::RENDERER_VERSION,
+                            template_digest.as_deref(),
+                            &now,
+                        )
+                        .map(|_| ())
+                    })
+                    && attach_error.is_none()
                 {
                     attach_error = Some(error.to_string());
                 }

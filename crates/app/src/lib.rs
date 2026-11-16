@@ -28,8 +28,8 @@ pub use workspace::{Workspace, WorkspaceAction};
 
 pub use application::passphrase as strength;
 pub use application::{
-    Archive as Session, ArchiveTemplate, DEFAULT_TEMPLATE, DocumentLanguage, Summary, customers, default_template,
-    export, facturx, health, invoice_pdf, load_templates, pdf_data, render_issue, renderer_for,
+    Archive as Session, ArchiveTemplate, DEFAULT_TEMPLATE, DocumentLanguage, FacturXProfile, Summary, customers,
+    default_template, export, facturx, health, invoice_pdf, load_templates, pdf_data, render_issue, renderer_for,
 };
 
 /// Default locations under the platform data directory.

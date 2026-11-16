@@ -22,6 +22,11 @@ pub mod passphrase;
 pub mod session;
 pub mod templates;
 
+/// The Factur-X level a hybrid is written at.
+///
+/// Re-exported so a front end that offers a level names it from the same list the
+/// writer checks, rather than typing a string the packet would repeat unchecked.
+pub use crux::FacturXProfile;
 pub use dto::{
     BackupExport, CustomerDto, CustomerImportDto, DocumentArtefact, DocumentDetail, DocumentEvent, DocumentHit,
     DocumentLine, DocumentSummary, DraftDto, DraftLineDto, DraftTotalsDto, FindingDto, ImportDto, IssueOutcome,

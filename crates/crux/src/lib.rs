@@ -20,6 +20,7 @@
 pub mod calc;
 pub mod date;
 pub mod error;
+pub mod facturx;
 pub mod findings;
 pub mod ids;
 pub mod invoice;
@@ -35,6 +36,7 @@ pub mod vat;
 pub use calc::{AMOUNT_SCALE, Totals, line_net, sum, sum_in, tax_amount};
 pub use date::LocalDate;
 pub use error::DomainError;
+pub use facturx::FacturXProfile;
 pub use findings::{Finding, Severity, has_blocking};
 pub use ids::{CustomerId, DeviceId, DocumentId, FiscalPeriodId, JournalEntryId, LineId, SavedSearchId, SellerId};
 pub use invoice::{

@@ -240,9 +240,17 @@ impl Renderer {
     /// Renders the document as Factur-X: PDF/A-3 with the CII invoice attached.
     ///
     /// The XML is written by `syntax` from the same view, so the page, the file
-    /// inside it, and the archive all say the same thing.
-    pub fn render_facturx(&self, data: &InvoiceData, xml: &[u8]) -> Result<Vec<u8>, RenderError> {
-        facturx::write(&self.layout(data)?, xml)
+    /// inside it, and the archive all say the same thing. `conformance_level` is
+    /// the level the payload was written at, as Factur-X spells it; the caller
+    /// takes it from `crux::FacturXProfile` so the packet cannot claim a level the
+    /// payload does not have.
+    pub fn render_facturx(
+        &self,
+        data: &InvoiceData,
+        xml: &[u8],
+        conformance_level: &str,
+    ) -> Result<Vec<u8>, RenderError> {
+        facturx::write(&self.layout(data)?, xml, conformance_level)
     }
 
     /// Builds the renderer with a specific template. The template is validated

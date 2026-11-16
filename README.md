@@ -229,8 +229,18 @@ Peppol), `2026-0001.pdf` (the page as printed), and `2026-0001.factur-x.pdf` —
 the same page in a PDF/A-3 container with the invoice as CII inside it, which is
 what a counterparty that asks for Factur-X receives. The same three are filed in
 the archive, and `verify` hashes all of them. A hybrid is only written when the
-document passed the same profile gate the UBL did, so the two cannot disagree
-about what was issued.
+document passed the profile gate, so the two cannot disagree about what was
+issued.
+
+`issue --profile <level>` chooses what that hybrid claims: `minimum`,
+`basic-wl`, `basic`, `en16931` (the default), or `extended`. The level decides
+what the CII carries — MINIMUM and BASIC WL leave out the lines, and MINIMUM also
+leaves out the VAT breakdown — and the same level goes into BT-24 and into the
+PDF's XMP packet, so a reader of either half learns the same thing. The three
+levels that are EN 16931 documents pass the EN 16931 gate before they are
+written; the two below it are checked against what the level itself needs, which
+is why MINIMUM refuses a seller without a VAT identifier. The UBL artefact is
+Peppol output whichever level the hybrid claims.
 
 ### The books: posting and reading the ledger
 
@@ -709,13 +719,16 @@ artefact is unaffected.
 
 Factur-X is the same page in a PDF/A-3 container: krilla writes it at that
 conformance level, the CII invoice is attached as `factur-x.xml` with
-`/AFRelationship /Alternative`, and the XMP packet names the file and the profile
-(`EN 16931`) beside the PDF/A statements. What `verify` checks and the container a
-counterparty receives are the same bytes, so nobody has to guess whether what was
-archived is what was sent. veraPDF has not been run against
-the output; the structural assertions in the tests and the round trip through
-this project's own PDF reader are what backs the claim today, and CI has no
-veraPDF step yet.
+`/AFRelationship /Alternative`, and the XMP packet names the file and the level it
+was written at beside the PDF/A statements. The five levels are a ladder —
+MINIMUM, BASIC WL, BASIC, EN 16931, EXTENDED — and `crux::FacturXProfile` owns
+what each may carry, so the writer and the packet cannot drift apart. What
+`verify` checks and the container a counterparty receives are the same bytes, so
+nobody has to guess whether what was archived is what was sent.
+
+veraPDF is not run on this output by `just gate`; the structural assertions in
+the tests and the round trip through this project's own PDF reader are what backs
+the claim, and CI has no veraPDF step yet.
 
 The printed document's labels are chosen per document: English or Dutch, defaulting
 from the seller's locale. That is the language of the form ("Factuur aan", "BTW",

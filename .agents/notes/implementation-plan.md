@@ -656,10 +656,36 @@ the attachment is the invoice and not a copy of it.
 
 What is not done: M4.6, the veraPDF gate, so the conformance claim rests on
 structural assertions and this project's own reader, not on an external
-validator — the README says so plainly. M4.3 is one fifth done: MINIMUM,
-BASIC WL, BASIC, and EXTENDED are not written, and neither is the profile
-argument that would choose between them. M4.7's preflight diagnostics are not
-in either; a render failure is still a string.
+validator — the README says so plainly. M4.7's preflight diagnostics are not in
+either; a render failure is still a string.
+
+**Status, 2026-11-16 (the profile ladder).** M4.3 is done: `crux::FacturXProfile`
+names the five levels and owns what each may carry, because the same claim is
+written twice — BT-24 in the payload, `fx:ConformanceLevel` in the PDF — and two
+places that each decide for themselves eventually disagree. The ladder is ordered
+(`profile >= Basic` is "does it carry the lines?"), and the tests assert that each
+level adds to the one below instead of swapping anything out.
+
+The writer subsets rather than post-processes: `syntax::write_cii_at` writes the
+lines, the VAT breakdown, the full address, the contact, the delivery date, the
+payment terms, the references, and the parties' electronic addresses only where
+the level carries them, so a MINIMUM document is the parties, the countries, the
+amounts, and the dates and nothing else. `write_cii` keeps its old signature and
+writes the default level, which is why every artefact written before this change
+still hashes to the same bytes.
+
+The gate learned the same distinction. `application::render_cii` runs the EN 16931
+rules for BASIC, EN 16931, and EXTENDED, and for MINIMUM and BASIC WL it leans on
+the writer, which is the only thing that knows what the level kept: a blank party
+name or a MINIMUM invoice without the seller's VAT identifier is refused there
+with a `CiiError::MissingField` that names the level and the term. The UBL
+artefact still passes the Peppol gate whichever level the hybrid claims, because
+it is Peppol output regardless.
+
+`bonk issue --profile minimum|basic-wl|basic|en16931|extended` chooses the level;
+the artefact row records `factur-x:<level>`, so the archive says what was claimed
+without anyone opening the bytes. The window issues at EN 16931 — a chooser in the
+form is a later addition, not a gap in the writer.
 
 ---
 

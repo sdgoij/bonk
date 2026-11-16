@@ -12,7 +12,7 @@ pub mod read;
 pub mod ubl;
 mod xml;
 
-pub use cii::{CiiError, write_invoice as write_cii};
+pub use cii::{CiiError, write_invoice as write_cii, write_invoice_at as write_cii_at};
 pub use invoice::{Invoice, InvoiceLine, InvoiceReference};
 pub use read::{
     ImportError, ImportedDocument, ImportedInvoice, ImportedLine, ImportedReference, read_document, read_invoice,

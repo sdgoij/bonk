@@ -5,10 +5,10 @@
 //! drift into two slightly different invoice pipelines.
 
 use conformance::{Profile, SemanticInvoice};
-use crux::{Finding, InvoiceDraft, InvoiceTotals, LocalDate, Party};
+use crux::{FacturXProfile, Finding, InvoiceDraft, InvoiceTotals, LocalDate, Party};
 use render::PdfRenderer;
 use store::{CustomerRecord, DocumentStatus, IssueRequest, IssueView, SellerRecord, StoreError};
-use syntax::{Invoice, InvoiceLine, InvoiceReference, write_cii, write_ubl};
+use syntax::{Invoice, InvoiceLine, InvoiceReference, write_cii_at, write_ubl};
 
 use crate::dto::{DocumentSummary, DraftDto, FindingDto, IssueOutcome};
 use crate::session::Archive;
@@ -28,12 +28,15 @@ pub use render::Language as DocumentLanguage;
 /// and the draft keeps its identity so it can be corrected and retried.
 ///
 /// `actor` names the front end in the audit trail; it is recorded as the device
-/// as well, because one process holds the session.
+/// as well, because one process holds the session. `profile` is the Factur-X
+/// level the hybrid is written at; it is recorded on the artefact row, so a
+/// reader of the archive can see what was claimed without opening the bytes.
 pub fn issue(
     archive: &mut Archive,
     draft: &DraftDto,
     language: DocumentLanguage,
     template: Option<&ArchiveTemplate>,
+    profile: FacturXProfile,
     actor: &str,
 ) -> Result<IssueOutcome, StoreError> {
     let domain = draft
@@ -117,6 +120,7 @@ pub fn issue(
         language,
         template.map(|template| &template.template),
         template.map(|template| template.sha256.as_str()),
+        profile,
         &now,
     ) {
         Ok(hash) => facturx_sha256 = Some(hash),
@@ -169,23 +173,30 @@ fn stopped(findings: Vec<Finding>) -> IssueOutcome {
 
 /// Renders a document to UBL for the issue transaction.
 ///
-/// Shared by the GUI and the CLI so both produce byte-identical artefacts.
+/// Shared by the GUI and the CLI so both produce byte-identical artefacts. UBL is
+/// Peppol output, so it passes the Peppol gate whichever Factur-X level the
+/// hybrid is written at.
 pub fn render_issue(view: &IssueView<'_>) -> Result<Vec<u8>, StoreError> {
-    validate_profile(view)?;
+    gate(view, Profile::PeppolBis3)?;
     let lines = invoice_lines(view.draft)?;
     write_ubl(&invoice(view, &lines))
         .map(String::into_bytes)
         .map_err(|error| StoreError::Render(error.to_string()))
 }
 
-/// Renders the CII invoice a Factur-X PDF carries.
+/// Renders the CII invoice a Factur-X PDF carries, at a stated level.
 ///
-/// The same profile gate runs first: a document no profile accepts must not leave
-/// as a hybrid PDF either, because the XML inside it is the invoice.
-pub fn render_cii(view: &IssueView<'_>) -> Result<Vec<u8>, StoreError> {
-    validate_profile(view)?;
+/// The level decides both what is written and whether the EN 16931 gate runs: the
+/// three levels that claim EN 16931 are checked against it, and the two below it
+/// are checked by the writer, which is the last place that knows what the level
+/// actually carries. A document no profile accepts must not leave as a hybrid
+/// PDF either, because the XML inside it is the invoice.
+pub fn render_cii(view: &IssueView<'_>, profile: FacturXProfile) -> Result<Vec<u8>, StoreError> {
+    if profile.claims_en16931() {
+        gate(view, Profile::En16931)?;
+    }
     let lines = invoice_lines(view.draft)?;
-    write_cii(&invoice(view, &lines))
+    write_cii_at(&invoice(view, &lines), profile)
         .map(String::into_bytes)
         .map_err(|error| StoreError::Render(error.to_string()))
 }
@@ -195,20 +206,23 @@ pub fn facturx(
     view: &IssueView<'_>,
     language: render::Language,
     template: Option<&render::Template>,
+    profile: FacturXProfile,
 ) -> Result<Vec<u8>, StoreError> {
-    let cii = render_cii(view)?;
-    facturx_from_cii(view, &cii, language, template)
+    let cii = render_cii(view, profile)?;
+    facturx_from_cii(view, &cii, language, template, profile)
 }
 
 /// The container, when the CII was already produced for something else.
 ///
 /// The CLI writes the CII artefact as part of the issue transaction, so it hands
-/// the bytes back rather than serialising the invoice a second time.
+/// the bytes back rather than serialising the invoice a second time. The level
+/// passed here is the one those bytes were written at; the packet repeats it.
 pub fn facturx_from_cii(
     view: &IssueView<'_>,
     cii: &[u8],
     language: render::Language,
     template: Option<&render::Template>,
+    profile: FacturXProfile,
 ) -> Result<Vec<u8>, StoreError> {
     let data = pdf_data(
         view.number,
@@ -219,25 +233,26 @@ pub fn facturx_from_cii(
         language,
     );
     renderer_for(template)
-        .render_facturx(&data, cii)
+        .render_facturx(&data, cii, profile.conformance_level())
         .map_err(|error| StoreError::Render(error.to_string()))
 }
 
-/// Renders and files the hybrid, stating the profile on the artefact.
+/// Renders and files the hybrid, stating the level on the artefact.
 pub fn attach_facturx(
     archive: &Archive,
     view: &IssueView<'_>,
     language: render::Language,
     template: Option<&render::Template>,
     template_digest: Option<&str>,
+    profile: FacturXProfile,
     now: &str,
 ) -> Result<String, StoreError> {
-    let bytes = facturx(view, language, template)?;
+    let bytes = facturx(view, language, template, profile)?;
     store::attach_artefact_with_profile(
         archive.database().connection(),
         view.id,
         "facturx",
-        Some("factur-x:en16931"),
+        Some(&profile.artefact_profile()),
         &bytes,
         render::RENDERER_VERSION,
         template_digest,
@@ -245,15 +260,15 @@ pub fn attach_facturx(
     )
 }
 
-/// The profile gate both serialisers run.
-fn validate_profile(view: &IssueView<'_>) -> Result<(), StoreError> {
+/// Runs the conformance gate a payload has to pass before it is serialised.
+fn gate(view: &IssueView<'_>, profile: Profile) -> Result<(), StoreError> {
     let semantic = SemanticInvoice::from_draft(
         view.number,
         view.draft,
         &view.seller.party,
         &view.customer.party,
         view.totals.clone(),
-        Profile::PeppolBis3,
+        profile,
     );
     let findings = conformance::validate(&semantic);
     if crux::has_blocking(&findings) {

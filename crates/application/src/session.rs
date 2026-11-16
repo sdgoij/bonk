@@ -263,7 +263,9 @@ impl Archive {
 
     /// Issues a draft, or returns the findings that stopped it.
     ///
-    /// `actor` names the front end in the audit trail.
+    /// `actor` names the front end in the audit trail. The hybrid is written at
+    /// the default Factur-X level; a front end that lets the user choose one calls
+    /// [`crate::issue::issue`] with it.
     pub fn issue(
         &mut self,
         draft: &DraftDto,
@@ -271,7 +273,7 @@ impl Archive {
         template: Option<&crate::ArchiveTemplate>,
         actor: &str,
     ) -> Result<crate::IssueOutcome, StoreError> {
-        crate::issue::issue(self, draft, language, template, actor)
+        crate::issue::issue(self, draft, language, template, crate::FacturXProfile::DEFAULT, actor)
     }
 
     /// Documents on one side of the books, best match first.
@@ -1150,6 +1152,59 @@ mod tests {
 
         // The draft became the document.
         assert!(archive.list_drafts().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_lower_level_files_a_hybrid_that_states_it() {
+        let (_directory, mut archive) = archive();
+        let (seller, customer) = seed(&archive);
+
+        let outcome = crate::issue::issue(
+            &mut archive,
+            &draft(&seller, &customer, "Consultancy"),
+            crate::DocumentLanguage::English,
+            None,
+            crux::FacturXProfile::BasicWl,
+            "test",
+        )
+        .unwrap();
+        let Some(issued) = outcome.issued.clone() else {
+            panic!("the draft should have issued: {outcome:#?}");
+        };
+
+        let id = crux::DocumentId::parse_str(&issued.id).unwrap();
+        let connection = archive.database().connection();
+        let facturx = store::archive::artefact_bytes(connection, id, "facturx").unwrap();
+        // The XML is attached uncompressed, so the container can be read as text.
+        let text = String::from_utf8_lossy(&facturx);
+        assert!(
+            text.contains("<fx:ConformanceLevel>BASIC WL</fx:ConformanceLevel>"),
+            "the packet repeats the level the payload was written at"
+        );
+        assert!(
+            text.contains("urn:factur-x.eu:1p0:basicwl"),
+            "and the payload names it in BT-24"
+        );
+        assert!(
+            !text.contains("IncludedSupplyChainTradeLineItem"),
+            "the level does not carry lines"
+        );
+        let profile: String = connection
+            .query_row(
+                "SELECT syntax_profile FROM artefact WHERE document_id = ?1 AND kind = 'facturx'",
+                [id.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(profile, "factur-x:basic-wl");
+
+        // The UBL artefact is Peppol output whichever level the hybrid claims:
+        // it still carries the lines.
+        let ubl = store::archive::artefact_bytes(connection, id, "ubl").unwrap();
+        assert!(
+            String::from_utf8_lossy(&ubl).contains("cac:InvoiceLine"),
+            "the UBL keeps its lines"
+        );
     }
 
     #[test]

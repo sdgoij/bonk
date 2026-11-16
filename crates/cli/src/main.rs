@@ -11,9 +11,9 @@ use application::{
 };
 use clap::{Parser, Subcommand};
 use crux::{
-    AccountCode, Address, CountryCode, Currency, CustomerId, DocumentId, DraftLine, Finding, InvoiceDraft, Journal,
-    JournalEntryId, LedgerLine, LineId, LocalDate, Money, Party, Quantity, SellerId, Severity, Side, TaxCode,
-    TaxTreatment, UnitCode, VatCategory, VatRate, calculate_totals, has_blocking, validate_draft,
+    AccountCode, Address, CountryCode, Currency, CustomerId, DocumentId, DraftLine, FacturXProfile, Finding,
+    InvoiceDraft, Journal, JournalEntryId, LedgerLine, LineId, LocalDate, Money, Party, Quantity, SellerId, Severity,
+    Side, TaxCode, TaxTreatment, UnitCode, VatCategory, VatRate, calculate_totals, has_blocking, validate_draft,
 };
 use store::{
     CustomerRecord, DocumentStatus, IssueRequest, IssueView, KeyStore, SearchRequest, SellerRecord, StoreError,
@@ -417,6 +417,10 @@ enum Command {
         /// seller's locale.
         #[arg(long, value_parser = ["en", "nl"])]
         language: Option<String>,
+        /// Factur-X conformance level the hybrid is written at: `minimum`,
+        /// `basic-wl`, `basic`, `en16931`, or `extended`.
+        #[arg(long, default_value = "en16931")]
+        profile: String,
     },
     /// The general ledger: the books derived from the archive.
     Ledger {
@@ -1788,7 +1792,13 @@ fn run(cli: Cli) -> Result<(), CliError> {
             actor,
             device_name,
             language,
+            profile,
         }) => {
+            let profile = FacturXProfile::parse(&profile).ok_or_else(|| {
+                CliError::Input(format!(
+                    "unknown Factur-X level {profile}: try minimum, basic-wl, basic, en16931, or extended"
+                ))
+            })?;
             let mut session = access.session(&database, &keystore)?;
             let draft_id = DocumentId::parse_str(&draft)?;
 
@@ -1821,7 +1831,7 @@ fn run(cli: Cli) -> Result<(), CliError> {
                 },
                 |view| {
                     let bytes = render_issue(view)?;
-                    cii = Some(application::render_cii(view)?);
+                    cii = Some(application::render_cii(view, profile)?);
                     rendered = Some(bytes.clone());
                     Ok(bytes)
                 },
@@ -1916,8 +1926,13 @@ fn run(cli: Cli) -> Result<(), CliError> {
                     customer: &customer,
                     totals: &issued.totals,
                 };
-                match application::facturx_from_cii(&view, &cii, language, template.map(|template| &template.template))
-                {
+                match application::facturx_from_cii(
+                    &view,
+                    &cii,
+                    language,
+                    template.map(|template| &template.template),
+                    profile,
+                ) {
                     Ok(bytes) => {
                         let path = out.join(format!("{}.factur-x.pdf", issued.number));
                         std::fs::write(&path, &bytes)?;
@@ -1925,7 +1940,7 @@ fn run(cli: Cli) -> Result<(), CliError> {
                             session.database().connection(),
                             issued.id,
                             "facturx",
-                            Some("factur-x:en16931"),
+                            Some(&profile.artefact_profile()),
                             &bytes,
                             render::RENDERER_VERSION,
                             template.map(|template| template.sha256.as_str()),

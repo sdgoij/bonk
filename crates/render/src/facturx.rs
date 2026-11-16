@@ -14,18 +14,17 @@ use crate::{RenderError, pdf};
 /// is an invoice without reading anything else.
 pub const FILE_NAME: &str = "factur-x.xml";
 
-/// The profile this writer produces: EN 16931, the level Factur-X calls
-/// `EN 16931` and ZUGFeRD calls `COMFORT`.
-pub const PROFILE: &str = "EN 16931";
-
 /// The Factur-X version whose XMP namespace and attachment name are used.
 pub const VERSION: &str = "1.0";
 
-/// Writes the document as PDF/A-3 with `xml` attached.
+/// Writes the document as PDF/A-3 with `xml` attached at a stated level.
 ///
 /// `xml` is the CII invoice, which must already have been validated: this layer
-/// draws and carries, it does not judge.
-pub(crate) fn write(document: &Document, xml: &[u8]) -> Result<Vec<u8>, RenderError> {
+/// draws and carries, it does not judge. `conformance_level` is the level the
+/// payload was written at, as Factur-X spells it (`MINIMUM`, `BASIC WL`, `BASIC`,
+/// `EN 16931`, `EXTENDED`); it comes from `crux::FacturXProfile`, and the packet
+/// would claim something the file is not if it were invented here.
+pub(crate) fn write(document: &Document, xml: &[u8], conformance_level: &str) -> Result<Vec<u8>, RenderError> {
     let attachment = pdf::Attachment {
         name: FILE_NAME,
         mime: "text/xml",
@@ -33,7 +32,7 @@ pub(crate) fn write(document: &Document, xml: &[u8]) -> Result<Vec<u8>, RenderEr
         data: xml,
     };
     let bytes = pdf::write_with(document, Some(&attachment))?;
-    declare(&bytes)
+    declare(&bytes, conformance_level)
 }
 
 /// Adds what Factur-X says about the attached file to the XMP packet.
@@ -45,9 +44,9 @@ pub(crate) fn write(document: &Document, xml: &[u8]) -> Result<Vec<u8>, RenderEr
 /// parsing and rewriting the whole file. A packet without those anchors is refused
 /// rather than shipped: a container that claims Factur-X and does not say so in its
 /// metadata is worse than a failed render.
-fn declare(pdf: &[u8]) -> Result<Vec<u8>, RenderError> {
+fn declare(pdf: &[u8], conformance_level: &str) -> Result<Vec<u8>, RenderError> {
     let bytes = splice(pdf.to_vec(), b"</rdf:Bag></pdfaExtension:schemas>", SCHEMA.as_bytes())?;
-    splice(bytes, b"</rdf:RDF>", description().as_bytes())
+    splice(bytes, b"</rdf:RDF>", description(conformance_level).as_bytes())
 }
 
 /// Inserts `addition` before the first occurrence of `anchor`.
@@ -90,8 +89,8 @@ const SCHEMA: &str = concat!(
 );
 
 /// What the packet says about this document: the attached file, its type, and the
-/// version and level this writer produces.
-fn description() -> String {
+/// version and level it was written at.
+fn description(conformance_level: &str) -> String {
     format!(
         concat!(
             r#"<rdf:Description xmlns:fx="urn:factur-x:pdfa:CrossIndustryDocument:invoice:1p0#" rdf:about="">"#,
@@ -100,7 +99,7 @@ fn description() -> String {
             "<fx:Version>{}</fx:Version>",
             "<fx:ConformanceLevel>{}</fx:ConformanceLevel></rdf:Description>",
         ),
-        FILE_NAME, VERSION, PROFILE
+        FILE_NAME, VERSION, conformance_level
     )
 }
 
@@ -143,7 +142,7 @@ mod tests {
     #[test]
     fn the_container_carries_the_xml_and_declares_the_profile() {
         let xml = b"<rsm:CrossIndustryInvoice/>";
-        let bytes = crate::renderer().render_facturx(&sample(), xml).unwrap();
+        let bytes = crate::renderer().render_facturx(&sample(), xml, "EN 16931").unwrap();
 
         // The file is inside, attached as the alternative representation of the
         // page, and the XML is stored as it was handed over.
@@ -172,11 +171,24 @@ mod tests {
     }
 
     #[test]
+    fn the_packet_states_the_level_it_was_handed() {
+        // Factur-X names the levels with spaces and case that matter, so the
+        // string has to be carried through untouched rather than normalised.
+        for level in ["MINIMUM", "BASIC WL", "BASIC", "EN 16931", "EXTENDED"] {
+            let bytes = crate::renderer()
+                .render_facturx(&sample(), b"<rsm:CrossIndustryInvoice/>", level)
+                .unwrap();
+            let claim = format!("<fx:ConformanceLevel>{level}</fx:ConformanceLevel>");
+            assert!(contains(&bytes, claim.as_bytes()), "{level} is not in the packet");
+        }
+    }
+
+    #[test]
     fn the_container_is_byte_stable() {
         let xml = b"<rsm:CrossIndustryInvoice/>";
         let renderer = crate::renderer();
-        let first = renderer.render_facturx(&sample(), xml).unwrap();
-        let second = renderer.render_facturx(&sample(), xml).unwrap();
+        let first = renderer.render_facturx(&sample(), xml, "EN 16931").unwrap();
+        let second = renderer.render_facturx(&sample(), xml, "EN 16931").unwrap();
         assert_eq!(first, second, "an artefact is hashed, so it has to be stable");
     }
 

@@ -11,8 +11,8 @@
 //! element order, so the same invoice hashes the same.
 
 use crux::{
-    Address, CountryCode, Currency, DocType, InvoiceTotals, LocalDate, Money, Party, Quantity, TaxBreakdown,
-    TaxTreatment, UnitCode, VatCategory, VatRate,
+    Address, CountryCode, Currency, DocType, FacturXProfile, InvoiceTotals, LocalDate, Money, Party, Quantity,
+    TaxBreakdown, TaxTreatment, UnitCode, VatCategory, VatRate,
 };
 
 use crate::invoice::{Invoice, InvoiceLine, exemption_reason};
@@ -377,13 +377,24 @@ fn invalid(field: &'static str, detail: String) -> ImportError {
 /// The EN 16931 guideline identifier written into BT-24 (Factur-X's profile).
 pub const EN16931_GUIDELINE: &str = "urn:cen.eu:en16931:2017";
 
-/// Problems that prevent serialisation.
+/// Why a document cannot be serialised as CII.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum CiiError {
     /// A credit note must name the invoice it corrects (BG-3).
     CreditNoteWithoutPrecedingInvoice,
     /// A Peppol endpoint identifier must look like `EAS:value`.
     MalformedEndpoint,
+    /// The level cannot be written without a field the invoice left empty.
+    ///
+    /// A lower level carries fewer elements, so it depends on the few it keeps:
+    /// a MINIMUM invoice is the parties, the amounts, and the dates, and nothing
+    /// else can stand in for a missing name.
+    MissingField {
+        /// The level that was being written.
+        profile: FacturXProfile,
+        /// The business term, e.g. `BT-27 the seller's name`.
+        field: &'static str,
+    },
 }
 
 impl std::fmt::Display for CiiError {
@@ -391,18 +402,34 @@ impl std::fmt::Display for CiiError {
         match self {
             Self::CreditNoteWithoutPrecedingInvoice => f.write_str("a credit note needs a preceding invoice reference"),
             Self::MalformedEndpoint => f.write_str("a Peppol endpoint identifier must be written as EAS:value"),
+            Self::MissingField { profile, field } => {
+                write!(f, "a Factur-X {profile} document needs {field}")
+            }
         }
     }
 }
 
 impl std::error::Error for CiiError {}
 
-/// Serialises an invoice or credit note as CII D16B.
+/// Serialises an invoice or credit note as CII D16B at the default level.
+///
+/// The default is the level the archive validates against, and the one every
+/// hybrid written before the levels existed claims, so its bytes do not move.
 pub fn write_invoice(invoice: &Invoice<'_>) -> Result<String, CiiError> {
+    write_invoice_at(invoice, FacturXProfile::DEFAULT)
+}
+
+/// Serialises an invoice or credit note as CII D16B at a Factur-X level.
+///
+/// The level decides what is written, not what is checked: a document is
+/// validated against its own profile before it gets here. What this guards is the
+/// minimum each level needs to still be that level.
+pub fn write_invoice_at(invoice: &Invoice<'_>, profile: FacturXProfile) -> Result<String, CiiError> {
     let credit_note = invoice.doc_type.is_credit_note();
     if credit_note && invoice.preceding_invoice.is_none() {
         return Err(CiiError::CreditNoteWithoutPrecedingInvoice);
     }
+    require(invoice, profile)?;
 
     let mut out = String::with_capacity(8192);
     out.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
@@ -413,7 +440,7 @@ pub fn write_invoice(invoice: &Invoice<'_>) -> Result<String, CiiError> {
 
     xml::open(&mut out, 1, "rsm:ExchangedDocumentContext");
     xml::open(&mut out, 2, "ram:GuidelineSpecifiedDocumentContextParameter");
-    xml::text(&mut out, 3, "ram:ID", EN16931_GUIDELINE);
+    xml::text(&mut out, 3, "ram:ID", profile.guideline());
     xml::close(&mut out, 2, "ram:GuidelineSpecifiedDocumentContextParameter");
     xml::close(&mut out, 1, "rsm:ExchangedDocumentContext");
 
@@ -423,7 +450,9 @@ pub fn write_invoice(invoice: &Invoice<'_>) -> Result<String, CiiError> {
     xml::open(&mut out, 2, "ram:IssueDateTime");
     cii_date(&mut out, 3, invoice.issue_date);
     xml::close(&mut out, 2, "ram:IssueDateTime");
-    if let Some(note) = invoice.note {
+    if profile.carries_note()
+        && let Some(note) = invoice.note
+    {
         xml::open(&mut out, 2, "ram:IncludedNote");
         xml::text(&mut out, 3, "ram:Content", note);
         xml::close(&mut out, 2, "ram:IncludedNote");
@@ -431,16 +460,42 @@ pub fn write_invoice(invoice: &Invoice<'_>) -> Result<String, CiiError> {
     xml::close(&mut out, 1, "rsm:ExchangedDocument");
 
     xml::open(&mut out, 1, "rsm:SupplyChainTradeTransaction");
-    for line in invoice.lines {
-        line_item(&mut out, line);
+    if profile.carries_lines() {
+        for line in invoice.lines {
+            line_item(&mut out, line);
+        }
     }
-    agreement(&mut out, invoice)?;
-    delivery(&mut out, invoice);
-    settlement(&mut out, invoice);
+    agreement(&mut out, invoice, profile)?;
+    delivery(&mut out, invoice, profile);
+    settlement(&mut out, invoice, profile);
     xml::close(&mut out, 1, "rsm:SupplyChainTradeTransaction");
 
     out.push_str("</rsm:CrossIndustryInvoice>\n");
     Ok(out)
+}
+
+/// The fields a level cannot do without.
+///
+/// Everything else in the model can be absent from a valid document; these are
+/// the ones whose absence would make the file unreadable as the level it claims.
+fn require(invoice: &Invoice<'_>, profile: FacturXProfile) -> Result<(), CiiError> {
+    let required = [
+        ("BT-1 the invoice number", invoice.number),
+        ("BT-27 the seller's name", invoice.seller.legal_name.as_str()),
+        ("BT-44 the buyer's name", invoice.customer.legal_name.as_str()),
+    ];
+    for (field, value) in required {
+        if value.trim().is_empty() {
+            return Err(CiiError::MissingField { profile, field });
+        }
+    }
+    if profile.requires_seller_vat() && invoice.seller.vat_id.as_deref().is_none_or(|vat| vat.trim().is_empty()) {
+        return Err(CiiError::MissingField {
+            profile,
+            field: "BT-31 the seller's VAT identifier",
+        });
+    }
+    Ok(())
 }
 
 /// One line, in the element order the CII schema declares.
@@ -500,14 +555,18 @@ fn line_item(out: &mut String, line: &InvoiceLine<'_>) {
     xml::close(out, 2, "ram:IncludedSupplyChainTradeLineItem");
 }
 
-fn agreement(out: &mut String, invoice: &Invoice<'_>) -> Result<(), CiiError> {
+fn agreement(out: &mut String, invoice: &Invoice<'_>, profile: FacturXProfile) -> Result<(), CiiError> {
     xml::open(out, 2, "ram:ApplicableHeaderTradeAgreement");
-    if let Some(reference) = invoice.buyer_reference {
+    if profile.carries_references()
+        && let Some(reference) = invoice.buyer_reference
+    {
         xml::text(out, 3, "ram:BuyerReference", reference);
     }
-    trade_party(out, "ram:SellerTradeParty", invoice.seller, true)?;
-    trade_party(out, "ram:BuyerTradeParty", invoice.customer, false)?;
-    if let Some(order) = invoice.order_reference {
+    trade_party(out, "ram:SellerTradeParty", invoice.seller, true, profile)?;
+    trade_party(out, "ram:BuyerTradeParty", invoice.customer, false, profile)?;
+    if profile.carries_references()
+        && let Some(order) = invoice.order_reference
+    {
         xml::open(out, 3, "ram:SellerOrderReferencedDocument");
         xml::text(out, 4, "ram:IssuerAssignedID", order);
         xml::close(out, 3, "ram:SellerOrderReferencedDocument");
@@ -521,20 +580,30 @@ fn agreement(out: &mut String, invoice: &Invoice<'_>) -> Result<(), CiiError> {
 /// `ram:Name` is the registered name (BT-27/BT-44), because that is what the
 /// schema means by it; a trading name is a separate term (BT-28/BT-45) and lives
 /// inside the legal organization.
-fn trade_party(out: &mut String, wrapper: &str, party: &Party, is_seller: bool) -> Result<(), CiiError> {
+fn trade_party(
+    out: &mut String,
+    wrapper: &str,
+    party: &Party,
+    is_seller: bool,
+    profile: FacturXProfile,
+) -> Result<(), CiiError> {
     let endpoint = match &party.peppol_id {
-        Some(_) => Some(party.peppol_endpoint().ok_or(CiiError::MalformedEndpoint)?),
+        Some(_) if profile.carries_endpoint() => Some(party.peppol_endpoint().ok_or(CiiError::MalformedEndpoint)?),
+        Some(_) => None,
         None => None,
     };
 
     xml::open(out, 3, wrapper);
     // BT-29: the seller's identifier, which for a Dutch business is its KvK number.
-    if is_seller && let Some(kvk) = &party.kvk_number {
+    if is_seller
+        && profile.carries_references()
+        && let Some(kvk) = &party.kvk_number
+    {
         xml::text_attrs(out, 4, "ram:ID", &[("schemeID", "0106")], kvk);
     }
     xml::text(out, 4, "ram:Name", &party.legal_name);
 
-    if (is_seller && party.kvk_number.is_some()) || party.trading_name.is_some() {
+    if profile.carries_references() && ((is_seller && party.kvk_number.is_some()) || party.trading_name.is_some()) {
         xml::open(out, 4, "ram:SpecifiedLegalOrganization");
         if is_seller && let Some(kvk) = &party.kvk_number {
             xml::text_attrs(out, 5, "ram:ID", &[("schemeID", "0106")], kvk);
@@ -545,7 +614,7 @@ fn trade_party(out: &mut String, wrapper: &str, party: &Party, is_seller: bool) 
         xml::close(out, 4, "ram:SpecifiedLegalOrganization");
     }
 
-    if party.contact_name.is_some() || party.phone.is_some() || party.email.is_some() {
+    if profile.carries_contact() && (party.contact_name.is_some() || party.phone.is_some() || party.email.is_some()) {
         xml::open(out, 4, "ram:DefinedTradeContact");
         if let Some(contact) = &party.contact_name {
             xml::text(out, 5, "ram:PersonName", contact);
@@ -563,14 +632,18 @@ fn trade_party(out: &mut String, wrapper: &str, party: &Party, is_seller: bool) 
         xml::close(out, 4, "ram:DefinedTradeContact");
     }
 
+    // MINIMUM keeps the country and drops the rest: a system that only posts the
+    // amount needs to know where the VAT came from, not where the letter goes.
     xml::open(out, 4, "ram:PostalTradeAddress");
-    if let Some(postal) = &party.address.postal_code {
-        xml::text(out, 5, "ram:PostcodeCode", postal);
+    if profile.carries_address() {
+        if let Some(postal) = &party.address.postal_code {
+            xml::text(out, 5, "ram:PostcodeCode", postal);
+        }
+        if let Some(street) = &party.address.street {
+            xml::text(out, 5, "ram:LineOne", street);
+        }
+        xml::text(out, 5, "ram:CityName", &party.address.city);
     }
-    if let Some(street) = &party.address.street {
-        xml::text(out, 5, "ram:LineOne", street);
-    }
-    xml::text(out, 5, "ram:CityName", &party.address.city);
     xml::text(out, 5, "ram:CountryID", party.address.country.as_str());
     xml::close(out, 4, "ram:PostalTradeAddress");
 
@@ -589,9 +662,13 @@ fn trade_party(out: &mut String, wrapper: &str, party: &Party, is_seller: bool) 
     Ok(())
 }
 
-fn delivery(out: &mut String, invoice: &Invoice<'_>) {
+fn delivery(out: &mut String, invoice: &Invoice<'_>, profile: FacturXProfile) {
     xml::open(out, 2, "ram:ApplicableHeaderTradeDelivery");
-    if let Some(delivered) = invoice.delivery_date {
+    // The element itself is mandatory in D16B at every level; only the date
+    // inside it belongs to BASIC and above.
+    if profile.carries_delivery()
+        && let Some(delivered) = invoice.delivery_date
+    {
         xml::open(out, 3, "ram:ActualDeliverySupplyChainEvent");
         xml::open(out, 4, "ram:OccurrenceDateTime");
         cii_date(out, 5, delivered);
@@ -601,40 +678,44 @@ fn delivery(out: &mut String, invoice: &Invoice<'_>) {
     xml::close(out, 2, "ram:ApplicableHeaderTradeDelivery");
 }
 
-fn settlement(out: &mut String, invoice: &Invoice<'_>) {
+fn settlement(out: &mut String, invoice: &Invoice<'_>, profile: FacturXProfile) {
     let currency = invoice.currency.as_str();
     xml::open(out, 2, "ram:ApplicableHeaderTradeSettlement");
     xml::text(out, 3, "ram:InvoiceCurrencyCode", currency);
 
-    for row in &invoice.totals.breakdown {
-        let exemption = exemption_reason(invoice, row);
-        xml::open(out, 3, "ram:ApplicableTradeTax");
-        xml::money(out, 4, "ram:CalculatedAmount", row.tax);
-        xml::text(out, 4, "ram:TypeCode", "VAT");
-        if let Some((_, reason)) = exemption
-            && let Some(reason) = reason
-        {
-            xml::text(out, 4, "ram:ExemptionReason", reason);
+    if profile.carries_vat_breakdown() {
+        for row in &invoice.totals.breakdown {
+            let exemption = exemption_reason(invoice, row);
+            xml::open(out, 3, "ram:ApplicableTradeTax");
+            xml::money(out, 4, "ram:CalculatedAmount", row.tax);
+            xml::text(out, 4, "ram:TypeCode", "VAT");
+            if let Some((_, reason)) = exemption
+                && let Some(reason) = reason
+            {
+                xml::text(out, 4, "ram:ExemptionReason", reason);
+            }
+            xml::money(out, 4, "ram:BasisAmount", row.taxable_base);
+            xml::text(out, 4, "ram:CategoryCode", row.category.code());
+            if let Some((code, _)) = exemption
+                && let Some(code) = code
+            {
+                xml::text(out, 4, "ram:ExemptionReasonCode", code);
+            }
+            if row.category != VatCategory::OutsideScope {
+                xml::text(
+                    out,
+                    4,
+                    "ram:RateApplicablePercent",
+                    &xml::rate_basis_points(row.rate_bp),
+                );
+            }
+            xml::close(out, 3, "ram:ApplicableTradeTax");
         }
-        xml::money(out, 4, "ram:BasisAmount", row.taxable_base);
-        xml::text(out, 4, "ram:CategoryCode", row.category.code());
-        if let Some((code, _)) = exemption
-            && let Some(code) = code
-        {
-            xml::text(out, 4, "ram:ExemptionReasonCode", code);
-        }
-        if row.category != VatCategory::OutsideScope {
-            xml::text(
-                out,
-                4,
-                "ram:RateApplicablePercent",
-                &xml::rate_basis_points(row.rate_bp),
-            );
-        }
-        xml::close(out, 3, "ram:ApplicableTradeTax");
     }
 
-    if let Some(due) = invoice.due_date {
+    if profile.carries_payment_terms()
+        && let Some(due) = invoice.due_date
+    {
         xml::open(out, 3, "ram:SpecifiedTradePaymentTerms");
         xml::open(out, 4, "ram:DueDateDateTime");
         cii_date(out, 5, due);
@@ -651,7 +732,9 @@ fn settlement(out: &mut String, invoice: &Invoice<'_>) {
     xml::close(out, 3, "ram:SpecifiedTradeSettlementHeaderMonetarySummation");
 
     // BG-3 comes after the summation, which is where the schema puts it.
-    if let Some(preceding) = &invoice.preceding_invoice {
+    if profile.carries_references()
+        && let Some(preceding) = &invoice.preceding_invoice
+    {
         xml::open(out, 3, "ram:InvoiceReferencedDocument");
         xml::text(out, 4, "ram:IssuerAssignedID", preceding.number);
         xml::open(out, 4, "ram:FormattedIssueDateTime");
@@ -941,75 +1024,198 @@ mod tests {
         assert_eq!(read_document(xml), Err(ImportError::Doctype));
     }
 
-    /// The view the writer tests serialise: the same invoice the reader fixture
-    /// describes, so the two halves can be compared term by term.
+    /// The view the writer tests serialise: one line, one VAT row, every optional
+    /// field the writer can carry filled in.
+    struct Parts {
+        seller: Party,
+        customer: Party,
+        treatment: TaxTreatment,
+        totals: InvoiceTotals,
+    }
+
+    impl Parts {
+        fn new() -> Self {
+            let mut seller = Party::new(
+                "Seller BV",
+                Address {
+                    street: Some("Main 1".to_owned()),
+                    city: "Amsterdam".to_owned(),
+                    postal_code: Some("1000 AA".to_owned()),
+                    country: CountryCode::NL,
+                },
+            );
+            seller.vat_id = Some("NL123456782B01".to_owned());
+            seller.kvk_number = Some("12345678".to_owned());
+            seller.peppol_id = Some("0106:12345678".to_owned());
+            let customer = Party::new(
+                "Customer BV",
+                Address {
+                    street: Some("Buyer 1".to_owned()),
+                    city: "Rotterdam".to_owned(),
+                    postal_code: Some("3000 AA".to_owned()),
+                    country: CountryCode::NL,
+                },
+            );
+            Self {
+                seller,
+                customer,
+                treatment: TaxTreatment::standard(VatRate::STANDARD_NL),
+                totals: InvoiceTotals {
+                    net: Money::from_major_units(100, Currency::EUR).unwrap(),
+                    tax: Money::from_major_units(21, Currency::EUR).unwrap(),
+                    gross: Money::from_major_units(121, Currency::EUR).unwrap(),
+                    breakdown: vec![TaxBreakdown {
+                        category: VatCategory::Standard,
+                        rate_bp: 2100,
+                        taxable_base: Money::from_major_units(100, Currency::EUR).unwrap(),
+                        tax: Money::from_major_units(21, Currency::EUR).unwrap(),
+                    }],
+                },
+            }
+        }
+
+        fn write(&self, profile: FacturXProfile) -> Result<String, CiiError> {
+            let line = InvoiceLine {
+                id: 1,
+                name: "Consulting",
+                description: Some("Advice"),
+                quantity: Quantity::from_units(2).unwrap(),
+                unit: UnitCode::PIECE,
+                unit_price: Money::from_major_units(50, Currency::EUR).unwrap(),
+                base_quantity: Quantity::ONE,
+                line_net: Money::from_major_units(100, Currency::EUR).unwrap(),
+                treatment: &self.treatment,
+            };
+            let lines = [line];
+            let invoice = Invoice {
+                number: "2026-0001",
+                issue_date: LocalDate::parse_iso("2026-10-27").unwrap(),
+                due_date: Some(LocalDate::parse_iso("2026-11-26").unwrap()),
+                delivery_date: Some(LocalDate::parse_iso("2026-10-25").unwrap()),
+                doc_type: DocType::Invoice,
+                currency: Currency::EUR,
+                buyer_reference: Some("PO-1"),
+                order_reference: Some("ORDER-7"),
+                note: Some("Thank you"),
+                preceding_invoice: None,
+                seller: &self.seller,
+                customer: &self.customer,
+                lines: &lines,
+                totals: &self.totals,
+            };
+            write_invoice_at(&invoice, profile)
+        }
+
+        fn xml(&self, profile: FacturXProfile) -> String {
+            self.write(profile).expect("the writer accepts its own view")
+        }
+    }
+
     fn round_trip() -> (String, ImportedInvoice) {
-        let mut seller = Party::new(
-            "Seller BV",
-            Address {
-                street: Some("Main 1".to_owned()),
-                city: "Amsterdam".to_owned(),
-                postal_code: Some("1000 AA".to_owned()),
-                country: CountryCode::NL,
-            },
-        );
-        seller.vat_id = Some("NL123456782B01".to_owned());
-        seller.kvk_number = Some("12345678".to_owned());
-        seller.peppol_id = Some("0106:12345678".to_owned());
-        let customer = Party::new(
-            "Customer BV",
-            Address {
-                street: Some("Buyer 1".to_owned()),
-                city: "Rotterdam".to_owned(),
-                postal_code: Some("3000 AA".to_owned()),
-                country: CountryCode::NL,
-            },
-        );
-
-        let treatment = TaxTreatment::standard(VatRate::STANDARD_NL);
-        let line = InvoiceLine {
-            id: 1,
-            name: "Consulting",
-            description: Some("Advice"),
-            quantity: Quantity::from_units(2).unwrap(),
-            unit: UnitCode::PIECE,
-            unit_price: Money::from_major_units(50, Currency::EUR).unwrap(),
-            base_quantity: Quantity::ONE,
-            line_net: Money::from_major_units(100, Currency::EUR).unwrap(),
-            treatment: &treatment,
-        };
-        let lines = [line];
-        let totals = InvoiceTotals {
-            net: Money::from_major_units(100, Currency::EUR).unwrap(),
-            tax: Money::from_major_units(21, Currency::EUR).unwrap(),
-            gross: Money::from_major_units(121, Currency::EUR).unwrap(),
-            breakdown: vec![TaxBreakdown {
-                category: VatCategory::Standard,
-                rate_bp: 2100,
-                taxable_base: Money::from_major_units(100, Currency::EUR).unwrap(),
-                tax: Money::from_major_units(21, Currency::EUR).unwrap(),
-            }],
-        };
-        let invoice = Invoice {
-            number: "2026-0001",
-            issue_date: LocalDate::parse_iso("2026-10-27").unwrap(),
-            due_date: Some(LocalDate::parse_iso("2026-11-26").unwrap()),
-            delivery_date: Some(LocalDate::parse_iso("2026-10-25").unwrap()),
-            doc_type: DocType::Invoice,
-            currency: Currency::EUR,
-            buyer_reference: Some("PO-1"),
-            order_reference: Some("ORDER-7"),
-            note: Some("Thank you"),
-            preceding_invoice: None,
-            seller: &seller,
-            customer: &customer,
-            lines: &lines,
-            totals: &totals,
-        };
-
-        let xml = write_invoice(&invoice).expect("the writer accepts its own view");
+        let parts = Parts::new();
+        let xml = parts.xml(FacturXProfile::DEFAULT);
         let imported = read_document(&xml).expect("the writer's output reads back").invoice;
         (xml, imported)
+    }
+
+    #[test]
+    fn every_level_writes_its_own_guideline() {
+        let parts = Parts::new();
+        for profile in FacturXProfile::ALL {
+            let xml = parts.xml(profile);
+            assert!(
+                xml.contains(&format!("<ram:ID>{}</ram:ID>", profile.guideline())),
+                "{profile} does not name itself: {xml}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_lower_levels_leave_out_what_they_do_not_carry() {
+        let parts = Parts::new();
+
+        let minimum = parts.xml(FacturXProfile::Minimum);
+        assert!(!minimum.contains("IncludedSupplyChainTradeLineItem"), "{minimum}");
+        assert!(!minimum.contains("ram:ApplicableTradeTax"), "{minimum}");
+        assert!(!minimum.contains("ram:CityName"), "{minimum}");
+        assert!(!minimum.contains("ram:SpecifiedTradePaymentTerms"), "{minimum}");
+        assert!(!minimum.contains("ram:BuyerReference"), "{minimum}");
+        // What it keeps is what a posting system needs: who, how much, when.
+        assert!(minimum.contains("<ram:CountryID>NL</ram:CountryID>"), "{minimum}");
+        assert!(
+            minimum.contains("<ram:GrandTotalAmount>121.00</ram:GrandTotalAmount>"),
+            "{minimum}"
+        );
+        assert!(
+            minimum.contains(r#"<ram:TaxTotalAmount currencyID="EUR">21.00</ram:TaxTotalAmount>"#),
+            "{minimum}"
+        );
+
+        let basic_wl = parts.xml(FacturXProfile::BasicWl);
+        assert!(!basic_wl.contains("IncludedSupplyChainTradeLineItem"), "{basic_wl}");
+        assert!(
+            basic_wl.contains("<ram:BasisAmount>100.00</ram:BasisAmount>"),
+            "{basic_wl}"
+        );
+        assert!(
+            basic_wl.contains("<ram:CityName>Amsterdam</ram:CityName>"),
+            "{basic_wl}"
+        );
+        assert!(basic_wl.contains("<ram:SpecifiedTradePaymentTerms>"), "{basic_wl}");
+
+        let basic = parts.xml(FacturXProfile::Basic);
+        assert!(basic.contains("<ram:IncludedSupplyChainTradeLineItem>"), "{basic}");
+        assert!(basic.contains("<ram:ActualDeliverySupplyChainEvent>"), "{basic}");
+    }
+
+    #[test]
+    fn a_minimum_document_reads_back_as_its_amounts() {
+        let parts = Parts::new();
+        let xml = parts.xml(FacturXProfile::Minimum);
+        let read = read_document(&xml)
+            .expect("a minimum document is still a document")
+            .invoice;
+        assert_eq!(read.number, "2026-0001");
+        assert!(read.lines.is_empty(), "the level carries no lines");
+        assert_eq!(read.totals.net.micros(), 100_000_000);
+        assert_eq!(read.totals.tax.micros(), 21_000_000);
+        assert_eq!(read.totals.gross.micros(), 121_000_000);
+        assert!(read.totals.breakdown.is_empty(), "no breakdown below BASIC WL");
+        assert_eq!(read.seller.legal_name, "Seller BV");
+        assert_eq!(read.seller.address.country, CountryCode::NL);
+        assert_eq!(read.profile.as_deref(), Some(FacturXProfile::Minimum.guideline()));
+    }
+
+    #[test]
+    fn a_level_that_needs_the_seller_vat_refuses_without_it() {
+        let mut parts = Parts::new();
+        parts.seller.vat_id = None;
+        assert_eq!(
+            parts.write(FacturXProfile::Minimum),
+            Err(CiiError::MissingField {
+                profile: FacturXProfile::Minimum,
+                field: "BT-31 the seller's VAT identifier",
+            })
+        );
+        // The higher levels keep the lines and the breakdown, which identify the
+        // document without a tax registration.
+        assert!(parts.write(FacturXProfile::En16931).is_ok());
+    }
+
+    #[test]
+    fn a_blank_party_name_is_refused_at_every_level() {
+        let mut parts = Parts::new();
+        parts.customer.legal_name = "  ".to_owned();
+        for profile in FacturXProfile::ALL {
+            assert_eq!(
+                parts.write(profile),
+                Err(CiiError::MissingField {
+                    profile,
+                    field: "BT-44 the buyer's name",
+                }),
+                "{profile}"
+            );
+        }
     }
 
     #[test]
