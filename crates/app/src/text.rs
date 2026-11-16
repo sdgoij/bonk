@@ -2098,6 +2098,11 @@ pub mod editor {
         sentence!(language, "Template", "Sjabloon")
     }
 
+    /// The Factur-X level the hybrid PDF is written at.
+    pub fn facturx_level_label(language: Language) -> &'static str {
+        sentence!(language, "Factur-X level", "Factur-X-niveau")
+    }
+
     /// No particular layout, so the archive's default draws.
     pub fn layout_default(language: Language) -> &'static str {
         sentence!(language, "Archive default", "Standaard van het archief")

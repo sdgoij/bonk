@@ -708,8 +708,9 @@ it is Peppol output regardless.
 
 `bonk issue --profile minimum|basic-wl|basic|en16931|extended` chooses the level;
 the artefact row records `factur-x:<level>`, so the archive says what was claimed
-without anyone opening the bytes. The window issues at EN 16931 — a chooser in the
-form is a later addition, not a gap in the writer.
+without anyone opening the bytes. The window has the same choice in the issue
+form, defaulting to EN 16931; it is a delivery choice rather than draft content,
+so it does not make closing the form ask about unsaved work.
 
 **Status, 2026-11-16 (received documents get a page too).** A document that arrives
 as data now leaves with a page: `application::import` files a hybrid beside the

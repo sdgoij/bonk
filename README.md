@@ -522,7 +522,10 @@ the keyboard, so typing a date cannot walk the queue underneath the form.
 
 Every document chooses its own currency from a picker beside the customer; the
 seller's currency is only the default, and the line amounts are parsed in the
-chosen one.
+chosen one. The form also chooses the Factur-X level the hybrid PDF is written at
+(the default is `EN 16931`), and the UBL artefact and the printed page are the
+same whichever level is picked: the level says how much of the invoice travels
+inside the PDF, not what the invoice says.
 
 Clicking a customer opens it in place and every field is editable, including a
 phone number, which is normalised to E.164 against the party's country

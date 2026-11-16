@@ -12,9 +12,10 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant, SystemTime};
 
 use crux::{
-    AccountCode, Address, CountryCode, Currency, CustomerId, DocType, DocumentId, DomainError, DraftLine, Finding,
-    InvoiceDraft, LineId, LocalDate, Money, Party, PhoneNumber, PrecedingInvoice, Quantity, SavedSearchId, SellerId,
-    Severity, TaxTreatment, UnitCode, VatCategory, VatRate, calculate_totals, has_blocking, validate_draft,
+    AccountCode, Address, CountryCode, Currency, CustomerId, DocType, DocumentId, DomainError, DraftLine,
+    FacturXProfile, Finding, InvoiceDraft, LineId, LocalDate, Money, Party, PhoneNumber, PrecedingInvoice, Quantity,
+    SavedSearchId, SellerId, Severity, TaxTreatment, UnitCode, VatCategory, VatRate, calculate_totals, has_blocking,
+    validate_draft,
 };
 use store::backup::BackupStage;
 use store::{
@@ -987,6 +988,12 @@ struct Editor {
     currency: Currency,
     /// The language the printed document speaks, chosen per document.
     document_language: render::Language,
+    /// The Factur-X level the hybrid is written at.
+    ///
+    /// It changes what the CII inside the PDF carries, not the page: MINIMUM and
+    /// BASIC WL leave out the lines for a counterparty that only books the amount.
+    /// The page and the UBL artefact are the same at every level.
+    profile: FacturXProfile,
     /// The layout this document is printed with, by template file name.
     ///
     /// `None` is the archive default, so the choice is what the user made rather
@@ -1018,6 +1025,7 @@ impl Clone for Editor {
             order_reference: self.order_reference.clone(),
             currency: self.currency,
             document_language: self.document_language,
+            profile: self.profile,
             template: self.template.clone(),
             lines: self.lines.clone(),
             date_popup: self.date_popup,
@@ -1031,7 +1039,10 @@ impl Editor {
     /// Whether both editors hold the same work.
     ///
     /// The date popup and the flags are not the work: a picker left open is not an
-    /// edit, and a draft that reopened is still the invoice it was stored as.
+    /// edit, and a draft that reopened is still the invoice it was stored as. The
+    /// Factur-X level is not the work either: it is how the issued hybrid is
+    /// packaged, not something the draft holds, so changing only the level must
+    /// not make closing the form ask about unsaved work.
     fn same_work(&self, other: &Self) -> bool {
         self.doc_type == other.doc_type
             && self.customer == other.customer
@@ -1061,6 +1072,7 @@ impl Editor {
             order_reference: String::new(),
             currency,
             document_language,
+            profile: FacturXProfile::DEFAULT,
             template: None,
             lines: vec![LineForm::default()],
             date_popup: None,
@@ -3747,6 +3759,19 @@ impl Workspace {
                         layout_changed = editor.template != before;
                     });
                 ui.end_row();
+
+                // The level is a delivery choice, not a legal one: it says how much
+                // of the invoice travels inside the hybrid PDF. The page and the
+                // UBL are the same whichever level is chosen.
+                ui.label(text::editor::facturx_level_label(language));
+                egui::ComboBox::from_id_salt("editor.facturx")
+                    .selected_text(editor.profile.conformance_level())
+                    .show_ui(ui, |ui| {
+                        for profile in crate::FacturXProfile::ALL {
+                            ui.selectable_value(&mut editor.profile, profile, profile.conformance_level());
+                        }
+                    });
+                ui.end_row();
             });
 
             let mut popup_action = CalendarOutcome::Keep;
@@ -4225,21 +4250,19 @@ impl Workspace {
                     customer: &customer,
                     totals: &issued.totals,
                 };
-                if let Err(error) =
-                    crate::facturx(&view, language, template, crate::FacturXProfile::DEFAULT).and_then(|bytes| {
-                        attach_artefact_with_profile(
-                            session.database().connection(),
-                            issued.id,
-                            "facturx",
-                            Some(&crate::FacturXProfile::DEFAULT.artefact_profile()),
-                            &bytes,
-                            render::RENDERER_VERSION,
-                            template_digest.as_deref(),
-                            &now,
-                        )
-                        .map(|_| ())
-                    })
-                    && attach_error.is_none()
+                if let Err(error) = crate::facturx(&view, language, template, editor.profile).and_then(|bytes| {
+                    attach_artefact_with_profile(
+                        session.database().connection(),
+                        issued.id,
+                        "facturx",
+                        Some(&editor.profile.artefact_profile()),
+                        &bytes,
+                        render::RENDERER_VERSION,
+                        template_digest.as_deref(),
+                        &now,
+                    )
+                    .map(|_| ())
+                }) && attach_error.is_none()
                 {
                     attach_error = Some(error.to_string());
                 }
@@ -7356,6 +7379,31 @@ mod tests {
         assert_eq!(edit.form.name, "Klant BV");
         assert_eq!(edit.form.city, "Leiden");
         assert_eq!(edit.form.country, "NL");
+    }
+
+    #[test]
+    fn the_editor_starts_at_the_en16931_level_and_a_level_is_not_draft_work() {
+        // The level is a delivery choice: the form offers it, issuing uses it, and
+        // changing only it must not make closing the composer ask about unsaved
+        // work, because the draft does not hold it.
+        let mut form = editor();
+        assert_eq!(form.profile, FacturXProfile::DEFAULT);
+        assert_eq!(form.profile.conformance_level(), "EN 16931");
+
+        let mut other = form.clone();
+        other.profile = FacturXProfile::BasicWl;
+        assert!(form.same_work(&other), "the level is not part of the draft");
+
+        // What the draft does hold still counts.
+        other.profile = form.profile;
+        other.document_language = match form.document_language {
+            render::Language::English => render::Language::Dutch,
+            render::Language::Dutch => render::Language::English,
+        };
+        assert!(!form.same_work(&other), "the document language is part of the draft");
+
+        form.profile = FacturXProfile::Minimum;
+        assert_eq!(form.profile.conformance_level(), "MINIMUM");
     }
 
     #[test]
