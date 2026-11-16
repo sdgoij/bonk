@@ -735,9 +735,14 @@ what each may carry, so the writer and the packet cannot drift apart. What
 `verify` checks and the container a counterparty receives are the same bytes, so
 nobody has to guess whether what was archived is what was sent.
 
-veraPDF is not run on this output by `just gate`; the structural assertions in
-the tests and the round trip through this project's own PDF reader are what backs
-the claim, and CI has no veraPDF step yet.
+veraPDF is not part of `just gate`, because it is a Java application and the gate
+is offline; `just verapdf` runs it, and CI runs it on the shipped binary. Every
+hybrid at every level is reported as PDF/A-3B (`PASS`, flavour `3b`). That gate
+is not decoration: it is what found that splicing the Factur-X statements into
+the XMP packet left the cross-reference table pointing at the old offsets and the
+stream's `/Length` describing the old bytes. The container now rebuilds the
+metadata object and moves the offsets it moved, and a unit test walks the table
+and fails if an entry does not point at its object.
 
 The printed document's labels are chosen per document: English or Dutch, defaulting
 from the seller's locale. That is the language of the form ("Factuur aan", "BTW",
@@ -759,6 +764,17 @@ directory, generates 20 varied invoices plus a credit note in
 `target/m1-validation/`, and validates every document. Last result: **21/21
 documents valid** against EN 16931 and Peppol BIS 3.0. No Docker required. The
 validator jar is not committed.
+
+For the PDF half of Factur-X, run the PDF/A gate:
+
+```sh
+sh tools/verapdf.sh
+```
+
+It downloads veraPDF into `target/validator/verapdf/` on the first run, issues one
+document at each of the five Factur-X levels plus a credit note and a mixed-rate
+invoice, and validates every hybrid. Last result: **7/7 valid as PDF/A-3B**
+(veraPDF 1.30.4).
 
 For VAT-category or exemption-reason changes, also run the category matrix:
 

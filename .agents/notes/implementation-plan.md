@@ -654,10 +654,34 @@ the `facturx` artefact, imports it into a second archive, and checks the number
 and supplier arrive intact. That round trip is the strongest evidence here that
 the attachment is the invoice and not a copy of it.
 
-What is not done: M4.6, the veraPDF gate, so the conformance claim rests on
-structural assertions and this project's own reader, not on an external
-validator — the README says so plainly. M4.7's preflight diagnostics are not in
-either; a render failure is still a string.
+What is still not done: M4.7's preflight diagnostics; a render failure is still a
+string. The veraPDF gate is in — see below — as is the profile ladder.
+
+**Status, 2026-11-16 (M4.6, the gate that found a bug).** `just verapdf` runs
+`tools/verapdf.sh`: it downloads veraPDF into the ignored `target/validator/`,
+issues a document at each of the five levels plus a credit note and a mixed-rate
+invoice, and refuses the run unless every hybrid comes back `PASS … 3b`. CI runs
+the same script against the shipped Linux binary, and `release` waits for it.
+
+The gate was not ceremony. The first run said the hybrid *was not a valid PDF*:
+splicing the Factur-X statements into the XMP packet had moved every byte after
+the packet, and the cross-reference table still named the old offsets. lopdf —
+this project's own reader, and the one the import round-trip test uses — repairs
+that silently, which is exactly why an internal check could not have found it.
+Fixing the offsets moved the failure to the stream: `/Length` still described the
+shorter packet, and a strict reader stops looking for `endstream` at that byte.
+
+The container now rebuilds the metadata object around the longer packet with a
+correct `/Length`, and corrects every cross-reference entry whose object moved.
+That is a byte-level dependency on krilla's output shape — an uncompressed XMP
+stream of one object, a classic table, a trailer with `startxref` — and every one
+of those anchors is checked rather than assumed, so an upgrade fails loudly
+instead of shipping a container that only lenient readers accept. A unit test
+walks the table the way a strict reader does and fails if an entry does not point
+at its object; another shifts a valid file and proves the check notices.
+
+What is still not done: M4.7's preflight diagnostics; a render failure is still a
+string.
 
 **Status, 2026-11-16 (the profile ladder).** M4.3 is done: `crux::FacturXProfile`
 names the five levels and owns what each may carry, because the same claim is

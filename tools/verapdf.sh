@@ -1,0 +1,186 @@
+#!/usr/bin/env sh
+# M4.6 external PDF/A gate.
+#
+# Issues a document at every Factur-X level and validates each hybrid with
+# veraPDF, the reference PDF/A validator. veraPDF is a Java application, so it is
+# downloaded into the ignored target/ directory and this script is not part of the
+# offline test suite.
+set -eu
+
+cd "$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+
+VERAPDF_DIR=${VERAPDF_DIR:-target/validator/verapdf}
+JAVA_BIN=${JAVA:-java}
+WORK=target/pdfa-validation
+DB=$WORK/bonk.db
+KEY=$WORK/keystore.bin
+OUT=$WORK/out
+PASS=pdfa-validation-gate
+
+if [ -n "${BONK_BIN:-}" ]; then
+    :
+elif [ -x target/debug/bonk.exe ]; then
+    BONK_BIN=target/debug/bonk.exe
+elif [ -x target/debug/bonk ]; then
+    BONK_BIN=target/debug/bonk
+else
+    echo "error: build the CLI first (cargo build -p cli)" >&2
+    exit 1
+fi
+
+if ! command -v "$JAVA_BIN" >/dev/null 2>&1; then
+    echo "error: Java 17+ is required to run veraPDF" >&2
+    exit 1
+fi
+
+verapdf_cli() {
+    ls "$VERAPDF_DIR"/bin/cli-*.jar 2>/dev/null | head -n 1
+}
+
+# The installer ships an IzPack jar that unpacks itself; `auto-install.xml` is the
+# unattended answer file it reads, with the path filled in because the installer
+# resolves it against the working directory java runs in.
+install_verapdf() {
+    echo "downloading veraPDF..."
+    mkdir -p target/validator
+    zip=target/validator/verapdf-installer.zip
+    curl -L --fail --max-time 900 -o "$zip" "https://software.verapdf.org/releases/verapdf-installer.zip"
+
+    rm -rf target/validator/verapdf-unpacked
+    unzip -q -o "$zip" -d target/validator/verapdf-unpacked
+    installer=$(find target/validator/verapdf-unpacked -name 'verapdf-izpack-installer-*.jar' | head -n 1)
+    if [ -z "$installer" ]; then
+        echo "error: the veraPDF download does not contain an installer" >&2
+        exit 1
+    fi
+
+    root=$(pwd -W 2>/dev/null || pwd)
+    answers=target/validator/verapdf-auto-install.xml
+    cat >"$answers" <<EOF
+<AutomatedInstallation langpack="eng">
+    <com.izforge.izpack.panels.htmlhello.HTMLHelloPanel id="welcome"/>
+    <com.izforge.izpack.panels.target.TargetPanel id="install_dir">
+        <installpath>$root/$VERAPDF_DIR</installpath>
+    </com.izforge.izpack.panels.target.TargetPanel>
+    <com.izforge.izpack.panels.packs.PacksPanel id="sdk_pack_select">
+        <pack index="0" name="veraPDF GUI" selected="false"/>
+        <pack index="1" name="veraPDF CLI" selected="true"/>
+        <pack index="2" name="veraPDF Documentation" selected="false"/>
+        <pack index="3" name="veraPDF Sample Plugins" selected="false"/>
+    </com.izforge.izpack.panels.packs.PacksPanel>
+    <com.izforge.izpack.panels.install.InstallPanel id="install"/>
+    <com.izforge.izpack.panels.finish.FinishPanel id="finish"/>
+</AutomatedInstallation>
+EOF
+
+    rm -rf "$VERAPDF_DIR"
+    "$JAVA_BIN" -jar "$installer" "$answers" >target/validator/verapdf-install.log 2>&1 || {
+        echo "error: veraPDF could not be installed; see target/validator/verapdf-install.log" >&2
+        exit 1
+    }
+}
+
+if [ -z "$(verapdf_cli)" ]; then
+    install_verapdf
+fi
+CLI=$(verapdf_cli)
+if [ -z "$CLI" ]; then
+    echo "error: veraPDF installed without a CLI jar" >&2
+    exit 1
+fi
+
+version=$("$JAVA_BIN" -jar "$CLI" --version 2>/dev/null | head -n 1 | tr -d '\r')
+echo "$version"
+
+field() {
+    sed -n "s/^$1: //p" | tr -d '\r'
+}
+
+rm -rf "$WORK"
+mkdir -p "$OUT"
+
+"$BONK_BIN" init --db "$DB" --keystore "$KEY" --passphrase "$PASS" >/dev/null
+seller=$(
+    "$BONK_BIN" seller-add \
+        --db "$DB" --keystore "$KEY" --passphrase "$PASS" \
+        --name "Validation Seller BV" --city Amsterdam \
+        --street "Main 1" --postal "1000 AA" --peppol 0106:12345678 \
+        --vat NL123456782B01 --kvk 12345678 |
+        field seller
+)
+customer=$(
+    "$BONK_BIN" customer-add \
+        --db "$DB" --keystore "$KEY" --passphrase "$PASS" \
+        --name "Alpha Customer BV" --city Rotterdam \
+        --street "Alpha 1" --postal "3000 AA" --peppol 0106:10000001 |
+        field customer
+)
+
+# One invoice per level, so a level that stops conforming fails on its own name
+# rather than somewhere inside a corpus.
+for level in minimum basic-wl basic en16931 extended; do
+    draft=$(
+        "$BONK_BIN" draft-new \
+            --db "$DB" --keystore "$KEY" --passphrase "$PASS" \
+            --seller "$seller" --customer "$customer" \
+            --date 2026-10-27 --due 2026-11-26 --buyer-ref "PO-$level" \
+            --line "Consulting|2|50.00|21" --note "Level $level" |
+            field draft
+    )
+    if [ -z "$draft" ]; then
+        echo "error: could not create the $level draft" >&2
+        exit 1
+    fi
+    "$BONK_BIN" issue "$draft" \
+        --db "$DB" --keystore "$KEY" --passphrase "$PASS" \
+        --profile "$level" --out "$OUT" >/dev/null
+done
+
+# A credit note carries BG-3 and a different document type, and a three-line
+# invoice makes the VAT breakdown do some work.
+credit=$(
+    "$BONK_BIN" credit-note 2026-0001 \
+        --db "$DB" --keystore "$KEY" --passphrase "$PASS" \
+        --date 2026-12-15 |
+        field "credit note"
+)
+if [ -z "$credit" ]; then
+    echo "error: could not create a credit note" >&2
+    exit 1
+fi
+"$BONK_BIN" issue "$credit" \
+    --db "$DB" --keystore "$KEY" --passphrase "$PASS" \
+    --out "$OUT" >/dev/null
+
+mixed=$(
+    "$BONK_BIN" draft-new \
+        --db "$DB" --keystore "$KEY" --passphrase "$PASS" \
+        --seller "$seller" --customer "$customer" \
+        --date 2026-12-01 --due 2026-12-31 --buyer-ref PO-MIXED \
+        --line "Consulting|8|100.00|21|S|HUR" \
+        --line "Handbook print|5|25.00|9|S" |
+        field draft
+)
+"$BONK_BIN" issue "$mixed" \
+    --db "$DB" --keystore "$KEY" --passphrase "$PASS" \
+    --out "$OUT" >/dev/null
+
+total=0
+for pdf in "$OUT"/*.factur-x.pdf; do
+    total=$((total + 1))
+    report=$WORK/$(basename "$pdf").verapdf.log
+    if "$JAVA_BIN" -jar "$CLI" --format text "$pdf" >"$report" 2>&1 && grep -q '^PASS .* 3b$' "$report"; then
+        echo "PASS $(basename "$pdf") PDF/A-3B"
+    else
+        echo "FAIL: $pdf" >&2
+        cat "$report" >&2
+        exit 1
+    fi
+done
+
+if [ "$total" -ne 7 ]; then
+    echo "error: expected 7 hybrids, validated $total" >&2
+    exit 1
+fi
+
+echo "veraPDF: $total hybrids valid as PDF/A-3B (5 levels, 1 credit note, 1 mixed-rate invoice)"

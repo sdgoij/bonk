@@ -198,6 +198,11 @@ validate-findings:
 validate-vat:
     sh tools/validate-vat-matrix.sh
 
+# PDF/A-3 conformance of every Factur-X level, checked by veraPDF (needs Java
+# 17+ and network on the first run, which downloads the validator).
+verapdf:
+    sh tools/verapdf.sh
+
 # Developer automation: `just xtask codelists`, `just xtask conformance <dir>`.
 xtask *args:
     {{cargo}} run -p xtask -- {{args}}

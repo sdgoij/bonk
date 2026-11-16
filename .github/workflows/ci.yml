@@ -442,9 +442,43 @@ jobs:
       - name: VAT category matrix
         run: sh tools/validate-vat-matrix.sh
 
+  # The PDF/A-3 half of Factur-X, checked by the reference validator instead of by
+  # this project's own reader. Same reasoning as the conformance job: the bytes are
+  # platform-independent and veraPDF is a Java process, so one platform is enough.
+  pdfa:
+    name: pdfa (veraPDF)
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "17"
+      # veraPDF is downloaded by the gate itself; the cache only saves the wait.
+      # The key carries no version because the download URL does not either.
+      - uses: actions/cache@v6
+        with:
+          path: target/validator/verapdf
+          key: verapdf-installer
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: bonk-x86_64-unknown-linux-gnu
+          path: package
+
+      - name: Unpack the shipped binary
+        run: |
+          tar -xzf package/bonk-x86_64-unknown-linux-gnu.tar.gz -C "$RUNNER_TEMP"
+          chmod +x "$RUNNER_TEMP/bonk-x86_64-unknown-linux-gnu/bonk"
+          echo "BONK_BIN=$RUNNER_TEMP/bonk-x86_64-unknown-linux-gnu/bonk" >> "$GITHUB_ENV"
+
+      - name: Every Factur-X level is PDF/A-3B
+        run: sh tools/verapdf.sh
+
   release:
     name: release
-    needs: [build, build-macos, conformance, android, android-instrumented]
+    needs: [build, build-macos, conformance, pdfa, android, android-instrumented]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
