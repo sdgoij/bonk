@@ -328,12 +328,13 @@ struct OpenRow {
 }
 
 /// Receivables and payables still open, with their aging at the same date.
+///
+/// The aging is one report per currency, because amounts in different currencies
+/// cannot be added; the rows themselves already carry their own currency.
 struct OpenItemsData {
     rows: Vec<OpenRow>,
-    receivable: Money,
-    payable: Money,
-    receivable_aging: store::Aging,
-    payable_aging: store::Aging,
+    receivable_aging: Vec<store::Aging>,
+    payable_aging: Vec<store::Aging>,
 }
 
 /// The answer to one [`LedgerRequest`].
@@ -4570,12 +4571,8 @@ fn ledger_data(
                     rows.push(OpenRow { item, party });
                 }
             }
-            let receivable = store::open_item_total(connection, seller, store::OpenItemKind::Receivable)?;
-            let payable = store::open_item_total(connection, seller, store::OpenItemKind::Payable)?;
             LedgerData::OpenItems(Box::new(OpenItemsData {
                 rows,
-                receivable,
-                payable,
                 receivable_aging: store::aging(connection, seller, store::OpenItemKind::Receivable, as_of)?,
                 payable_aging: store::aging(connection, seller, store::OpenItemKind::Payable, as_of)?,
             }))
@@ -5082,8 +5079,11 @@ fn vat_panel(ui: &mut egui::Ui, language: Language, state: VatState<'_>) -> Opti
     action
 }
 
-/// One aging bucket's amount.
-fn aging_micros(aging: &store::Aging, bucket: text::ledger::Bucket) -> i64 {
+/// One aging bucket's amount, or zero when that currency has no items of the kind.
+fn aging_micros(aging: Option<&store::Aging>, bucket: text::ledger::Bucket) -> i64 {
+    let Some(aging) = aging else {
+        return 0;
+    };
     match bucket {
         text::ledger::Bucket::Current => aging.current.micros(),
         text::ledger::Bucket::Days1To30 => aging.days_1_30.micros(),
@@ -5101,32 +5101,44 @@ fn open_items_panel(table: &mut Table, ui: &mut egui::Ui, language: Language, da
         return;
     }
 
-    egui::Grid::new("ledger-aging")
-        .num_columns(3)
-        .spacing([18.0, 6.0])
-        .show(ui, |ui| {
-            ui.strong("");
-            ui.strong(text::ledger::receivable(language));
-            ui.strong(text::ledger::payable(language));
-            ui.end_row();
-            for bucket in [
-                text::ledger::Bucket::Current,
-                text::ledger::Bucket::Days1To30,
-                text::ledger::Bucket::Days31To60,
-                text::ledger::Bucket::Days61To90,
-                text::ledger::Bucket::Over90,
-                text::ledger::Bucket::Total,
-            ] {
-                ui.label(text::ledger::bucket(language, bucket));
-                grid_amount(
-                    ui,
-                    aging_micros(&data.receivable_aging, bucket),
-                    data.receivable.currency(),
-                );
-                grid_amount(ui, aging_micros(&data.payable_aging, bucket), data.payable.currency());
+    // One matrix per currency: a bucket cannot hold two currencies, and the
+    // heading only earns its line when there is more than one to tell apart.
+    let mut currencies: Vec<Currency> = Vec::new();
+    for report in data.receivable_aging.iter().chain(data.payable_aging.iter()) {
+        if !currencies.contains(&report.currency) {
+            currencies.push(report.currency);
+        }
+    }
+    let several = currencies.len() > 1;
+    for currency in currencies {
+        if several {
+            ui.strong(currency.as_str());
+        }
+        let receivable = data.receivable_aging.iter().find(|report| report.currency == currency);
+        let payable = data.payable_aging.iter().find(|report| report.currency == currency);
+        egui::Grid::new(format!("ledger-aging-{}", currency.as_str()))
+            .num_columns(3)
+            .spacing([18.0, 6.0])
+            .show(ui, |ui| {
+                ui.strong("");
+                ui.strong(text::ledger::receivable(language));
+                ui.strong(text::ledger::payable(language));
                 ui.end_row();
-            }
-        });
+                for bucket in [
+                    text::ledger::Bucket::Current,
+                    text::ledger::Bucket::Days1To30,
+                    text::ledger::Bucket::Days31To60,
+                    text::ledger::Bucket::Days61To90,
+                    text::ledger::Bucket::Over90,
+                    text::ledger::Bucket::Total,
+                ] {
+                    ui.label(text::ledger::bucket(language, bucket));
+                    grid_amount(ui, aging_micros(receivable, bucket), currency);
+                    grid_amount(ui, aging_micros(payable, bucket), currency);
+                    ui.end_row();
+                }
+            });
+    }
     ui.add_space(8.0);
 
     table.header(ui, "ledger-open", &text::ledger::open_columns(language), width);
@@ -8193,6 +8205,50 @@ mod tests {
             }
             _ => panic!("the VAT return did not load: {:?}", workspace.ledger.error),
         }
+    }
+
+    /// A books that trades in more than its reporting currency must still open the
+    /// subledger tab: the aging keeps each currency apart instead of trying to add
+    /// a pound to a euro, which used to fail the whole screen as a corrupt record.
+    #[test]
+    fn the_open_items_tab_keeps_currencies_apart() {
+        let (_dir, mut session, seller) = posted_session();
+        let customer = list_customers(session.database().connection()).unwrap()[0].clone();
+        let mut form = editor();
+        form.customer = Some(customer.id);
+        form.currency = Currency::GBP;
+        form.due_date = "2026-11-30".to_owned();
+        let draft = build_draft(&form, &seller).unwrap();
+        insert_draft(session.database().connection(), &draft, NOW).unwrap();
+        let issued = issue_draft(
+            session.database_mut().connection_mut(),
+            IssueRequest {
+                draft_id: draft.id,
+                actor: "test",
+                device: "test",
+                renderer_version: "test",
+                now: NOW,
+            },
+            |_| Ok(b"<Invoice/>".to_vec()),
+        )
+        .unwrap();
+        store::post_document(session.database().connection(), issued.id, "test", NOW).unwrap();
+
+        let mut workspace = Workspace::new(&session).unwrap();
+        workspace.tab = Tab::Ledger;
+        workspace.ledger.section = LedgerSection::OpenItems;
+        workspace.load_ledger(&session, seller.id);
+
+        let Some(LedgerData::OpenItems(data)) = workspace.ledger.data.as_ref() else {
+            panic!("the open items did not load: {:?}", workspace.ledger.error);
+        };
+        assert_eq!(data.rows.len(), 2, "the euro invoice and the pound one");
+        let currencies: Vec<Currency> = data.receivable_aging.iter().map(|report| report.currency).collect();
+        assert_eq!(
+            currencies,
+            vec![Currency::EUR, Currency::GBP],
+            "one report each, the reporting currency first"
+        );
     }
 
     /// The month control is the one thing this tab writes, so it is worth walking:

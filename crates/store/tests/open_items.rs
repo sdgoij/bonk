@@ -6,7 +6,7 @@ use crux::{
     Address, CountryCode, Currency, CustomerId, DocType, DocumentId, DraftLine, InvoiceDraft, LineId, LocalDate, Money,
     Party, Quantity, SellerId, TaxTreatment, UnitCode, VatRate,
 };
-use store::open_items::{OpenItemKind, aging, list, total};
+use store::open_items::{OpenItemKind, aging, list, totals};
 use store::{
     CustomerRecord, Database, IssueRequest, KdfParams, KeyStore, SellerRecord, insert_customer, insert_draft,
     insert_seller, issue_draft, post_document, post_outbound_document, seed_starter_chart,
@@ -68,7 +68,11 @@ impl Books {
     }
 
     fn issue(&mut self, net_units: i64, on: &str, due: Option<&str>) -> DocumentId {
-        let mut draft = InvoiceDraft::new(self.seller, self.customer, Currency::EUR, date(on));
+        self.issue_in(Currency::EUR, net_units, on, due)
+    }
+
+    fn issue_in(&mut self, currency: Currency, net_units: i64, on: &str, due: Option<&str>) -> DocumentId {
+        let mut draft = InvoiceDraft::new(self.seller, self.customer, currency, date(on));
         draft.due_date = due.map(date);
         draft.lines.push(DraftLine {
             id: LineId::new(),
@@ -77,7 +81,7 @@ impl Books {
             description: None,
             quantity: Quantity::ONE,
             unit: UnitCode::PIECE,
-            unit_price: euros(net_units),
+            unit_price: Money::from_major_units(net_units, currency).unwrap(),
             price_base_quantity: Quantity::ONE,
             treatment: TaxTreatment::standard(VatRate::STANDARD_NL),
         });
@@ -224,8 +228,8 @@ fn a_credit_note_is_a_negative_open_item() {
     assert_eq!(items.len(), 2);
     assert_eq!(items[1].amount, euros(-1_210), "the correction reduces what is owed");
     assert_eq!(
-        total(books.database.connection(), books.seller, OpenItemKind::Receivable).unwrap(),
-        euros(0),
+        totals(books.database.connection(), books.seller, OpenItemKind::Receivable).unwrap(),
+        vec![euros(0)],
         "and the subledger nets to nothing"
     );
 }
@@ -244,13 +248,16 @@ fn aging_puts_each_item_in_the_bucket_its_due_date_earns() {
 
     // Cut at 2026-04-01: one not yet due, one 17 days over, one 45 days over,
     // one 102 days over.
-    let report = aging(
+    let reports = aging(
         books.database.connection(),
         books.seller,
         OpenItemKind::Receivable,
         date("2026-04-01"),
     )
     .unwrap();
+    assert_eq!(reports.len(), 1, "one currency makes one report");
+    let report = &reports[0];
+    assert_eq!(report.currency, Currency::EUR);
 
     assert_eq!(report.current, euros(121));
     assert_eq!(report.days_1_30, euros(121));
@@ -258,6 +265,40 @@ fn aging_puts_each_item_in_the_bucket_its_due_date_earns() {
     assert_eq!(report.days_61_90, euros(0));
     assert_eq!(report.over_90, euros(121));
     assert_eq!(report.total().unwrap(), euros(484));
+}
+
+#[test]
+fn aging_keeps_each_currency_apart() {
+    let mut books = Books::open();
+    let invoice = books.issue_in(Currency::EUR, 100, "2026-01-05", Some("2026-02-04"));
+    post_outbound_document(books.database.connection(), invoice, "ada", NOW).unwrap();
+    let invoice = books.issue_in(Currency::GBP, 200, "2026-01-06", Some("2026-02-05"));
+    post_outbound_document(books.database.connection(), invoice, "ada", NOW).unwrap();
+
+    // Both are 45-odd days over at 2026-04-01, but a pound is not a euro: the
+    // buckets must not mix them, which is what a currency-mismatch report used to
+    // turn into a corrupt-record error on the open items screen.
+    let reports = aging(
+        books.database.connection(),
+        books.seller,
+        OpenItemKind::Receivable,
+        date("2026-04-01"),
+    )
+    .unwrap();
+    assert_eq!(reports.len(), 2, "one report per currency");
+    assert_eq!(reports[0].currency, Currency::EUR, "the reporting currency comes first");
+    assert_eq!(reports[0].days_31_60, euros(121));
+    assert_eq!(reports[0].total().unwrap(), euros(121));
+    assert_eq!(reports[1].currency, Currency::GBP);
+    let pounds = Money::from_major_units(242, Currency::GBP).unwrap();
+    assert_eq!(reports[1].days_31_60, pounds);
+    assert_eq!(reports[1].total().unwrap(), pounds);
+
+    assert_eq!(
+        totals(books.database.connection(), books.seller, OpenItemKind::Receivable).unwrap(),
+        vec![euros(121), pounds],
+        "the totals are per currency too"
+    );
 }
 
 #[test]
@@ -332,8 +373,8 @@ fn a_rebuild_writes_the_items_an_older_archive_never_wrote() {
     assert_eq!(receivable[0].source, invoice);
     assert_eq!(receivable[1].amount, euros(-1_210), "the credit note keeps its sign");
     assert_eq!(
-        total(connection, books.seller, OpenItemKind::Receivable).unwrap(),
-        euros(0)
+        totals(connection, books.seller, OpenItemKind::Receivable).unwrap(),
+        vec![euros(0)]
     );
     let payable = list(connection, books.seller, OpenItemKind::Payable).unwrap();
     assert_eq!(payable.len(), 1);

@@ -1726,6 +1726,26 @@ finish step's own posting loop only bites in a capped archive, where the newest
 archive passes it: posting another year there is minutes of seeding for a year
 nobody opens.
 
+**Status, 2026-11-16 (a subledger in two currencies no longer crashes the screen).**
+An open item keeps the currency of the document it came from, but
+`open_items::aging` seeded its buckets with the books' reporting currency and then
+added each item's amount to them, so a books holding a euro and a pound invoice
+failed the addition and the Ledger tab showed
+`corrupt record: currency mismatch: EUR vs GBP` instead of the subledger. Aging and
+totals are now kept per currency — the reporting currency first, the rest in code
+order — the window draws one aging matrix per currency, and `bonk ledger
+open-items` prints a block per currency and each item in its own. What this does
+not do is convert: posting still writes the document currency,
+`base_amount_micros` still equals the line amount, `allocation.fx_difference_micros`
+is still always zero, and the control-account check still adds the currencies
+numerically. Realised FX is therefore the next accounting slice and stays open:
+a versioned, offline rate cache (ECB reference rates, with a per-document override
+that is part of the posting record), conversion of the GL share of a
+foreign-currency posting, and a realised-difference account settled on payment,
+as §3.5 of the accounting design requires. Until that exists, a trial balance, P&L,
+or balance sheet that spans more than the reporting currency is only right per
+document, not as a total.
+
 ---
 
 ## 5. First two weeks, concretely

@@ -9,6 +9,8 @@
 //! allocated against the invoice it corrects, and that sign is what keeps the
 //! control account equal to the sum of the subledger across a correction.
 
+use std::collections::BTreeMap;
+
 use crux::{Currency, CustomerId, DocumentId, LocalDate, Money, SellerId};
 use rusqlite::{Connection, params};
 use serde_json::json;
@@ -119,12 +121,16 @@ pub struct AgingBucket {
     pub outstanding_micros: i64,
 }
 
-/// Aging of a subledger at a date.
+/// Aging of one currency of a subledger at a date.
+///
+/// A subledger that holds documents in more than one currency has one report per
+/// currency: amounts in different currencies cannot be added, and pretending they
+/// can is how a total becomes a lie.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Aging {
     /// Receivable or payable.
     pub kind: OpenItemKind,
-    /// Reporting currency of the books.
+    /// Currency of every amount in this report.
     pub currency: Currency,
     /// The date the buckets were cut at.
     pub as_of: LocalDate,
@@ -240,39 +246,58 @@ pub fn list(conn: &Connection, seller_id: SellerId, kind: OpenItemKind) -> Resul
     Ok(items)
 }
 
-/// Signed total still outstanding of one kind, allocations included.
-pub fn total(conn: &Connection, seller_id: SellerId, kind: OpenItemKind) -> Result<Money, StoreError> {
-    let currency = crate::report::reporting_currency(conn, seller_id)?;
-    let total: Option<i64> = conn.query_row(
-        "SELECT sum(o.amount_micros + COALESCE(
+/// Signed totals still outstanding of one kind, once per currency.
+///
+/// A document is raised in its own currency and its item keeps it, so a books
+/// that trades in more than its reporting currency has a total per currency
+/// rather than one number that mixes them. The reporting currency comes first;
+/// the rest follow in code order.
+pub fn totals(conn: &Connection, seller_id: SellerId, kind: OpenItemKind) -> Result<Vec<Money>, StoreError> {
+    let reporting = crate::report::reporting_currency(conn, seller_id)?;
+    let mut statement = conn.prepare(
+        "SELECT o.currency, sum(o.amount_micros + COALESCE(
                     (SELECT sum(a.amount_micros) FROM allocation a WHERE a.open_item_id = o.id), 0))
-         FROM open_item o WHERE o.seller_id = ?1 AND o.kind = ?2",
-        params![seller_id.to_string(), kind.as_str()],
-        |row| row.get(0),
+         FROM open_item o WHERE o.seller_id = ?1 AND o.kind = ?2
+         GROUP BY o.currency",
     )?;
-    Ok(Money::from_micros(total.unwrap_or(0), currency))
+    let mut rows = statement.query(params![seller_id.to_string(), kind.as_str()])?;
+    let mut totals = Vec::new();
+    while let Some(row) = rows.next()? {
+        let raw: String = row.get(0)?;
+        let currency = Currency::parse(&raw).map_err(|error| StoreError::Data(error.to_string()))?;
+        totals.push(Money::from_micros(row.get(1)?, currency));
+    }
+    totals.sort_by_key(|total| (total.currency() != reporting, total.currency()));
+    Ok(totals)
 }
 
-/// Ages the open items of one kind at a date.
+/// Ages the open items of one kind at a date, once per currency.
+///
+/// The buckets are cut at the same date for every currency, but each is kept
+/// apart: a euro bucket holding pounds would fail its own arithmetic, and a total
+/// that added them would be worse than one that refused. The report for the books'
+/// reporting currency comes first; the rest follow in code order.
 pub fn aging(
     conn: &Connection,
     seller_id: SellerId,
     kind: OpenItemKind,
     as_of: LocalDate,
-) -> Result<Aging, StoreError> {
-    let currency = crate::report::reporting_currency(conn, seller_id)?;
-    let mut aging = Aging {
-        kind,
-        currency,
-        as_of,
-        current: Money::zero(currency),
-        days_1_30: Money::zero(currency),
-        days_31_60: Money::zero(currency),
-        days_61_90: Money::zero(currency),
-        over_90: Money::zero(currency),
-    };
+) -> Result<Vec<Aging>, StoreError> {
+    let reporting = crate::report::reporting_currency(conn, seller_id)?;
+    let mut reports: BTreeMap<Currency, Aging> = BTreeMap::new();
 
-    for item in list(conn, seller_id, kind)?.iter().filter(|item| item.is_open()) {
+    for item in list(conn, seller_id, kind)?.into_iter().filter(OpenItem::is_open) {
+        let currency = item.outstanding.currency();
+        let aging = reports.entry(currency).or_insert_with(|| Aging {
+            kind,
+            currency,
+            as_of,
+            current: Money::zero(currency),
+            days_1_30: Money::zero(currency),
+            days_31_60: Money::zero(currency),
+            days_61_90: Money::zero(currency),
+            over_90: Money::zero(currency),
+        });
         let days = item.days_past_due(as_of);
         let slot = match days {
             None | Some(i64::MIN..=0) => &mut aging.current,
@@ -285,7 +310,10 @@ pub fn aging(
             .checked_add(item.outstanding)
             .map_err(|error| StoreError::Data(error.to_string()))?;
     }
-    Ok(aging)
+
+    let mut reports: Vec<Aging> = reports.into_values().collect();
+    reports.sort_by_key(|report| (report.currency != reporting, report.currency));
+    Ok(reports)
 }
 
 /// The audit payload for one open item, so a posting names what it created.

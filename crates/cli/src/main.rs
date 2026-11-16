@@ -2590,41 +2590,46 @@ fn ledger(access: &Access, database: &Path, keystore: &Path, command: LedgerComm
                 }
                 None => store::OpenItemKind::Receivable,
             };
-            let currency = store::reporting_currency(connection, owner)?;
 
             if aging {
-                let report = store::aging(connection, owner, kind, as_of)?;
-                println!("{} at {as_of} ({})", kind.as_str(), report.currency);
-                println!(
-                    "{:<20} {:>14}",
-                    "not yet due",
-                    amount_text(report.current.micros(), currency)?
-                );
-                println!(
-                    "{:<20} {:>14}",
-                    "1-30 days",
-                    amount_text(report.days_1_30.micros(), currency)?
-                );
-                println!(
-                    "{:<20} {:>14}",
-                    "31-60 days",
-                    amount_text(report.days_31_60.micros(), currency)?
-                );
-                println!(
-                    "{:<20} {:>14}",
-                    "61-90 days",
-                    amount_text(report.days_61_90.micros(), currency)?
-                );
-                println!(
-                    "{:<20} {:>14}",
-                    "over 90 days",
-                    amount_text(report.over_90.micros(), currency)?
-                );
-                println!(
-                    "{:<20} {:>14}",
-                    "total",
-                    amount_text(report.total()?.micros(), currency)?
-                );
+                let reports = store::aging(connection, owner, kind, as_of)?;
+                if reports.is_empty() {
+                    println!("no open {}", kind.as_str());
+                    return Ok(());
+                }
+                for report in reports {
+                    println!("{} at {as_of} ({})", kind.as_str(), report.currency);
+                    println!(
+                        "{:<20} {:>14}",
+                        "not yet due",
+                        amount_text(report.current.micros(), report.currency)?
+                    );
+                    println!(
+                        "{:<20} {:>14}",
+                        "1-30 days",
+                        amount_text(report.days_1_30.micros(), report.currency)?
+                    );
+                    println!(
+                        "{:<20} {:>14}",
+                        "31-60 days",
+                        amount_text(report.days_31_60.micros(), report.currency)?
+                    );
+                    println!(
+                        "{:<20} {:>14}",
+                        "61-90 days",
+                        amount_text(report.days_61_90.micros(), report.currency)?
+                    );
+                    println!(
+                        "{:<20} {:>14}",
+                        "over 90 days",
+                        amount_text(report.over_90.micros(), report.currency)?
+                    );
+                    println!(
+                        "{:<20} {:>14}",
+                        "total",
+                        amount_text(report.total()?.micros(), report.currency)?
+                    );
+                }
                 return Ok(());
             }
 
@@ -2646,18 +2651,19 @@ fn ledger(access: &Access, database: &Path, keystore: &Path, command: LedgerComm
                     item.id,
                     item.number,
                     item.original_date.to_iso_string(),
-                    amount_text(item.outstanding.micros(), currency)?,
+                    amount_text(item.outstanding.micros(), item.outstanding.currency())?,
                     item.due_date.map(|due| due.to_iso_string()).unwrap_or_default(),
                     item.party_id
                 );
             }
-            let total = store::open_item_total(connection, owner, kind)?;
-            println!(
-                "{:<38} {:<27} {:>14}",
-                "",
-                "total",
-                amount_text(total.micros(), currency)?
-            );
+            for total in store::open_item_totals(connection, owner, kind)? {
+                println!(
+                    "{:<38} {:<27} {:>14}",
+                    "",
+                    "total",
+                    amount_text(total.micros(), total.currency())?
+                );
+            }
             Ok(())
         }
         LedgerCommand::Reverse {

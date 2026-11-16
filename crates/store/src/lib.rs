@@ -68,7 +68,7 @@ pub use ledger::{
 };
 pub use open_items::{
     Aging, OpenItem, OpenItemKind, RebuildReport, aging, list as open_items, rebuild as rebuild_open_items,
-    total as open_item_total,
+    totals as open_item_totals,
 };
 pub use posting::{
     DEBTORS, PROFILE_ID, PendingPosting, RULE_VERSION, SELF_ASSESSED_RATE_BP, UNCLASSIFIED_EXPENSE, VAT_RECEIVABLE,
