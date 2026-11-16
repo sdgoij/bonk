@@ -673,7 +673,8 @@ ships that day. `tools/verapdf.sh` compares the version it installed against the
 pin and stops with an explanation when upstream has moved, and the CI cache key
 carries the same version so a cached install cannot outlive the pin. The twelve
 validations run four at a time — four cores, one JVM per file, and no shared state
-— which takes the step from about twenty-five seconds to nine.
+— which takes the step from about twenty-five seconds to nineteen on a runner, and
+to nine on a machine whose page cache already holds the jars.
 
 The gate was not ceremony. The first run said the hybrid *was not a valid PDF*:
 splicing the Factur-X statements into the XMP packet had moved every byte after
