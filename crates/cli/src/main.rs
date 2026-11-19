@@ -778,6 +778,23 @@ enum LedgerCommand {
         #[arg(long)]
         out: Option<PathBuf>,
     },
+    /// Write the accountant handoff package for a year.
+    ///
+    /// The directory holds the reports, the journal, the open items, the prepared
+    /// VAT returns, the ICP listings, and the window's document artefacts, with a
+    /// manifest of every file and its SHA-256. It refuses rather than dropping a
+    /// 3a line it cannot name.
+    #[command(name = "package")]
+    Package {
+        /// Year the package covers; defaults to this year.
+        #[arg(long)]
+        year: Option<i32>,
+        /// Directory to write; it must not already contain a package.
+        #[arg(long)]
+        out: PathBuf,
+        #[arg(long, default_value = "cli")]
+        actor: String,
+    },
     /// Close a month, so nothing can be posted into it.
     ///
     /// Prints what the period is and what stands in the way; with `--dry-run` it
@@ -2384,7 +2401,7 @@ fn ledger(access: &Access, database: &Path, keystore: &Path, command: LedgerComm
                         reasons.join("; ")
                     )));
                 }
-                let rendered = export::icp_csv(&listing)?;
+                let rendered = store::vat::icp_csv(&listing)?;
                 match &out {
                     Some(path) => {
                         std::fs::write(path, &rendered)?;
@@ -2422,6 +2439,24 @@ fn ledger(access: &Access, database: &Path, keystore: &Path, command: LedgerComm
                 for problem in &listing.problems {
                     println!("  {}: {}", problem.number, problem.reason);
                 }
+            }
+            Ok(())
+        }
+        LedgerCommand::Package { year, out, actor } => {
+            let year = year.unwrap_or_else(|| LocalDate::today_utc().as_date().year());
+            let from = LocalDate::from_ymd(year, 1, 1)?;
+            let to = LocalDate::from_ymd(year, 12, 31)?;
+            let report = store::package::export(connection, owner, from, to, &out, &actor, &now)?;
+            println!("package:    {}", out.display());
+            println!("window:     {} to {}", report.from, report.to);
+            println!("files:      {} ({} bytes)", report.files, report.bytes);
+            println!("documents:  {}", report.documents);
+            println!("journal:    {} entries", report.journal_entries);
+            println!("returns:    {} prepared", report.vat_returns);
+            println!("icp:        {} month(s)", report.icp_months);
+            match &report.head {
+                Some(hash) => println!("chain:      {hash}"),
+                None => println!("chain:      empty"),
             }
             Ok(())
         }

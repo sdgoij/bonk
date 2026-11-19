@@ -1802,9 +1802,26 @@ because Greece writes `EL` and Northern Ireland `XI`. A 3a line with no usable
 identifier is reported with its document instead of being dropped, and the CSV is
 refused while any such line exists, because the listing has to add up to box 3a.
 Credit notes carry their negative sign into the buyer's row, and the listing is in
-the books' reporting currency, like the return it accompanies. What remains for A5
-is the accountant package that will carry the return and this listing together,
-the opening-balance import, and the hardening the exit criteria ask for.
+the books' reporting currency, like the return it accompanies. The opening-balance
+import and the hardening the exit criteria ask for remain for A5.
+
+**Status, 2026-11-19 (the accountant handoff package is in).**
+`store::package::export` writes a directory — like an evidence bundle, not a zip,
+because the parts stay readable and no zip implementation has to stay byte-stable —
+holding the trial balance, profit and loss, balance sheet, the journal listing with
+each entry's content hash, the open items, every prepared VAT return in the window,
+the ICP listing for every month that had intra-EU supplies, and the UBL, PDF, and
+received bytes of every document dated in it. `manifest.json` lists each file with
+its SHA-256 and the audit chain head, and the export re-reads what it wrote before
+reporting success. `bonk ledger package --year --out` prints the counts. Everything
+that can refuse is checked before the directory is created: an ICP listing that
+cannot name a buyer stops the package, so a handoff cannot quietly drop a 3a line,
+and an existing manifest is never overwritten. The reports are as of the window,
+while the open-items file is the position when the package was written, because the
+subledger does not store an as-of settlement date; the README says so rather than
+leaving the reader to assume otherwise. What remains for A5 is the opening-balance
+import, the performance benchmarks the exit criteria name, and the pilot migration
+itself.
 
 ---
 

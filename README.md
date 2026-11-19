@@ -267,6 +267,7 @@ bonk ledger vat-return --year 2026 --month 3            # preview the aangifte
 bonk ledger vat-return --year 2026 --month 3 --prepare  # store it, with its basis
 bonk ledger icp --year 2026 --month 3                   # Opgaaf ICP, grouped by buyer
 bonk ledger icp --year 2026 --month 3 --out icp.csv    # the same listing as CSV
+bonk ledger package --year 2026 --out handoff/2026     # reports, returns, listings, documents
 bonk ledger close --year 2026 --month 3                 # refuse postings into the month
 bonk ledger close --year 2026 --month 3 --dry-run       # what would stop it
 bonk ledger reopen --year 2026 --month 3 --reason "vergeten factuur"
@@ -324,6 +325,18 @@ identifier is reported with its document rather than dropped, and `--csv` or
 `--out` refuses to write while one exists: a listing that quietly left it out
 would not agree with the return. The amounts are in the books' reporting
 currency, like the return they accompany.
+
+`ledger package` writes the handoff an accountant works from: one directory with
+the trial balance, profit and loss, balance sheet, journal listing, open items,
+every prepared VAT return, the ICP listing for each month that had one, and the
+UBL/PDF/received bytes of every document in the window. It is a directory rather
+than a zip so every part stays readable, and `manifest.json` lists each file with
+its SHA-256 and the audit chain head; the export re-reads what it wrote before
+reporting success. A month whose 3a line has no usable VAT identifier stops the
+package, because a handoff that dropped it would not agree with the return, and an
+existing package is never overwritten. The ledger reports are as of the window;
+the open-items file is the position when the package was written, which the
+package's README says plainly.
 
 A document keeps its own currency; the ledger keeps the seller's reporting
 currency. A foreign-currency posting uses the latest cached reference rate at or

@@ -1339,7 +1339,7 @@ fn walk(directory: &Path) -> Result<Vec<String>, StoreError> {
     Ok(out)
 }
 
-fn safe_name(value: &str) -> String {
+pub(crate) fn safe_name(value: &str) -> String {
     value
         .chars()
         .map(|character| {
@@ -1352,7 +1352,7 @@ fn safe_name(value: &str) -> String {
         .collect()
 }
 
-fn extension(kind: &str) -> &'static str {
+pub(crate) fn extension(kind: &str) -> &'static str {
     match kind {
         "ubl" | "cii" => "xml",
         "pdf" | "facturx" => "pdf",
@@ -1360,7 +1360,7 @@ fn extension(kind: &str) -> &'static str {
     }
 }
 
-fn extension_for_source(source_kind: &str) -> &'static str {
+pub(crate) fn extension_for_source(source_kind: &str) -> &'static str {
     match source_kind {
         "ubl" | "cii" => "xml",
         "pdf" => "pdf",

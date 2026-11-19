@@ -33,6 +33,7 @@ pub mod kit;
 pub mod ledger;
 pub mod migrations;
 pub mod open_items;
+pub mod package;
 pub mod permissions;
 pub mod posting;
 pub mod reconcile;
@@ -76,6 +77,7 @@ pub use open_items::{
     Aging, OpenItem, OpenItemKind, RebuildReport, aging, list as open_items, rebuild as rebuild_open_items,
     totals as open_item_totals,
 };
+pub use package::PackageReport;
 pub use posting::{
     CREDITORS, DEBTORS, PROFILE_ID, PendingPosting, RULE_VERSION, SELF_ASSESSED_RATE_BP, UNCLASSIFIED_EXPENSE,
     VAT_RECEIVABLE, output_vat_account, pending, post_document, post_inbound_document, post_outbound_document,

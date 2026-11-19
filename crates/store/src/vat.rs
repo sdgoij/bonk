@@ -18,7 +18,9 @@
 
 use std::collections::BTreeMap;
 
-use crux::{AccountCode, AccountKind, Currency, Journal, JournalEntryId, LocalDate, SellerId, VatCategory, VatTag};
+use crux::{
+    AccountCode, AccountKind, Currency, Journal, JournalEntryId, LocalDate, Money, SellerId, VatCategory, VatTag,
+};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::{Value, json};
 
@@ -892,6 +894,54 @@ fn valid_vat_id(value: &str) -> bool {
         && bytes[2..].iter().all(u8::is_ascii_alphanumeric)
 }
 
+/// Renders the ICP listing as RFC 4180 CSV with `\n` line endings.
+///
+/// The header is stable and the rows follow the listing's order. It is a handoff
+/// for a person or a spreadsheet, not a portal upload, so it names its columns
+/// rather than guessing a format somebody else might change.
+pub fn icp_csv(listing: &IcpListing) -> Result<String, StoreError> {
+    const HEADER: &str = "period,country,vat_id,customer,supplies";
+    let mut out = String::from(HEADER);
+    out.push('\n');
+    let period = format!("{}-{:02}", listing.year, listing.period_no);
+    for row in &listing.rows {
+        let supplies = Money::from_micros(row.supplies_micros, listing.currency)
+            .to_fixed_string(2)
+            .map_err(|error| StoreError::Data(error.to_string()))?;
+        let fields = [
+            period.as_str(),
+            row.country.as_str(),
+            row.vat_id.as_str(),
+            row.customer.as_str(),
+            supplies.as_str(),
+        ];
+        for (index, field) in fields.iter().enumerate() {
+            if index > 0 {
+                out.push(',');
+            }
+            push_csv_field(&mut out, field);
+        }
+        out.push('\n');
+    }
+    Ok(out)
+}
+
+/// Quotes a CSV field only when it would otherwise break the columns.
+fn push_csv_field(out: &mut String, field: &str) {
+    if !field.contains([',', '"', '\n', '\r']) {
+        out.push_str(field);
+        return;
+    }
+    out.push('"');
+    for character in field.chars() {
+        if character == '"' {
+            out.push('"');
+        }
+        out.push(character);
+    }
+    out.push('"');
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1061,5 +1111,37 @@ mod tests {
         let (start, end) = period_bounds(2024, 2).unwrap();
         assert_eq!(start.to_iso_string(), "2024-02-01");
         assert_eq!(end.to_iso_string(), "2024-02-29");
+    }
+
+    #[test]
+    fn icp_csv_is_one_row_per_buyer_and_quotes_what_breaks_columns() {
+        let listing = IcpListing {
+            currency: Currency::EUR,
+            year: 2026,
+            period_no: 1,
+            rows: vec![
+                IcpRow {
+                    country: "DE".to_owned(),
+                    vat_id: "DE123456789".to_owned(),
+                    customer: "Kunde, GmbH".to_owned(),
+                    supplies_micros: 1_000_000_000,
+                },
+                IcpRow {
+                    country: "FR".to_owned(),
+                    vat_id: "FR12345678901".to_owned(),
+                    customer: "Client SA".to_owned(),
+                    supplies_micros: -250_000_000,
+                },
+            ],
+            problems: Vec::new(),
+            basis: Vec::new(),
+        };
+        let csv = icp_csv(&listing).unwrap();
+
+        let mut lines = csv.lines();
+        assert_eq!(lines.next(), Some("period,country,vat_id,customer,supplies"));
+        assert_eq!(lines.next(), Some("2026-01,DE,DE123456789,\"Kunde, GmbH\",1000.00"));
+        assert_eq!(lines.next(), Some("2026-01,FR,FR12345678901,Client SA,-250.00"));
+        assert_eq!(lines.next(), None);
     }
 }
