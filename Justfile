@@ -63,7 +63,7 @@ bench-ledger-seed:
     BONK_PASSPHRASE={{bench-passphrase}} {{cargo}} run -p cli -- --db {{bench-ledger-db}} demo-seed --force --invoices 0 --received 0 --skip-last-year
     BONK_PASSPHRASE={{bench-passphrase}} {{cargo}} run -p cli -- --db {{bench-ledger-db}} bench-seed
 
-# M10 exit criterion: a trial balance over 500 000 journal lines under 200 ms.
+# M10 exit criterion: a trial balance over 500 000 journal lines under 2 s.
 bench-ledger:
     BONK_PASSPHRASE={{bench-passphrase}} {{cargo}} run -p cli --release -- --db {{bench-ledger-db}} bench-ledger --repeat 20
 

@@ -70,8 +70,8 @@ pub fn seed_ledger(conn: &Connection, seller_id: SellerId, year: i32, entries: u
             "INSERT INTO journal_line
                  (id, entry_id, line_no, account_code, side, amount_micros, currency,
                   fx_rate_micros, base_amount_micros, party_id, tax_code_id, description,
-                  vat_category, vat_rate_bp)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'EUR', NULL, ?6, NULL, NULL, NULL, NULL, NULL)",
+                  vat_category, vat_rate_bp, entry_date_local, period_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'EUR', NULL, ?6, NULL, NULL, NULL, NULL, NULL, ?7, ?8)",
         )?;
         for index in 0..entries {
             let days = i64::try_from(index % 365).map_err(|_| StoreError::Data("too many entries".to_owned()))?;
@@ -79,19 +79,23 @@ pub fn seed_ledger(conn: &Connection, seller_id: SellerId, year: i32, entries: u
                 .plus_days(days)
                 .map_err(|error| StoreError::Data(error.to_string()))?;
             let month = u8::from(date.as_date().month());
+            let period = &periods[usize::from(month) - 1];
+            let date_text = date.to_iso_string();
             let id = JournalEntryId::new().to_string();
             let number = format!("BENCH-{index:08}");
             let hash = crate::audit::sha256_hex(format!("bench-{index}").as_bytes());
-            entry.execute(params![
-                id,
-                periods[usize::from(month) - 1],
-                number,
-                date.to_iso_string(),
-                CREATED_AT,
-                hash
-            ])?;
+            entry.execute(params![id, period, number, date_text, CREATED_AT, hash])?;
             for (line_no, account, side, amount) in LINES {
-                line.execute(params![format!("{id}-{line_no}"), id, line_no, account, side, amount])?;
+                line.execute(params![
+                    format!("{id}-{line_no}"),
+                    id,
+                    line_no,
+                    account,
+                    side,
+                    amount,
+                    date_text,
+                    period
+                ])?;
             }
         }
     }

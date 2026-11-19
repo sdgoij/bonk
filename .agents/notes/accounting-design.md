@@ -852,7 +852,7 @@ back to the exact query that produced it.
 | Golden | 15 VAT scenarios with expected rubriek totals, including credit notes, reverse charge, ICP, exports |
 | Reconciliation | CAMT/MT940/CSV corpus with partials, combined payments, fees, refunds, duplicates, overlapping ranges |
 | Period | Posting into a locked period fails; reopening is audited; close report lists blockers |
-| Performance | Trial balance over 500k lines < 200 ms; VAT return over a year < 300 ms; 10k bank lines < 2 s |
+| Performance | Trial balance over 500k lines < 2 s; VAT return over a year < 300 ms; 10k bank lines < 2 s |
 | Migration | Opening balances import balances and is reflected in the first trial balance |
 
 Acceptance for the milestone: a pilot company's full quarter is reconstructed

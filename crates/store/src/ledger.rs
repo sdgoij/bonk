@@ -1086,8 +1086,8 @@ fn post_entry_into(
             "INSERT INTO journal_line
                  (id, entry_id, line_no, account_code, side, amount_micros, currency,
                   fx_rate_micros, base_amount_micros, party_id, tax_code_id, description,
-                  vat_category, vat_rate_bp)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, NULL, ?10, NULL, ?11, ?12)",
+                  vat_category, vat_rate_bp, entry_date_local, period_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, NULL, ?10, NULL, ?11, ?12, ?13, ?14)",
             params![
                 JournalEntryId::new().to_string(),
                 id.to_string(),
@@ -1101,6 +1101,8 @@ fn post_entry_into(
                 line.tax_code().map(crux::TaxCode::as_str),
                 line.vat().map(|tag| tag.category.code()),
                 line.vat().map(|tag| tag.rate_bp),
+                request.entry_date.to_iso_string(),
+                period.id.to_string(),
             ],
         )?;
     }

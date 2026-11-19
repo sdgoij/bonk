@@ -165,6 +165,13 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("../migrations/0021_fx_settlement.sql"),
         down: None,
     },
+    Migration {
+        version: 22,
+        name: "0022_ledger_line_dates",
+        // Reversible: the columns are a copy of facts the entry still carries.
+        sql: include_str!("../migrations/0022_ledger_line_dates.sql"),
+        down: Some(include_str!("../migrations/0022_ledger_line_dates_down.sql")),
+    },
 ];
 
 /// SHA-256 of the migration source, hex encoded.
@@ -304,7 +311,8 @@ mod tests {
     fn rollback_is_preflighted_and_refuses_irreversible_migrations() {
         let mut conn = Connection::open_in_memory().unwrap();
         apply(&mut conn).unwrap();
-        assert_eq!(current_version(&conn), 21);
+        let current = current_version(&conn);
+        assert_eq!(current, 22);
 
         // 0020 and 0021 are irreversible once a foreign posting or a settlement
         // exists, so no rollback may cross them, and the refusal happens before
@@ -313,12 +321,12 @@ mod tests {
         assert!(rollback_to(&mut conn, 2).is_err());
         assert_eq!(
             current_version(&conn),
-            21,
+            current,
             "a refused rollback must not partially apply"
         );
 
-        assert_eq!(rollback_to(&mut conn, 21).unwrap(), 0);
-        assert_eq!(current_version(&conn), 21);
+        assert_eq!(rollback_to(&mut conn, current).unwrap(), 0);
+        assert_eq!(current_version(&conn), current);
     }
 
     #[test]
@@ -353,9 +361,54 @@ mod tests {
         assert!(error.to_string().contains("no_postings"), "unexpected error: {error}");
         assert_eq!(
             current_version(&conn),
-            21,
+            22,
             "nothing may be dropped before the guard trips"
         );
+    }
+
+    #[test]
+    fn the_line_dates_survive_a_rollback_and_reapply() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        apply(&mut conn).unwrap();
+        conn.execute_batch(
+            "INSERT INTO seller (id, legal_name, default_currency, created_at, updated_at)
+                 VALUES ('s1', 'Seller', 'EUR', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');
+             INSERT INTO fiscal_period (id, seller_id, year, period_no, starts_on, ends_on, status)
+                 VALUES ('p1', 's1', 2026, 1, '2026-01-01', '2026-01-31', 'open');
+             INSERT INTO account (code, name, kind, updated_at)
+                 VALUES ('1300', 'Debiteuren', 'asset', '2026-01-01T00:00:00Z');
+             INSERT INTO journal_entry
+                 (id, journal_code, period_id, number, entry_date_local, description,
+                  source_kind, posting_profile_id, rule_version, currency,
+                  created_at, created_by, content_hash)
+                 VALUES ('e1', 'MEM', 'p1', '2026-0001', '2026-01-01', 'Manual',
+                         'manual', 'test', '1', 'EUR', '2026-01-01T00:00:00Z', 'test', 'x');
+             INSERT INTO journal_line
+                 (id, entry_id, line_no, account_code, side, amount_micros, currency,
+                  base_amount_micros, entry_date_local, period_id)
+                 VALUES ('l1', 'e1', 1, '1300', 'debit', 100, 'EUR', 100, '2026-01-01', 'p1');",
+        )
+        .unwrap();
+
+        assert_eq!(rollback_to(&mut conn, 21).unwrap(), 1);
+        assert_eq!(current_version(&conn), 21);
+        let lines: i64 = conn
+            .query_row("SELECT count(*) FROM journal_line", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(lines, 1, "the posting survives the schema rollback");
+
+        // Reapplying backfills the two derived columns from the entry.
+        apply(&mut conn).unwrap();
+        assert_eq!(current_version(&conn), 22);
+        let (date, period): (String, String) = conn
+            .query_row(
+                "SELECT entry_date_local, period_id FROM journal_line WHERE id = 'l1'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(date, "2026-01-01");
+        assert_eq!(period, "p1");
     }
 
     fn current_version(conn: &Connection) -> i64 {

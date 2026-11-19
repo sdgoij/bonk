@@ -269,15 +269,17 @@ pub fn reporting_currency(conn: &Connection, seller_id: SellerId) -> Result<Curr
 ///
 /// Shared with `bench`, so the benchmark measures the query the reports run
 /// rather than a copy that could drift.
-pub(crate) const BALANCES_SQL: &str = "SELECT a.code, a.name, a.kind,
-                sum(CASE l.side WHEN 'debit' THEN l.base_amount_micros ELSE 0 END),
-                sum(CASE l.side WHEN 'credit' THEN l.base_amount_micros ELSE 0 END)
-         FROM journal_line l
-         JOIN journal_entry e ON e.id = l.entry_id
-         JOIN fiscal_period p ON p.id = e.period_id
-         JOIN account a ON a.code = l.account_code
-         WHERE p.seller_id = ?1 AND e.entry_date_local >= ?2 AND e.entry_date_local <= ?3
-         GROUP BY a.code, a.name, a.kind
+pub(crate) const BALANCES_SQL: &str = "SELECT a.code, a.name, a.kind, t.debit_micros, t.credit_micros
+         FROM account a
+         JOIN (
+             SELECT account_code,
+                    sum(CASE side WHEN 'debit' THEN base_amount_micros ELSE 0 END) AS debit_micros,
+                    sum(CASE side WHEN 'credit' THEN base_amount_micros ELSE 0 END) AS credit_micros
+             FROM journal_line
+             WHERE period_id IN (SELECT id FROM fiscal_period WHERE seller_id = ?1)
+               AND entry_date_local >= ?2 AND entry_date_local <= ?3
+             GROUP BY account_code
+         ) t ON t.account_code = a.code
          ORDER BY a.code";
 
 /// Every account with movement in a date window, in code order.
