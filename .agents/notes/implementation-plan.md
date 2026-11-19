@@ -1823,6 +1823,20 @@ leaving the reader to assume otherwise. What remains for A5 is the opening-balan
 import, the performance benchmarks the exit criteria name, and the pilot migration
 itself.
 
+**Status, 2026-11-19 (the books can start with an imported opening balance).**
+`bonk ledger opening <file> --date <date>` reads the documented
+`account,side,amount` CSV, checks that every account exists and is on the balance
+sheet, checks that the sides agree, and posts one `Beginbalans <year>` entry in
+the `OPEN` journal; `--dry-run` prints the counts and both totals without writing.
+`store::check_opening_balances` is the same validation `post_opening_balances`
+uses, so a dry run and a real import cannot disagree. The file is deliberately
+strict: a missing header, a duplicate account, an unknown side, or a non-positive
+amount is refused with the line number rather than guessed at. ADR-017's question
+is settled for v1.1: one opening entry at the accounting start date, not a second
+prior-year comparative import; the balance sheet is cumulative and comparatives
+are report windows over the same ledger. What remains for A5 is the performance
+benchmarks the exit criteria name and the pilot migration itself.
+
 ---
 
 ## 5. First two weeks, concretely
@@ -2099,5 +2113,5 @@ decision.
 2. Starter chart of accounts: ship an RGS-aligned ~60-account set, or import the
    user's chart first? (Recommendation: starter set plus CSV import.)
 3. VAT filing route: portal export only, partner API, or accountant handoff.
-4. Whether opening-balance import must support prior-year comparative figures in
-   v1.1 or only a single opening entry.
+4. Resolved (2026-11-19): one opening entry at the accounting start date; prior-year
+   comparatives are report windows over the same ledger, not a second import.

@@ -10,6 +10,8 @@
 //! - Postings are append-only. There is no update and no delete in this module,
 //!   because there is none in the schema either.
 
+use std::collections::BTreeSet;
+
 use crux::{
     AccountCode, AccountKind, Currency, DocumentId, FiscalPeriodId, Journal, JournalEntryId, LedgerEntry, LedgerLine,
     LocalDate, Money, SellerId, TaxCode, VatCategory, VatRate,
@@ -1885,27 +1887,19 @@ pub fn post_opening_balances(
     actor: &str,
     now: &str,
 ) -> Result<PostedEntry, StoreError> {
-    let existing: i64 = conn.query_row(
-        "SELECT count(*) FROM journal_entry WHERE source_kind = 'opening'",
-        [],
-        |row| row.get(0),
-    )?;
-    if existing > 0 {
-        return Err(StoreError::Rejected(
-            "opening balances are already posted; later years continue from the closing position".to_owned(),
-        ));
-    }
-
-    for balance in balances {
-        let account = load_account(conn, &balance.account)?
-            .ok_or_else(|| StoreError::Rejected(format!("account {} does not exist", balance.account)))?;
-        if !account.kind.is_balance_sheet() {
-            return Err(StoreError::Rejected(format!(
-                "account {} is a {} account; an opening balance belongs on the balance sheet",
-                balance.account,
-                account.kind.as_str()
-            )));
-        }
+    let summary = check_opening_balances(conn, balances)?;
+    if !summary.balances() {
+        return Err(StoreError::Rejected(format!(
+            "the opening balances do not balance: {} debited, {} credited",
+            summary
+                .debit
+                .to_fixed_string(2)
+                .map_err(|error| StoreError::Data(error.to_string()))?,
+            summary
+                .credit
+                .to_fixed_string(2)
+                .map_err(|error| StoreError::Data(error.to_string()))?
+        )));
     }
 
     let lines = balances
@@ -1946,6 +1940,150 @@ pub fn post_opening_balances(
             open_item: None,
         },
     )
+}
+
+/// The two sides of a set of opening balances.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct OpeningSummary {
+    /// What is debited, in the books' reporting currency.
+    pub debit: Money,
+    /// What is credited.
+    pub credit: Money,
+}
+
+impl OpeningSummary {
+    /// True when the two sides agree.
+    pub fn balances(&self) -> bool {
+        self.debit == self.credit
+    }
+}
+
+/// Checks that a set of opening balances can be posted and sums each side.
+///
+/// Every account must exist and be on the balance sheet: a revenue or expense
+/// balance at a start date means the P&L of a year nobody posted, which is a
+/// migration mistake rather than a starting position. The set must share one
+/// currency, because adding two currencies is the failure the reports refuse, and
+/// it is posted once: an opening entry already in the books refuses a second.
+pub fn check_opening_balances(conn: &Connection, balances: &[OpeningBalance]) -> Result<OpeningSummary, StoreError> {
+    let existing: i64 = conn.query_row(
+        "SELECT count(*) FROM journal_entry WHERE source_kind = 'opening'",
+        [],
+        |row| row.get(0),
+    )?;
+    if existing > 0 {
+        return Err(StoreError::Rejected(
+            "opening balances are already posted; later years continue from the closing position".to_owned(),
+        ));
+    }
+
+    let Some(first) = balances.first() else {
+        return Err(StoreError::Rejected(
+            "an opening balance needs at least one account".to_owned(),
+        ));
+    };
+    let currency = first.amount.currency();
+    let mut debit = Money::zero(currency);
+    let mut credit = Money::zero(currency);
+    for balance in balances {
+        if balance.amount.currency() != currency {
+            return Err(StoreError::Rejected(format!(
+                "opening balances in {currency} and {} cannot be added",
+                balance.amount.currency()
+            )));
+        }
+        let account = load_account(conn, &balance.account)?
+            .ok_or_else(|| StoreError::Rejected(format!("account {} does not exist", balance.account)))?;
+        if !account.kind.is_balance_sheet() {
+            return Err(StoreError::Rejected(format!(
+                "account {} is a {} account; an opening balance belongs on the balance sheet",
+                balance.account,
+                account.kind.as_str()
+            )));
+        }
+        let slot = match balance.side {
+            crux::Side::Debit => &mut debit,
+            crux::Side::Credit => &mut credit,
+        };
+        *slot = slot
+            .checked_add(balance.amount)
+            .map_err(|error| StoreError::Data(error.to_string()))?;
+    }
+    Ok(OpeningSummary { debit, credit })
+}
+
+/// Parses the documented opening-balance file.
+///
+/// Three columns, with a header: `account,side,amount`. Blank lines and lines
+/// starting with `#` are skipped, a UTF-8 byte-order mark is ignored, and the
+/// amounts are decimal strings in the books' reporting currency. The file is
+/// deliberately strict: a typo in a side or an amount is a migration mistake,
+/// and guessing at it would put the wrong opening position in the books.
+pub fn opening_balances_csv(text: &str, currency: Currency) -> Result<Vec<OpeningBalance>, StoreError> {
+    let mut balances = Vec::new();
+    let mut seen = BTreeSet::new();
+    let mut header = false;
+    for (index, raw) in text.lines().enumerate() {
+        let line = raw.trim().trim_start_matches('\u{feff}').trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let line_no = index + 1;
+        let fields: Vec<&str> = line.split(',').map(str::trim).collect();
+        if !header {
+            if fields.len() != 3
+                || !fields[0].eq_ignore_ascii_case("account")
+                || !fields[1].eq_ignore_ascii_case("side")
+                || !fields[2].eq_ignore_ascii_case("amount")
+            {
+                return Err(StoreError::Rejected(format!(
+                    "line {line_no}: the opening file needs the header account,side,amount"
+                )));
+            }
+            header = true;
+            continue;
+        }
+        if fields.len() != 3 {
+            return Err(StoreError::Rejected(format!(
+                "line {line_no}: expected account,side,amount"
+            )));
+        }
+        let account =
+            AccountCode::parse(fields[0]).map_err(|error| StoreError::Rejected(format!("line {line_no}: {error}")))?;
+        if !seen.insert(account.to_string()) {
+            return Err(StoreError::Rejected(format!(
+                "line {line_no}: account {account} is named twice; net its balance onto one line"
+            )));
+        }
+        let side = match fields[1].to_ascii_lowercase().as_str() {
+            "debit" => crux::Side::Debit,
+            "credit" => crux::Side::Credit,
+            other => {
+                return Err(StoreError::Rejected(format!(
+                    "line {line_no}: side {other:?} is not `debit` or `credit`"
+                )));
+            }
+        };
+        let amount = Money::parse_fixed(fields[2], currency)
+            .map_err(|error| StoreError::Rejected(format!("line {line_no}: {error}")))?;
+        if !amount.is_positive() {
+            return Err(StoreError::Rejected(format!(
+                "line {line_no}: the amount must be positive; the side says which way it goes"
+            )));
+        }
+        balances.push(OpeningBalance { account, side, amount });
+    }
+    if !header {
+        return Err(StoreError::Rejected(
+            "the opening file is empty; it needs the header account,side,amount".to_owned(),
+        ));
+    }
+    if balances.is_empty() {
+        return Err(StoreError::Rejected(
+            "the opening file has a header but no balances".to_owned(),
+        ));
+    }
+    Ok(balances)
 }
 
 /// Recomputes the hash a posting of this entry would carry.

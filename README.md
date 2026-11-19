@@ -258,6 +258,7 @@ idempotent, so running `ledger post` again posts only what is new:
 bonk ledger setup                                  # the starter chart, once
 bonk ledger post                                   # everything not yet posted
 bonk ledger post 2026-0001                         # or named documents only
+bonk ledger opening ./opening.csv --date 2026-01-01   # one opening entry, once
 bonk ledger chart                                  # accounts, kinds, control flags
 bonk ledger trial-balance --from 2026-01-01 --to 2026-03-31
 bonk ledger profit-and-loss --from 2026-01-01 --to 2026-03-31
@@ -306,6 +307,14 @@ bonk ledger bank unclassify <transaction> --reason "verkeerde rekening"
 Entry numbers are per journal and year (`VK 2026-0001`), which is why a reversal
 names the journal too. A correction is a new entry that names the one it undoes;
 nothing in the ledger is ever edited.
+
+The books start at a configured date with one opening balance: `ledger opening`
+reads a three-column CSV with the header `account,side,amount`, refuses an account
+that is not on the balance sheet or a set whose sides do not agree, and posts
+`Beginbalans <year>` in the `OPEN` journal. `--dry-run` prints the counts and both
+totals without writing. It is posted once — later years continue from the closing
+position — and prior-year comparatives are report windows over the same ledger,
+not a second import.
 
 The VAT return is a projection of the period's journal lines into the rubrieken
 of the Dutch form, not a set of numbers typed in. Preparing one stores the totals

@@ -706,6 +706,24 @@ enum LedgerCommand {
         #[arg(long, default_value = "cli")]
         actor: String,
     },
+    /// Import the opening balances from a CSV file.
+    ///
+    /// The file has three columns with a header: `account,side,amount`. Every
+    /// account must be on the balance sheet, the two sides must agree, and the
+    /// set is posted once at the accounting start date. With `--dry-run` nothing
+    /// is written.
+    Opening {
+        /// The opening-balance file.
+        file: PathBuf,
+        /// The accounting start date, `YYYY-MM-DD`.
+        #[arg(long)]
+        date: String,
+        /// Show what it would post without posting it.
+        #[arg(long = "dry-run")]
+        dry_run: bool,
+        #[arg(long, default_value = "cli")]
+        actor: String,
+    },
     /// Show what the chart of accounts holds.
     Chart {
         /// Include archived accounts.
@@ -2108,6 +2126,31 @@ fn ledger(access: &Access, database: &Path, keystore: &Path, command: LedgerComm
                 println!("accounts added: {added}");
             }
             println!("accounts:       {}", store::list_accounts(connection)?.len());
+            Ok(())
+        }
+        LedgerCommand::Opening {
+            file,
+            date,
+            dry_run,
+            actor,
+        } => {
+            let date = LocalDate::parse_iso(&date)?;
+            let currency = store::reporting_currency(connection, owner)?;
+            let text = std::fs::read_to_string(&file)?;
+            let balances = store::opening_balances_csv(&text, currency)?;
+            let summary = store::check_opening_balances(connection, &balances)?;
+            println!("accounts: {}", balances.len());
+            println!("debit:    {}", amount_text(summary.debit.micros(), currency)?);
+            println!("credit:   {}", amount_text(summary.credit.micros(), currency)?);
+            if !summary.balances() {
+                return Err(CliError::Input("the opening balances do not balance".to_owned()));
+            }
+            if dry_run {
+                println!("dry run: nothing was posted");
+                return Ok(());
+            }
+            let posted = store::post_opening_balances(connection, owner, date, &balances, &actor, &now)?;
+            println!("posted:   {} {} on {}", posted.journal.code(), posted.number, date);
             Ok(())
         }
         LedgerCommand::Chart { all } => {
