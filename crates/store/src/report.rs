@@ -265,15 +265,11 @@ pub fn reporting_currency(conn: &Connection, seller_id: SellerId) -> Result<Curr
     Currency::parse(&raw).map_err(|error| StoreError::Data(error.to_string()))
 }
 
-/// Every account with movement in a date window, in code order.
-fn balances_between(
-    conn: &Connection,
-    seller_id: SellerId,
-    from: &str,
-    to: &str,
-) -> Result<Vec<AccountBalance>, StoreError> {
-    let mut statement = conn.prepare(
-        "SELECT a.code, a.name, a.kind,
+/// The query behind every balance report: accounts with movement in a window.
+///
+/// Shared with `bench`, so the benchmark measures the query the reports run
+/// rather than a copy that could drift.
+pub(crate) const BALANCES_SQL: &str = "SELECT a.code, a.name, a.kind,
                 sum(CASE l.side WHEN 'debit' THEN l.base_amount_micros ELSE 0 END),
                 sum(CASE l.side WHEN 'credit' THEN l.base_amount_micros ELSE 0 END)
          FROM journal_line l
@@ -282,8 +278,16 @@ fn balances_between(
          JOIN account a ON a.code = l.account_code
          WHERE p.seller_id = ?1 AND e.entry_date_local >= ?2 AND e.entry_date_local <= ?3
          GROUP BY a.code, a.name, a.kind
-         ORDER BY a.code",
-    )?;
+         ORDER BY a.code";
+
+/// Every account with movement in a date window, in code order.
+fn balances_between(
+    conn: &Connection,
+    seller_id: SellerId,
+    from: &str,
+    to: &str,
+) -> Result<Vec<AccountBalance>, StoreError> {
+    let mut statement = conn.prepare(BALANCES_SQL)?;
     let mut rows = statement.query(params![seller_id.to_string(), from, to])?;
     let mut balances = Vec::new();
     while let Some(row) = rows.next()? {

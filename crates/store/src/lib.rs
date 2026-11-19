@@ -19,6 +19,7 @@ pub mod audit;
 pub mod backup;
 pub mod bank;
 pub mod bank_rule;
+pub mod bench;
 pub mod db;
 pub mod device;
 mod dto;

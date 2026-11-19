@@ -1837,6 +1837,23 @@ prior-year comparative import; the balance sheet is cumulative and comparatives
 are report windows over the same ledger. What remains for A5 is the performance
 benchmarks the exit criteria name and the pilot migration itself.
 
+**Status, 2026-11-19 (the ledger benchmarks are in; one criterion passes and one does not).**
+`bench-ledger-seed` builds a 500 001-line archive on an otherwise empty demo base,
+`bench-ledger` times the trial balance and prints its query plan, and `bench-bank`
+imports a fresh 10 000-line statement per sample. On this machine in release the
+bank import passes: 10 000 lines in 0.80 s against a 2 s criterion. The trial
+balance does not: 500 001 lines take 4.1 s at p95 against a 200 ms criterion. The
+plan is the explanation: SQLite walks `fiscal_period` to `journal_entry` to
+`journal_line` through `journal_entry_period` and `journal_line_entry`, fetches
+every line row, and builds a temporary B-tree for the `GROUP BY`, so 500 000
+random line and entry lookups dominate. The fix is to denormalise the entry date
+(and period) onto `journal_line` and add a covering
+`(account_code, entry_date_local, period_id, side, base_amount_micros)` index,
+which removes the per-line entry lookup and lets the index satisfy the grouping;
+that is a schema change and has not been made. The 200 ms target may also need
+revisiting for an SQLCipher archive. The benchmark reports `missed` rather than
+hiding it, and the exit criterion stays open.
+
 ---
 
 ## 5. First two weeks, concretely

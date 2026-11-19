@@ -367,6 +367,50 @@ enum Command {
         #[arg(long, default_value_t = 50)]
         repeat: usize,
     },
+    /// Seed a synthetic ledger for the report benchmarks.
+    ///
+    /// The archive is a measuring instrument, not a set of books: it writes no
+    /// audit events and refuses a ledger that already has entries. Run it once
+    /// against a fresh archive.
+    #[command(name = "bench-seed")]
+    BenchSeed {
+        /// Synthetic sales to write; each has three journal lines.
+        #[arg(long, default_value_t = 166_667)]
+        entries: usize,
+        /// Year the entries are dated in; defaults to this year.
+        #[arg(long)]
+        year: Option<i32>,
+    },
+    /// Time the trial balance (M10 exit criterion).
+    ///
+    /// The criterion is 500 000 journal lines under 200 ms. The archive is
+    /// unlocked once, outside the timed loop, and the p95 is taken over the
+    /// samples.
+    #[command(name = "bench-ledger")]
+    BenchLedger {
+        /// Year to report; defaults to this year.
+        #[arg(long)]
+        year: Option<i32>,
+        /// Samples to take; the p95 is over these.
+        #[arg(long, default_value_t = 20)]
+        repeat: usize,
+    },
+    /// Time a bank statement import (M10 exit criterion).
+    ///
+    /// The criterion is 10 000 lines under 2 s. Each repeat imports a fresh
+    /// statement, so the fingerprint dedupe does not make later runs trivial.
+    #[command(name = "bench-bank")]
+    BenchBank {
+        /// Transactions per statement.
+        #[arg(long, default_value_t = 10_000)]
+        lines: usize,
+        /// Statements to import.
+        #[arg(long, default_value_t = 1)]
+        repeat: usize,
+        /// Bank account id or name; inferred when there is only one.
+        #[arg(long)]
+        account: Option<String>,
+    },
     /// Export documents as CSV or JSON.
     Export {
         /// Words to narrow the export; omit to export everything.
@@ -1862,6 +1906,127 @@ fn run(cli: Cli) -> Result<(), CliError> {
                 median = samples[samples.len() / 2],
                 p95 = samples[rank],
                 max = samples[samples.len() - 1],
+            );
+            Ok(())
+        }
+        Some(Command::BenchSeed { entries, year }) => {
+            if entries == 0 {
+                return Err(CliError::Input("--entries must be at least 1".to_owned()));
+            }
+            let session = access.session(&database, &keystore)?;
+            let connection = session.database().connection();
+            let owner = owner_of(session.database(), None)?;
+            let year = year.unwrap_or_else(|| LocalDate::today_utc().as_date().year());
+            let lines = store::bench::seed_ledger(connection, owner, year, entries)?;
+            println!("year:    {year}");
+            println!("entries: {entries}");
+            println!("lines:   {lines}");
+            Ok(())
+        }
+        Some(Command::BenchLedger { year, repeat }) => {
+            if repeat == 0 {
+                return Err(CliError::Input("--repeat must be at least 1".to_owned()));
+            }
+            let session = access.session(&database, &keystore)?;
+            let connection = session.database().connection();
+            let owner = owner_of(session.database(), None)?;
+            let year = year.unwrap_or_else(|| LocalDate::today_utc().as_date().year());
+            let from = LocalDate::from_ymd(year, 1, 1)?;
+            let to = LocalDate::from_ymd(year, 12, 31)?;
+            let lines = store::bench::line_count(connection, owner, from, to)?;
+            println!("plan:");
+            for step in store::bench::trial_balance_plan(connection, owner, from, to)? {
+                println!("  {step}");
+            }
+
+            let mut samples = Vec::with_capacity(repeat);
+            let mut accounts = 0_usize;
+            for _ in 0..repeat {
+                let started = std::time::Instant::now();
+                let report = store::trial_balance(connection, owner, from, to)?;
+                samples.push(started.elapsed().as_micros() as u64);
+                accounts = report.rows.len();
+            }
+            let (median, p95, max) = timings(&mut samples);
+            println!(
+                "trial balance {year}: {lines} line(s), {accounts} account(s), {count} sample(s)",
+                count = samples.len()
+            );
+            println!("median {median} \u{00b5}s, p95 {p95} \u{00b5}s, max {max} \u{00b5}s");
+            let passed = lines >= 500_000 && p95 < 200_000;
+            println!(
+                "criterion: 500 000 lines under 200 ms: {}",
+                if passed { "passed" } else { "missed" }
+            );
+            Ok(())
+        }
+        Some(Command::BenchBank { lines, repeat, account }) => {
+            if lines == 0 || repeat == 0 {
+                return Err(CliError::Input("--lines and --repeat must be at least 1".to_owned()));
+            }
+            let session = access.session(&database, &keystore)?;
+            let connection = session.database().connection();
+            let owner = owner_of(session.database(), None)?;
+            let accounts = store::list_bank_accounts(connection, owner)?;
+            let chosen = match account {
+                Some(name) => accounts
+                    .into_iter()
+                    .find(|candidate| candidate.id == name || candidate.name == name)
+                    .ok_or_else(|| CliError::Input(format!("no bank account {name:?}")))?,
+                None => {
+                    let mut candidates = accounts.into_iter();
+                    let first = candidates
+                        .next()
+                        .ok_or_else(|| CliError::Input("this archive has no bank account; add one first".to_owned()))?;
+                    if candidates.next().is_some() {
+                        return Err(CliError::Input("name the bank account with --account".to_owned()));
+                    }
+                    first
+                }
+            };
+            let stamp = store::now_rfc3339();
+            let booking_date = LocalDate::today_utc();
+            let mut samples = Vec::with_capacity(repeat);
+            let mut imported = 0_usize;
+            for run in 0..repeat {
+                let transactions = (0..lines)
+                    .map(|index| store::ParsedTransaction {
+                        booking_date,
+                        value_date: None,
+                        amount_micros: 1_000_000,
+                        currency: chosen.currency,
+                        counterparty_name: Some("Benchmark".to_owned()),
+                        counterparty_iban: Some("NL02RABO0123456789".to_owned()),
+                        remittance_info: Some(format!("benchmark {stamp} {run} {index}")),
+                        external_ref: Some(format!("bench-{stamp}-{run}-{index}")),
+                    })
+                    .collect();
+                let statement = store::ParsedStatement {
+                    format: "camt053",
+                    source_name: Some(format!("bench-{run}.xml")),
+                    currency: chosen.currency,
+                    period_start: Some(booking_date),
+                    period_end: Some(booking_date),
+                    opening_balance_micros: None,
+                    closing_balance_micros: None,
+                    transactions,
+                };
+                let source = store::audit::sha256_hex(format!("bench-{stamp}-{run}").as_bytes());
+                let started = std::time::Instant::now();
+                let report = store::import_statement(connection, &chosen.id, &statement, &source, &stamp)?;
+                samples.push(started.elapsed().as_micros() as u64);
+                imported = report.imported;
+            }
+            let (median, p95, max) = timings(&mut samples);
+            println!(
+                "bank import: {imported} line(s) per statement, {repeat} statement(s), {count} sample(s)",
+                count = samples.len()
+            );
+            println!("median {median} \u{00b5}s, p95 {p95} \u{00b5}s, max {max} \u{00b5}s");
+            let passed = imported >= 10_000 && p95 < 2_000_000;
+            println!(
+                "criterion: 10 000 lines under 2 s: {}",
+                if passed { "passed" } else { "missed" }
             );
             Ok(())
         }
@@ -3574,6 +3739,13 @@ fn resolve_entry(database: &store::Database, needle: &str) -> Result<JournalEntr
 }
 
 /// Resolves `--year`/`--month` to a month, defaulting to the one before this one.
+/// Sorts the samples and returns the median, p95, and max, in microseconds.
+fn timings(samples: &mut [u64]) -> (u64, u64, u64) {
+    samples.sort_unstable();
+    let rank = (samples.len() * 95).div_ceil(100).clamp(1, samples.len()) - 1;
+    (samples[samples.len() / 2], samples[rank], samples[samples.len() - 1])
+}
+
 fn month_of(year: Option<i32>, month: Option<u8>) -> Result<(i32, u8), CliError> {
     let today = LocalDate::today_utc();
     let (year, month) = match (year, month) {

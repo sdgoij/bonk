@@ -21,6 +21,7 @@ cargo := if os_family() == "windows" { "sh tools/cargo-strawberry.sh" } else { "
 # The benchmark archive, kept out of the platform data directory so measuring
 # never touches the archive the window opens.
 bench-db := "target/bench/bonk.db"
+bench-ledger-db := "target/bench/ledger.db"
 bench-passphrase := "bonk-demo"
 
 # List the recipes.
@@ -55,6 +56,20 @@ demo-20k:
 # The passphrase is the demo seed's, so the timer starts after the unlock.
 bench-search:
     BONK_PASSPHRASE={{bench-passphrase}} {{cargo}} run -p cli --release -- --db {{bench-db}} bench-search --repeat 50
+
+# Seed the ledger benchmark archive: a demo base (seller, chart, bank account)
+# with no documents, then 500 001 synthetic journal lines.
+bench-ledger-seed:
+    BONK_PASSPHRASE={{bench-passphrase}} {{cargo}} run -p cli -- --db {{bench-ledger-db}} demo-seed --force --invoices 0 --received 0 --skip-last-year
+    BONK_PASSPHRASE={{bench-passphrase}} {{cargo}} run -p cli -- --db {{bench-ledger-db}} bench-seed
+
+# M10 exit criterion: a trial balance over 500 000 journal lines under 200 ms.
+bench-ledger:
+    BONK_PASSPHRASE={{bench-passphrase}} {{cargo}} run -p cli --release -- --db {{bench-ledger-db}} bench-ledger --repeat 20
+
+# M10 exit criterion: 10 000 bank lines imported under 2 s.
+bench-bank:
+    BONK_PASSPHRASE={{bench-passphrase}} {{cargo}} run -p cli --release -- --db {{bench-ledger-db}} bench-bank --lines 10000
 
 # Check formatting and whitespace. This is the whole gate for docs-only changes.
 fmt:
