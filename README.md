@@ -265,6 +265,8 @@ bonk ledger balance-sheet --as-of 2026-03-31
 bonk ledger reverse VK:2026-0001 --reason "wrong customer" --date 2026-04-02
 bonk ledger vat-return --year 2026 --month 3            # preview the aangifte
 bonk ledger vat-return --year 2026 --month 3 --prepare  # store it, with its basis
+bonk ledger icp --year 2026 --month 3                   # Opgaaf ICP, grouped by buyer
+bonk ledger icp --year 2026 --month 3 --out icp.csv    # the same listing as CSV
 bonk ledger close --year 2026 --month 3                 # refuse postings into the month
 bonk ledger close --year 2026 --month 3 --dry-run       # what would stop it
 bonk ledger reopen --year 2026 --month 3 --reason "vergeten factuur"
@@ -312,6 +314,16 @@ it. Preparing is refused while a check is red: every document dated in the perio
 has to be posted, the VAT posted per document has to equal the VAT on that
 document, and the trial balance has to net to zero. The AR and AP control accounts are
 compared against the open items behind them, which bank payments settle.
+
+The ICP listing is the other half of box 3a: `ledger icp` groups the same intra-EU
+supplies by the buyer's VAT identifier and country, with credit notes carrying
+their negative sign into the buyer's row. It reads the buyer from the document's
+recipient snapshot, so renaming a customer later cannot rewrite a filed listing,
+and it normalises the identifier it finds. A 3a line whose buyer has no usable
+identifier is reported with its document rather than dropped, and `--csv` or
+`--out` refuses to write while one exists: a listing that quietly left it out
+would not agree with the return. The amounts are in the books' reporting
+currency, like the return they accompany.
 
 A document keeps its own currency; the ledger keeps the seller's reporting
 currency. A foreign-currency posting uses the latest cached reference rate at or

@@ -20,7 +20,7 @@ use std::collections::BTreeMap;
 
 use crux::{AccountCode, AccountKind, Currency, Journal, JournalEntryId, LocalDate, SellerId, VatCategory, VatTag};
 use rusqlite::{Connection, OptionalExtension, params};
-use serde_json::json;
+use serde_json::{Value, json};
 
 use crate::audit;
 use crate::error::StoreError;
@@ -678,6 +678,218 @@ pub fn period_bounds(year: i32, period_no: u8) -> Result<(LocalDate, LocalDate),
         .plus_days(-1)
         .map_err(|error| StoreError::Data(error.to_string()))?;
     Ok((start, end))
+}
+
+/// One buyer's line in the ICP listing.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct IcpRow {
+    /// The buyer's country, as the document recorded it.
+    pub country: String,
+    /// The buyer's VAT identifier, with separators removed and uppercased.
+    pub vat_id: String,
+    /// The buyer's legal name, for a person reading the list.
+    pub customer: String,
+    /// Supplies in the reporting currency, signed; a credit note is negative.
+    pub supplies_micros: i64,
+}
+
+/// A 3a line that keeps the listing from being filed.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct IcpProblem {
+    /// The document or entry the line came from.
+    pub number: String,
+    /// What stands in the way.
+    pub reason: String,
+}
+
+/// The intra-EU supplies listing (`Opgaaf ICP`) for one month.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct IcpListing {
+    /// Reporting currency of the books.
+    pub currency: Currency,
+    /// Year of the period.
+    pub year: i32,
+    /// Month of the period, 1–12.
+    pub period_no: u8,
+    /// One row per buyer, in country and VAT-identifier order.
+    pub rows: Vec<IcpRow>,
+    /// 3a lines the listing cannot carry.
+    pub problems: Vec<IcpProblem>,
+    /// The entries the numbers came from, in identifier order.
+    pub basis: Vec<JournalEntryId>,
+}
+
+impl IcpListing {
+    /// The sum of the rows, which is rubriek 3a of the same period.
+    pub fn total_micros(&self) -> i64 {
+        self.rows.iter().map(|row| row.supplies_micros).sum()
+    }
+
+    /// True when every 3a line can be listed.
+    pub fn is_ready(&self) -> bool {
+        self.problems.is_empty()
+    }
+}
+
+/// The intra-EU supplies listing for a month.
+///
+/// It is the same 3a projection the return uses, grouped by the buyer's VAT
+/// identifier instead of totalled into one box. The buyer comes from the
+/// document's recipient snapshot, so renaming a customer later cannot rewrite a
+/// filed listing. A 3a line whose buyer has no usable identifier is reported
+/// rather than dropped: a total that silently omitted it would not add up to
+/// box 3a.
+pub fn icp(conn: &Connection, seller_id: SellerId, year: i32, period_no: u8) -> Result<IcpListing, StoreError> {
+    let currency = reporting_currency(conn, seller_id)?;
+    let Some(period_id) = period_id(conn, seller_id, year, period_no)? else {
+        return Ok(IcpListing {
+            currency,
+            year,
+            period_no,
+            rows: Vec::new(),
+            problems: Vec::new(),
+            basis: Vec::new(),
+        });
+    };
+
+    let mut statement = conn.prepare(
+        "SELECT e.id, e.number, e.journal_code, l.account_code, a.kind, l.vat_category,
+                l.vat_rate_bp, l.side, l.base_amount_micros, t.rubriek, d.number,
+                d.recipient_snapshot_json
+         FROM journal_line l
+         JOIN journal_entry e ON e.id = l.entry_id
+         JOIN account a ON a.code = l.account_code
+         LEFT JOIN tax_code t ON t.id = l.tax_code_id
+         LEFT JOIN document d ON d.id = e.source_id AND e.source_kind = 'outbound_document'
+         WHERE e.period_id = ?1
+         ORDER BY e.id, l.line_no",
+    )?;
+    let mut rows = statement.query([period_id])?;
+
+    let mut buyers: BTreeMap<(String, String), (String, i64)> = BTreeMap::new();
+    let mut problems: Vec<IcpProblem> = Vec::new();
+    let mut basis: Vec<JournalEntryId> = Vec::new();
+
+    while let Some(row) = rows.next()? {
+        let entry_raw: String = row.get(0)?;
+        let entry_number: String = row.get(1)?;
+        let journal_raw: String = row.get(2)?;
+        let account_raw: String = row.get(3)?;
+        let kind_raw: String = row.get(4)?;
+        let category_raw: Option<String> = row.get(5)?;
+        let rate_bp: Option<i64> = row.get(6)?;
+        let side_raw: String = row.get(7)?;
+        let base_amount: i64 = row.get(8)?;
+        let code_rubriek: Option<String> = row.get(9)?;
+        let document_number: Option<String> = row.get(10)?;
+        let snapshot_raw: Option<String> = row.get(11)?;
+
+        let journal = Journal::parse(&journal_raw).map_err(|error| StoreError::Data(error.to_string()))?;
+        let account = AccountCode::parse(&account_raw).map_err(|error| StoreError::Data(error.to_string()))?;
+        let kind = AccountKind::parse(&kind_raw).map_err(|error| StoreError::Data(error.to_string()))?;
+        let side = crux::Side::parse(&side_raw).map_err(|error| StoreError::Data(error.to_string()))?;
+        let vat = match (category_raw, rate_bp) {
+            (Some(category), Some(rate_bp)) => {
+                let category = VatCategory::parse(&category).map_err(|error| StoreError::Data(error.to_string()))?;
+                Some(VatTag {
+                    category,
+                    rate_bp: u16::try_from(rate_bp)
+                        .map_err(|_| StoreError::Data(format!("VAT rate {rate_bp} does not fit in basis points")))?,
+                })
+            }
+            _ => None,
+        };
+        let code_rubriek = code_rubriek
+            .map(|code| {
+                Rubriek::parse(&code).ok_or_else(|| StoreError::Data(format!("a tax code names rubriek {code:?}")))
+            })
+            .transpose()?;
+        if chosen_rubriek(journal, &account, code_rubriek).or_else(|| rubriek_for(journal, &account, kind, vat))
+            != Some(Rubriek::EuSupplies)
+        {
+            continue;
+        }
+
+        let entry_id = JournalEntryId::parse_str(&entry_raw).map_err(|error| StoreError::Data(error.to_string()))?;
+        if basis.last() != Some(&entry_id) {
+            basis.push(entry_id);
+        }
+
+        let number = document_number.unwrap_or_else(|| format!("{journal_raw} {entry_number}"));
+        let Some(snapshot_raw) = snapshot_raw else {
+            problems.push(IcpProblem {
+                number,
+                reason: "a 3a line in this entry has no document, so its buyer is unknown".to_owned(),
+            });
+            continue;
+        };
+        let snapshot: Value = serde_json::from_str(&snapshot_raw)?;
+        let buyer = crate::dto::party_from_value(&snapshot)?;
+        let Some(vat_id) = buyer
+            .vat_id
+            .as_deref()
+            .map(normalise_vat_id)
+            .filter(|value| valid_vat_id(value))
+        else {
+            problems.push(IcpProblem {
+                number,
+                reason: format!("{} has no usable VAT identifier", buyer.legal_name),
+            });
+            continue;
+        };
+
+        let country = buyer.address.country.as_str().to_owned();
+        let signed = if side == kind.normal_side() {
+            base_amount
+        } else {
+            -base_amount
+        };
+        let slot = buyers.entry((country, vat_id)).or_insert((buyer.legal_name.clone(), 0));
+        slot.1 += signed;
+    }
+
+    problems.dedup();
+    let rows = buyers
+        .into_iter()
+        .filter_map(|((country, vat_id), (customer, supplies_micros))| {
+            (supplies_micros != 0).then_some(IcpRow {
+                country,
+                vat_id,
+                customer,
+                supplies_micros,
+            })
+        })
+        .collect();
+
+    Ok(IcpListing {
+        currency,
+        year,
+        period_no,
+        rows,
+        problems,
+        basis,
+    })
+}
+
+/// The identifier without the punctuation people type between its parts.
+fn normalise_vat_id(raw: &str) -> String {
+    raw.chars()
+        .filter(|ch| !matches!(ch, ' ' | '.' | '-' | '/'))
+        .flat_map(char::to_uppercase)
+        .collect()
+}
+
+/// A conservative shape check: two letters and then alphanumerics.
+///
+/// VIES is the authority on whether an identifier exists; this only keeps an
+/// obviously unusable value out of a filing. It does not require the prefix to
+/// match the address country, because Greece writes `EL` and Northern Ireland
+/// `XI`.
+fn valid_vat_id(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    bytes.len() >= 4
+        && bytes[..2].iter().all(u8::is_ascii_uppercase)
+        && bytes[2..].iter().all(u8::is_ascii_alphanumeric)
 }
 
 #[cfg(test)]

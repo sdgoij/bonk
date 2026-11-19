@@ -1791,6 +1791,21 @@ What this deliberately does not do: cross-currency proposals. `bank propose` and
 exact amount in another; a cross-currency match is made by hand with `bank match`.
 Period-end unrealised revaluation stays out of scope as the design's cut line says.
 
+**Status, 2026-11-19 (the intra-EU supplies listing is in).** `store::vat::icp`
+projects the same 3a lines the return uses, grouped by the buyer's VAT identifier
+and country, and `bonk ledger icp --year --month` prints it or writes it as CSV
+with `--csv`/`--out`. The buyer comes from the document's recipient snapshot, so a
+later rename cannot rewrite a filed listing; the identifier is normalised (spaces,
+dots, hyphens and slashes removed, uppercased) and checked for an obviously
+unusable shape, which does not require the prefix to match the address country
+because Greece writes `EL` and Northern Ireland `XI`. A 3a line with no usable
+identifier is reported with its document instead of being dropped, and the CSV is
+refused while any such line exists, because the listing has to add up to box 3a.
+Credit notes carry their negative sign into the buyer's row, and the listing is in
+the books' reporting currency, like the return it accompanies. What remains for A5
+is the accountant package that will carry the return and this listing together,
+the opening-balance import, and the hardening the exit criteria ask for.
+
 ---
 
 ## 5. First two weeks, concretely

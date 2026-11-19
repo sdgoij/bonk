@@ -103,7 +103,8 @@ pub use tax_code::{
     list as list_tax_codes, load as load_tax_code,
 };
 pub use vat::{
-    MAPPING_VERSION, PreparedReturn, ReturnLine, Rubriek, VatReturn, basis_is_intact, compute, prepare, prepared,
+    IcpListing, IcpProblem, IcpRow, MAPPING_VERSION, PreparedReturn, ReturnLine, Rubriek, VatReturn, basis_is_intact,
+    compute, icp, prepare, prepared,
 };
 
 /// True when the database file is actually encrypted.

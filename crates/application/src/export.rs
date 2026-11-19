@@ -7,7 +7,7 @@
 //! Amounts are written as decimal strings, never as JSON numbers. A JSON number
 //! is a float to most parsers, and money must not round-trip through a float.
 
-use store::{SearchHit, StoreError};
+use store::{SearchHit, StoreError, vat::IcpListing};
 
 /// Header of the CSV export.
 pub const CSV_HEADER: &str = "number,direction,party,issue_date,currency,gross,status";
@@ -29,6 +29,36 @@ pub fn to_csv(hits: &[SearchHit]) -> Result<String, StoreError> {
             hit.status.code(),
         ];
         for (index, field) in row.iter().enumerate() {
+            if index > 0 {
+                out.push(',');
+            }
+            push_csv_field(&mut out, field);
+        }
+        out.push('\n');
+    }
+    Ok(out)
+}
+
+/// Header of the ICP listing CSV.
+pub const ICP_CSV_HEADER: &str = "period,country,vat_id,customer,supplies";
+
+/// Renders the ICP listing as RFC 4180 CSV with `\n` line endings.
+pub fn icp_csv(listing: &IcpListing) -> Result<String, StoreError> {
+    let mut out = String::from(ICP_CSV_HEADER);
+    out.push('\n');
+    let period = format!("{}-{:02}", listing.year, listing.period_no);
+    for row in &listing.rows {
+        let supplies = crux::Money::from_micros(row.supplies_micros, listing.currency)
+            .to_fixed_string(2)
+            .map_err(|error| StoreError::Data(error.to_string()))?;
+        let fields = [
+            period.as_str(),
+            row.country.as_str(),
+            row.vat_id.as_str(),
+            row.customer.as_str(),
+            supplies.as_str(),
+        ];
+        for (index, field) in fields.iter().enumerate() {
             if index > 0 {
                 out.push(',');
             }
@@ -77,6 +107,7 @@ fn push_csv_field(out: &mut String, field: &str) {
 #[cfg(test)]
 mod tests {
     use crux::{Currency, DocumentId, LocalDate, Money};
+    use store::vat::{IcpListing, IcpRow};
     use store::{Direction, DocumentStatus, SearchHit};
 
     use super::*;
@@ -135,6 +166,38 @@ mod tests {
     #[test]
     fn csv_of_nothing_is_just_the_header() {
         assert_eq!(to_csv(&[]).expect("render"), format!("{CSV_HEADER}\n"));
+    }
+
+    #[test]
+    fn the_icp_csv_is_one_row_per_buyer_and_keeps_a_negative_credit() {
+        let listing = IcpListing {
+            currency: Currency::EUR,
+            year: 2026,
+            period_no: 1,
+            rows: vec![
+                IcpRow {
+                    country: "DE".to_owned(),
+                    vat_id: "DE123456789".to_owned(),
+                    customer: "Kunde, GmbH".to_owned(),
+                    supplies_micros: 1_000_000_000,
+                },
+                IcpRow {
+                    country: "FR".to_owned(),
+                    vat_id: "FR12345678901".to_owned(),
+                    customer: "Client SA".to_owned(),
+                    supplies_micros: -250_000_000,
+                },
+            ],
+            problems: Vec::new(),
+            basis: Vec::new(),
+        };
+        let csv = icp_csv(&listing).expect("render");
+
+        let mut lines = csv.lines();
+        assert_eq!(lines.next(), Some(ICP_CSV_HEADER));
+        assert_eq!(lines.next(), Some("2026-01,DE,DE123456789,\"Kunde, GmbH\",1000.00"));
+        assert_eq!(lines.next(), Some("2026-01,FR,FR12345678901,Client SA,-250.00"));
+        assert_eq!(lines.next(), None);
     }
 
     #[test]

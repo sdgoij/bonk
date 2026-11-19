@@ -758,6 +758,26 @@ enum LedgerCommand {
         #[arg(long, default_value = "cli")]
         actor: String,
     },
+    /// Print the intra-EU supplies listing (Opgaaf ICP) for a month.
+    ///
+    /// The listing is rubriek 3a grouped by the buyer's VAT identifier. It is
+    /// refused as a file when a 3a line has no usable identifier, because the
+    /// listing cannot carry a row it cannot name.
+    #[command(name = "icp")]
+    Icp {
+        /// Year; defaults to the year of the month being listed.
+        #[arg(long)]
+        year: Option<i32>,
+        /// Month 1-12; defaults to the month before this one.
+        #[arg(long)]
+        month: Option<u8>,
+        /// Write the listing as CSV instead of printing the table.
+        #[arg(long)]
+        csv: bool,
+        /// File for the CSV; standard output when omitted.
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
     /// Close a month, so nothing can be posted into it.
     ///
     /// Prints what the period is and what stands in the way; with `--dry-run` it
@@ -2346,6 +2366,63 @@ fn ledger(access: &Access, database: &Path, keystore: &Path, command: LedgerComm
                 println!("not checked: {reason}");
             }
             println!("mapping      {}", store::vat::MAPPING_VERSION);
+            Ok(())
+        }
+        LedgerCommand::Icp { year, month, csv, out } => {
+            let (year, month) = month_of(year, month)?;
+            let listing = store::vat::icp(connection, owner, year, month)?;
+
+            if csv || out.is_some() {
+                if !listing.is_ready() {
+                    let reasons: Vec<String> = listing
+                        .problems
+                        .iter()
+                        .map(|problem| format!("{}: {}", problem.number, problem.reason))
+                        .collect();
+                    return Err(CliError::Input(format!(
+                        "the ICP listing cannot be filed: {}",
+                        reasons.join("; ")
+                    )));
+                }
+                let rendered = export::icp_csv(&listing)?;
+                match &out {
+                    Some(path) => {
+                        std::fs::write(path, &rendered)?;
+                        println!("written: {} ({} rows)", path.display(), listing.rows.len());
+                    }
+                    None => print!("{rendered}"),
+                }
+                return Ok(());
+            }
+
+            let (starts, ends) = store::vat::period_bounds(year, month)?;
+            println!("opgaaf icp {year}-{month:02} ({starts} to {ends}) {}", listing.currency);
+            println!("{:<4} {:<20} {:<40} {:>13}", "", "btw-nummer", "afnemer", "omzet");
+            for row in &listing.rows {
+                println!(
+                    "{:<4} {:<20} {:<40} {:>13}",
+                    row.country,
+                    row.vat_id,
+                    row.customer,
+                    amount_text(row.supplies_micros, listing.currency)?
+                );
+            }
+            println!(
+                "{:<4} {:<20} {:<40} {:>13}",
+                "",
+                "",
+                "total",
+                amount_text(listing.total_micros(), listing.currency)?
+            );
+            println!();
+            if listing.is_ready() {
+                println!("fileable:    yes");
+            } else {
+                println!("fileable:    no");
+                for problem in &listing.problems {
+                    println!("  {}: {}", problem.number, problem.reason);
+                }
+            }
             Ok(())
         }
         LedgerCommand::Close {
